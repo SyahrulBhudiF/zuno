@@ -16,6 +16,7 @@ import {
   getLocalPlaylistItems,
   subscribeToLocalPlaylists,
 } from "../../player/localPlaylists";
+import { getAppSetting, setAppSetting } from "../../internal/appSettings";
 import styles from "./Sidebar.module.css";
 import { ArtistLinks } from "./ArtistLinks";
 import { TrackArtwork } from "./TrackArtwork";
@@ -55,6 +56,12 @@ function saveOrderToStorage(key: string, order: string[], migrationKey?: string)
   } catch {
     // ignore storage failures
   }
+  void setAppSetting(key, order);
+  if (migrationKey) void setAppSetting(migrationKey, true);
+}
+
+function isStoredOrder(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
 function reorderIds(ids: string[], draggedId: string, targetId: string, insertAfter: boolean) {
@@ -185,6 +192,32 @@ export function Sidebar({
     (hasLoadedLibrary || libraryState.status === "error") &&
     !hasUserCreatedPlaylists;
   const isRetryingPlaylists = libraryState.status === "loading";
+
+  useEffect(() => {
+    let active = true;
+
+    const hydrateOrder = async (
+      key: string,
+      apply: (order: string[]) => void,
+    ) => {
+      const stored = await getAppSetting<unknown>(key);
+      if (!active || !isStoredOrder(stored)) return;
+
+      try {
+        localStorage.setItem(key, JSON.stringify(stored));
+      } catch {
+        // The React state below still restores the order for this session.
+      }
+      apply(stored);
+    };
+
+    void hydrateOrder(PLAYLIST_ORDER_KEY, setPlaylistOrder);
+    void hydrateOrder(ALBUM_ORDER_KEY, setAlbumOrder);
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (localStorage.getItem(PLAYLIST_LIKED_ORDER_MIGRATION_KEY) !== "true") {

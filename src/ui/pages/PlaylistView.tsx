@@ -6,6 +6,8 @@ import {
   IconHeart,
   IconLoader2,
   IconPlayerPlay,
+  IconSearch,
+  IconX,
 } from "@tabler/icons-react";
 import type { Playlist, Track } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
@@ -18,6 +20,8 @@ import styles from "./AlbumView.module.css";
 import { ArtistLinks } from "../components/ArtistLinks";
 import { usePlaylistContextMenu } from "../components/PlaylistContextMenu";
 import { TrackArtwork } from "../components/TrackArtwork";
+import { useKeyboardShortcuts } from "../settings/keyboardShortcuts";
+import { shouldStartPageSearch } from "./pageSearchKeyboard";
 
 interface PlaylistViewProps {
   playlist?: Playlist;
@@ -80,6 +84,7 @@ function PlaylistLoadingSpinner({ label }: { label: string }) {
 export function PlaylistView({ playlist, playerController, libraryController }: PlaylistViewProps) {
   const { openTrackMenu } = useTrackContextMenu();
   const { openPlaylistMenu } = usePlaylistContextMenu();
+  const keyboardShortcuts = useKeyboardShortcuts();
   const [tracks, setTracks] = useState<Track[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -90,8 +95,10 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   const [enteringTrackKeys, setEnteringTrackKeys] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<PlaylistSort>("dateAdded");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+  const [playlistSearchQuery, setPlaylistSearchQuery] = useState("");
   const [dropTargetIndex, setDropTargetIndex] = useState<{ localPath: string; insertAfter: boolean } | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const playlistSearchInputRef = useRef<HTMLInputElement | null>(null);
   const playlistIdRef = useRef<string | undefined>(undefined);
   const isLoadingMoreRef = useRef(false);
   const tracksRef = useRef<Track[]>([]);
@@ -115,6 +122,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     let active = true;
     setSort("dateAdded");
     setSortDirection("desc");
+    setPlaylistSearchQuery("");
     setTracks([]);
     setIsLoading(true);
     setIsLoadingMore(false);
@@ -198,6 +206,20 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     return () => observer.disconnect();
   }, [hasMoreTracks, loadMoreTracks, tracks.length]);
 
+  useEffect(() => {
+    if (!playlist || isLoading || error || tracks.length === 0) return;
+
+    const handlePageSearchKeyDown = (event: KeyboardEvent) => {
+      if (!shouldStartPageSearch(event, keyboardShortcuts)) return;
+      event.preventDefault();
+      setPlaylistSearchQuery((current) => `${current}${event.key}`);
+      window.requestAnimationFrame(() => playlistSearchInputRef.current?.focus());
+    };
+
+    window.addEventListener("keydown", handlePageSearchKeyDown);
+    return () => window.removeEventListener("keydown", handlePageSearchKeyDown);
+  }, [error, isLoading, keyboardShortcuts, playlist, tracks.length]);
+
   const sortedTracks = useMemo(() => {
     if (sort === "dateAdded") {
       return sortDirection === "desc" ? tracks : [...tracks].reverse();
@@ -218,16 +240,27 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   const sortedTracksRef = useRef(sortedTracks);
   sortedTracksRef.current = sortedTracks;
 
+  const visibleTracks = useMemo(() => {
+    const query = playlistSearchQuery.trim().toLocaleLowerCase();
+    if (!query) return sortedTracks;
+    return sortedTracks.filter((track) => [
+      track.title,
+      track.artist,
+      track.album,
+      ...(track.artists?.map((artist) => artist.name) ?? []),
+    ].some((value) => value?.toLocaleLowerCase().includes(query)));
+  }, [playlistSearchQuery, sortedTracks]);
+
   const enteringTrackDelayIndexes = useMemo(() => {
     const delayIndexes = new Map<string, number>();
-    sortedTracks.forEach((track) => {
+    visibleTracks.forEach((track) => {
       const key = getTrackKey(track);
       if (enteringTrackKeys.has(key)) {
         delayIndexes.set(key, delayIndexes.size);
       }
     });
     return delayIndexes;
-  }, [enteringTrackKeys, sortedTracks]);
+  }, [enteringTrackKeys, visibleTracks]);
 
   // Drag to reorder for local playlists
   useEffect(() => {
@@ -283,13 +316,16 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
         const clampedToIndex = dropTargetRef.current.insertAfter
           ? Math.min(toIndex + 1, sorted.length)
           : toIndex;
+        const insertIndex = fromIndex < clampedToIndex
+          ? clampedToIndex - 1
+          : clampedToIndex;
 
-        if (fromIndex !== clampedToIndex) {
+        if (fromIndex !== insertIndex) {
           reorderLocalPlaylistTracks(playlist.id, fromIndex, clampedToIndex);
           setTracks((current) => {
             const next = [...current];
             const [moved] = next.splice(fromIndex, 1);
-            next.splice(clampedToIndex, 0, moved);
+            next.splice(insertIndex, 0, moved);
             return next;
           });
         }
@@ -319,7 +355,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   if (!playlist) return null;
 
   const playPlaylistTrack = async (track: Track) => {
-    const started = await playerController.playTrackById(track.id, sortedTracks);
+    const started = await playerController.playTrackById(track.id, visibleTracks);
     if (started) markPlaylistPlayed(playlist.id);
   };
 
@@ -349,6 +385,12 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     }
     setSort(nextSort);
     setSortDirection(nextSort === "dateAdded" ? "desc" : "asc");
+  };
+
+  const handlePlaylistSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Backspace" || playlistSearchQuery) return;
+    event.preventDefault();
+    event.currentTarget.blur();
   };
 
   const handlePointerDown = (event: React.PointerEvent, track: Track) => {
@@ -405,7 +447,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
           <div
             className={styles.sortOptions}
             role="group"
-            aria-label="Playlist song sorting"
+            aria-label="Playlist song tools"
           >
             {playlistSorts.map((item) => (
               <button
@@ -438,9 +480,42 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
                 )}
               </button>
             ))}
+            <div
+              className={`${styles.playlistSearch} ${
+                playlistSearchQuery ? styles.playlistSearchActive : ""
+              }`}
+              role="search"
+              onClick={() => playlistSearchInputRef.current?.focus()}
+            >
+              <span className={styles.playlistSearchIcon}>
+                <IconSearch size={16} aria-hidden="true" />
+              </span>
+              <input
+                ref={playlistSearchInputRef}
+                type="text"
+                value={playlistSearchQuery}
+                aria-label="Search songs in playlist"
+                placeholder="Search playlist"
+                onChange={(event) => setPlaylistSearchQuery(event.target.value)}
+                onKeyDown={handlePlaylistSearchKeyDown}
+              />
+              {playlistSearchQuery && (
+                <button
+                  className={styles.playlistSearchClear}
+                  type="button"
+                  aria-label="Clear playlist search"
+                  onClick={() => setPlaylistSearchQuery("")}
+                >
+                  <IconX size={14} aria-hidden="true" />
+                </button>
+              )}
+            </div>
           </div>
+          {visibleTracks.length === 0 && playlistSearchQuery.trim() ? (
+            <p className={styles.message}>No songs match this search.</p>
+          ) : (
           <div className={styles.trackList}>
-            {sortedTracks.map((track, index) => {
+            {visibleTracks.map((track, index) => {
               const trackKey = getTrackKey(track);
               const trackPath = track.localPath ?? track.id;
               const isDragged = pointerDragRef.current?.localPath === trackPath && pointerDragRef.current.isDragging;
@@ -518,6 +593,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
               );
             })}
           </div>
+          )}
           <div ref={loadMoreRef} className={styles.loadMoreStatus} aria-live="polite">
             {isLoadingMore ? (
               <PlaylistLoadingSpinner label="Loading more songs" />

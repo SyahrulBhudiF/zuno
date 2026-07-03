@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 const LASTFM_API_URL: &str = "https://ws.audioscrobbler.com/2.0/";
+const LASTFM_API_KEY: &str = "802624099e59adcc599c9f6e6aa60371";
+const LASTFM_SHARED_SECRET: &str = "186e5d4fa717d145ece7e50aff07757c";
 const LASTFM_KEYRING_USER: &str = "lastfm-session-v1";
 
 #[derive(Serialize, Deserialize)]
@@ -66,20 +68,8 @@ pub struct LastFmScrobbleInput {
     timestamp: u64,
 }
 
-fn configured_credentials() -> Result<(&'static str, &'static str), CommandError> {
-    let api_key = option_env!("LASTFM_API_KEY")
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let shared_secret = option_env!("LASTFM_SHARED_SECRET")
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    match (api_key, shared_secret) {
-        (Some(api_key), Some(shared_secret)) => Ok((api_key, shared_secret)),
-        _ => Err(CommandError {
-            message: "Last.fm API credentials are not configured for this build.".to_string(),
-        }),
-    }
+fn configured_credentials() -> (&'static str, &'static str) {
+    (LASTFM_API_KEY, LASTFM_SHARED_SECRET)
 }
 
 fn lastfm_keyring_entry() -> Result<keyring::Entry, CommandError> {
@@ -135,7 +125,7 @@ fn api_signature(params: &BTreeMap<String, String>, shared_secret: &str) -> Stri
 async fn signed_lastfm_post<T: for<'de> Deserialize<'de>>(
     mut params: BTreeMap<String, String>,
 ) -> Result<T, CommandError> {
-    let (api_key, shared_secret) = configured_credentials()?;
+    let (api_key, shared_secret) = configured_credentials();
     params.insert("api_key".to_string(), api_key.to_string());
     let signature = api_signature(&params, shared_secret);
     params.insert("api_sig".to_string(), signature);
@@ -194,7 +184,7 @@ fn clean_metadata(value: String, label: &str) -> Result<String, CommandError> {
 
 #[tauri::command]
 pub async fn lastfm_auth_token() -> Result<LastFmAuthStart, CommandError> {
-    let (api_key, _) = configured_credentials()?;
+    let (api_key, _) = configured_credentials();
     let mut params = BTreeMap::new();
     params.insert("method".to_string(), "auth.getToken".to_string());
     let response = signed_lastfm_post::<LastFmTokenResponse>(params).await?;

@@ -28,6 +28,7 @@
 "core:window:allow-outer-size",
 "core:window:allow-current-monitor",
 "core:window:allow-set-position",
+"core:window:allow-set-size",
 "core:window:allow-cursor-position",
 "core:window:allow-set-cursor-icon",
 "core:window:allow-set-ignore-cursor-events"
@@ -67,7 +68,13 @@
       "delete_youtube_credentials",
       "load_youtube_music_cookie",
       "sign_in_youtube_music",
-      "delete_youtube_music_cookie"
+      "delete_youtube_music_cookie",
+      "lastfm_auth_token",
+      "lastfm_complete_auth",
+      "lastfm_disconnect",
+      "lastfm_get_session",
+      "lastfm_scrobble",
+      "lastfm_update_now_playing"
     ]
   }
 }

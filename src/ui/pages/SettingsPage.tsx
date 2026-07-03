@@ -1,6 +1,6 @@
 import { type CSSProperties, type KeyboardEvent, useEffect, useState, useSyncExternalStore } from "react";
 import {
-  // IconBrandLastfm,
+  IconBrandLastfm,
   IconBug,
   IconChevronDown,
   IconCoffee,
@@ -60,6 +60,10 @@ import {
   type MiniPlayerHoverAction,
 } from "../settings/miniPlayer";
 import {
+  setMainWindowGeometryPersistenceEnabled,
+  useMainWindowGeometryPersistenceEnabled,
+} from "../settings/mainWindowGeometry";
+import {
   captureKeyboardShortcut,
   formatKeyboardShortcut,
   KEYBOARD_SHORTCUT_ACTIONS,
@@ -77,11 +81,11 @@ import {
   removeLocalPlaylistPath,
   subscribeToLocalPlaylists,
 } from "../../player/localPlaylists";
-// import { LastFmService, type LastFmAuthStart, type LastFmSessionStatus } from "../../player/LastFm";
-// import {
-//   setLastFmScrobblingEnabled,
-//   useLastFmScrobblingEnabled,
-// } from "../settings/lastfm";
+import { LastFmService, type LastFmAuthStart, type LastFmSessionStatus } from "../../player/LastFm";
+import {
+  setLastFmScrobblingEnabled,
+  useLastFmScrobblingEnabled,
+} from "../settings/lastfm";
 import styles from "./SettingsPage.module.css";
 
 const GITHUB_REPOSITORY_URL = "https://github.com/2latemc/JustAnotherMusicClient";
@@ -136,10 +140,10 @@ export function SettingsPage({
   const [localPlaylistPathInputs, setLocalPlaylistPathInputs] = useState<Record<string, string>>({});
   const [localPlaylistError, setLocalPlaylistError] = useState<string | null>(null);
   const [localPlaylistBrowsingId, setLocalPlaylistBrowsingId] = useState<string | null>(null);
-  // const [lastFmSession, setLastFmSession] = useState<LastFmSessionStatus | null>(null);
-  // const [lastFmAuth, setLastFmAuth] = useState<LastFmAuthStart | null>(null);
-  // const [lastFmBusy, setLastFmBusy] = useState(false);
-  // const [lastFmError, setLastFmError] = useState<string | null>(null);
+  const [lastFmSession, setLastFmSession] = useState<LastFmSessionStatus | null>(null);
+  const [lastFmAuth, setLastFmAuth] = useState<LastFmAuthStart | null>(null);
+  const [lastFmBusy, setLastFmBusy] = useState(false);
+  const [lastFmError, setLastFmError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("about");
   const [listeningShortcut, setListeningShortcut] = useState<KeyboardShortcutAction | null>(null);
   const keyboardShortcuts = useKeyboardShortcuts();
@@ -149,7 +153,8 @@ export function SettingsPage({
   const extraPlayerControlsAlwaysVisible = useExtraPlayerControlsAlwaysVisible();
   const windowsStyleWindowControls = useWindowsStyleWindowControls();
   const nativeWindowControls = useNativeWindowControls();
-  // const lastFmScrobblingEnabled = useLastFmScrobblingEnabled();
+  const mainWindowGeometryPersistenceEnabled = useMainWindowGeometryPersistenceEnabled();
+  const lastFmScrobblingEnabled = useLastFmScrobblingEnabled();
   const localPlaylists = useSyncExternalStore(
     subscribeToLocalPlaylists,
     getLocalPlaylists,
@@ -192,21 +197,21 @@ export function SettingsPage({
     };
   }, []);
 
-  // useEffect(() => {
-  //   let active = true;
-  //   void LastFmService.getSession()
-  //     .then((session) => {
-  //       if (active) setLastFmSession(session);
-  //     })
-  //     .catch((error) => {
-  //       if (active) {
-  //         setLastFmError(error instanceof Error ? error.message : "Unable to load Last.fm connection.");
-  //       }
-  //     });
-  //   return () => {
-  //     active = false;
-  //   };
-  // }, []);
+  useEffect(() => {
+    let active = true;
+    void LastFmService.getSession()
+      .then((session) => {
+        if (active) setLastFmSession(session);
+      })
+      .catch((error) => {
+        if (active) {
+          setLastFmError(error instanceof Error ? error.message : "Unable to load Last.fm connection.");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!resetSettingsConfirming) return undefined;
@@ -352,48 +357,48 @@ export function SettingsPage({
     }
   };
 
-  // const handleStartLastFmAuth = async () => {
-  //   setLastFmBusy(true);
-  //   setLastFmError(null);
-  //   try {
-  //     const auth = await LastFmService.startAuth();
-  //     setLastFmAuth(auth);
-  //   } catch (error) {
-  //     setLastFmError(error instanceof Error ? error.message : "Unable to start Last.fm sign-in.");
-  //   } finally {
-  //     setLastFmBusy(false);
-  //   }
-  // };
+  const handleStartLastFmAuth = async () => {
+    setLastFmBusy(true);
+    setLastFmError(null);
+    try {
+      const auth = await LastFmService.startAuth();
+      setLastFmAuth(auth);
+    } catch (error) {
+      setLastFmError(error instanceof Error ? error.message : "Unable to start Last.fm sign-in.");
+    } finally {
+      setLastFmBusy(false);
+    }
+  };
 
-  // const handleFinishLastFmAuth = async () => {
-  //   if (!lastFmAuth) return;
-  //   setLastFmBusy(true);
-  //   setLastFmError(null);
-  //   try {
-  //     const session = await LastFmService.completeAuth(lastFmAuth.token);
-  //     setLastFmSession(session);
-  //     setLastFmAuth(null);
-  //     setLastFmScrobblingEnabled(true);
-  //   } catch (error) {
-  //     setLastFmError(error instanceof Error ? error.message : "Unable to finish Last.fm sign-in.");
-  //   } finally {
-  //     setLastFmBusy(false);
-  //   }
-  // };
+  const handleFinishLastFmAuth = async () => {
+    if (!lastFmAuth) return;
+    setLastFmBusy(true);
+    setLastFmError(null);
+    try {
+      const session = await LastFmService.completeAuth(lastFmAuth.token);
+      setLastFmSession(session);
+      setLastFmAuth(null);
+      setLastFmScrobblingEnabled(true);
+    } catch (error) {
+      setLastFmError(error instanceof Error ? error.message : "Unable to finish Last.fm sign-in.");
+    } finally {
+      setLastFmBusy(false);
+    }
+  };
 
-  // const handleDisconnectLastFm = async () => {
-  //   setLastFmBusy(true);
-  //   setLastFmError(null);
-  //   try {
-  //     await LastFmService.disconnect();
-  //     setLastFmSession(null);
-  //     setLastFmAuth(null);
-  //   } catch (error) {
-  //     setLastFmError(error instanceof Error ? error.message : "Unable to disconnect Last.fm.");
-  //   } finally {
-  //     setLastFmBusy(false);
-  //   }
-  // };
+  const handleDisconnectLastFm = async () => {
+    setLastFmBusy(true);
+    setLastFmError(null);
+    try {
+      await LastFmService.disconnect();
+      setLastFmSession(null);
+      setLastFmAuth(null);
+    } catch (error) {
+      setLastFmError(error instanceof Error ? error.message : "Unable to disconnect Last.fm.");
+    } finally {
+      setLastFmBusy(false);
+    }
+  };
 
   const handleAddLocalPlaylistPath = (playlistId: string) => {
     setLocalPlaylistError(null);
@@ -590,7 +595,7 @@ export function SettingsPage({
             {libraryState.error && <p className={styles.error}>{libraryState.error}</p>}
           </section>
 
-          {/* <section className={styles.card} aria-labelledby="lastfm-settings-title">
+          <section className={styles.card} aria-labelledby="lastfm-settings-title">
             <div className={styles.cardHeader}>
               <div>
                 <h2 id="lastfm-settings-title">Last.fm</h2>
@@ -670,7 +675,7 @@ export function SettingsPage({
               {lastFmError && <p className={styles.error}>{lastFmError}</p>}
             </div>
           </section>
- */}
+
           <section className={styles.card} aria-labelledby="about-settings-title">
             <div className={styles.compactHeader}>
               <h2 id="about-settings-title">About</h2>
@@ -777,6 +782,22 @@ export function SettingsPage({
               </label>
 
               {autostartError && <p className={styles.error}>{autostartError}</p>}
+
+              <label className={styles.settingRow}>
+                <span className={styles.toggleDescription}>
+                  <strong>Remember window size and location</strong>
+                  <span>Reopen the main window with its last size and screen position.</span>
+                </span>
+                <input
+                  className={styles.toggleInput}
+                  type="checkbox"
+                  checked={mainWindowGeometryPersistenceEnabled}
+                  onChange={(event) => {
+                    setMainWindowGeometryPersistenceEnabled(event.target.checked);
+                  }}
+                />
+                <span className={styles.toggle} aria-hidden="true" />
+              </label>
 
               <div className={styles.localPlaylistsBlock}>
                 <div className={styles.localPlaylistHeader}>

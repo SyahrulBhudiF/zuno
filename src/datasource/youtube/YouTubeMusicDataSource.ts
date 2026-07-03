@@ -211,6 +211,7 @@ const ARTIST_CACHE_VERSION = "v3";
 const ARTIST_SUBSCRIPTION_OVERRIDE_MS = 60_000;
 const PLAYLIST_PAGE_SESSION_TTL_MS = 10 * 60_000;
 const PLAYLIST_TRACK_CACHE_VERSION = "v4";
+const PLAYLIST_EMPTY_RETRY_DELAYS_MS = [0, 600, 1_500];
 
 class YouTubeMusicAuthError extends Error {
   constructor(message: string) {
@@ -1191,6 +1192,25 @@ export class YouTubeMusicDataSource extends DataSource {
     });
   }
 
+  private async updateCachedAlbumSaved(album: Album, saved: boolean): Promise<void> {
+    const cachedLibrary = await getCachedJson<LibrarySnapshot>(LIBRARY_CACHE_KEY);
+    if (!cachedLibrary) return;
+
+    const sameAlbum = (item: Album) =>
+      item.id === album.id
+      || Boolean(album.playlistId && item.playlistId === album.playlistId)
+      || Boolean(album.playlistId && item.id === album.playlistId)
+      || Boolean(item.playlistId && item.playlistId === album.id);
+    const albums = saved
+      ? [album, ...cachedLibrary.albums.filter((item) => !sameAlbum(item))]
+      : cachedLibrary.albums.filter((item) => !sameAlbum(item));
+
+    await setCachedJson(LIBRARY_CACHE_KEY, {
+      ...cachedLibrary,
+      albums,
+    });
+  }
+
   private getActionableServiceEndpoint(endpoint: RawServiceEndpoint): RawServiceEndpoint {
     const commands = endpoint.commandExecutorCommand?.commands;
     if (!commands?.length) return endpoint;
@@ -1491,6 +1511,39 @@ export class YouTubeMusicDataSource extends DataSource {
       trackCount: tracks.length,
     });
     return tracks;
+  }
+
+  private async waitForPlaylistEmptyRetry(attempt: number): Promise<void> {
+    const delayMs = PLAYLIST_EMPTY_RETRY_DELAYS_MS[attempt] ?? 0;
+    if (delayMs <= 0) return;
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, delayMs));
+  }
+
+  private async collectPlaylistTracksWithEmptyRetries(
+    client: Innertube,
+    playlistId: string,
+    source: string,
+  ): Promise<Track[]> {
+    for (let attempt = 0; attempt < PLAYLIST_EMPTY_RETRY_DELAYS_MS.length; attempt += 1) {
+      await this.waitForPlaylistEmptyRetry(attempt);
+
+      const tracks = await this.collectPlaylistTracks(client, playlistId);
+      if (tracks.length > 0) return tracks;
+
+      const browseId = playlistId.startsWith("VL") ? playlistId : `VL${playlistId}`;
+      logInternalWarn("YouTubeMusicDataSource.collectPlaylistTracksWithEmptyRetries retrying empty response", {
+        playlistId,
+        browseId,
+        source,
+        attempt: attempt + 1,
+      });
+
+      const response = await this.executeMusicBrowse(client, { browseId });
+      const fallbackTracks = await this.collectAllTracks(client, response);
+      if (fallbackTracks.length > 0) return fallbackTracks;
+    }
+
+    return [];
   }
 
   private createPlaylistPageKey(playlistId: string): string {
@@ -2171,6 +2224,7 @@ export class YouTubeMusicDataSource extends DataSource {
             albumPlaylistId,
             saved,
           });
+          await this.updateCachedAlbumSaved(album, saved);
           return;
         } catch (directError) {
           logInternalWarn("YouTubeMusicDataSource.setAlbumSaved direct like command failed", {
@@ -2185,7 +2239,10 @@ export class YouTubeMusicDataSource extends DataSource {
       const rawToggle = this.findRawLibraryToggle(albumResponse);
 
       if (rawToggle) {
-        if (rawToggle.isToggled === saved) return;
+        if (rawToggle.isToggled === saved) {
+          await this.updateCachedAlbumSaved(album, saved);
+          return;
+        }
         const endpoint = saved
           ? rawToggle.defaultServiceEndpoint
           : rawToggle.toggledServiceEndpoint;
@@ -2205,12 +2262,16 @@ export class YouTubeMusicDataSource extends DataSource {
         if (response.success === false) {
           throw new Error(`Album library update returned HTTP ${response.status_code}.`);
         }
+        await this.updateCachedAlbumSaved(album, saved);
         return;
       }
 
       const rawMenuToggle = this.findRawLibraryMenuToggle(albumResponse);
       if (rawMenuToggle) {
-        if (rawMenuToggle.isToggled === saved) return;
+        if (rawMenuToggle.isToggled === saved) {
+          await this.updateCachedAlbumSaved(album, saved);
+          return;
+        }
         const endpoint = saved
           ? rawMenuToggle.defaultServiceEndpoint
           : rawMenuToggle.toggledServiceEndpoint;
@@ -2231,6 +2292,7 @@ export class YouTubeMusicDataSource extends DataSource {
         if (response.success === false) {
           throw new Error(`Album library menu update returned HTTP ${response.status_code}.`);
         }
+        await this.updateCachedAlbumSaved(album, saved);
         return;
       }
 
@@ -2239,7 +2301,10 @@ export class YouTubeMusicDataSource extends DataSource {
       if (!toggle) {
         throw new Error("YouTube Music did not return a library command for this album.");
       }
-      if (toggle.isToggled === saved) return;
+      if (toggle.isToggled === saved) {
+        await this.updateCachedAlbumSaved(album, saved);
+        return;
+      }
 
       const endpoint = saved ? toggle.endpoint : toggle.toggledEndpoint;
       if (!endpoint) {
@@ -2258,6 +2323,7 @@ export class YouTubeMusicDataSource extends DataSource {
       if (response.success === false) {
         throw new Error(`Album library update returned HTTP ${response.status_code}.`);
       }
+      await this.updateCachedAlbumSaved(album, saved);
     } catch (error) {
       logInternalError("YouTubeMusicDataSource.setAlbumSaved failed", error, {
         albumId: album.id,
@@ -2728,7 +2794,11 @@ export class YouTubeMusicDataSource extends DataSource {
         logInternalWarn("YouTubeMusicDataSource.getPlaylistTrackPage verifying empty first page", {
           playlistId: playlist.id,
         });
-        const fallbackTracks = await this.collectPlaylistTracks(client, playlist.id);
+        const fallbackTracks = await this.collectPlaylistTracksWithEmptyRetries(
+          client,
+          playlist.id,
+          "paged-first-load",
+        );
         if (fallbackTracks.length > 0) {
           const cachedFallbackTracks = await this.cachePlaylistTracks(playlist.id, fallbackTracks);
           return { tracks: cachedFallbackTracks, hasMore: false };
@@ -2787,16 +2857,7 @@ export class YouTubeMusicDataSource extends DataSource {
 
   private async fetchPlaylistTracksFresh(playlist: Playlist): Promise<Track[]> {
     const client = await this.getMusicClient();
-    const tracks = await this.collectPlaylistTracks(client, playlist.id);
-    if (tracks.length > 0) return tracks;
-
-    const browseId = playlist.id.startsWith("VL") ? playlist.id : `VL${playlist.id}`;
-    logInternalWarn("YouTubeMusicDataSource.fetchPlaylistTracksFresh retrying empty playlist response", {
-      playlistId: playlist.id,
-      browseId,
-    });
-    const response = await this.executeMusicBrowse(client, { browseId });
-    return this.collectAllTracks(client, response);
+    return this.collectPlaylistTracksWithEmptyRetries(client, playlist.id, "fresh-load");
   }
 
   async addTrackToPlaylist(

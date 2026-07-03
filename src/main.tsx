@@ -12,13 +12,21 @@ import { hydrateMiniPlayerSettings } from "./ui/settings/miniPlayer";
 import { hydratePlayerControlSettings } from "./ui/settings/playerControls";
 import { hydrateLastFmSettings } from "./ui/settings/lastfm";
 import { hydrateKeyboardShortcuts } from "./ui/settings/keyboardShortcuts";
+import {
+  hydrateMainWindowGeometry,
+  restoreMainWindowGeometry,
+} from "./ui/settings/mainWindowGeometry";
 import { applyPlatformAttributes } from "./ui/platform";
 import { DiscordRpcService } from "./player/DiscordRPC";
+import { hydratePlaybackSettings } from "./player/playbackSettings";
 
 logInternalInfo("main.bootstrap start");
 applyPlatformAttributes();
 applyPaperPcMode();
 void applyNativeWindowControls();
+void hydrateMainWindowGeometry().then(restoreMainWindowGeometry).catch((error) => {
+  logInternalError("mainWindowGeometry.restore failed", error);
+});
 void Promise.all([
   hydratePaperPcMode(),
   hydrateWindowControlSettings(),
@@ -26,6 +34,7 @@ void Promise.all([
   hydratePlayerControlSettings(),
   hydrateLastFmSettings(),
   hydrateKeyboardShortcuts(),
+  hydratePlaybackSettings(),
 ]).catch((error) => {
   logInternalError("settings hydration failed", error);
 });

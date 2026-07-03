@@ -4,6 +4,11 @@ import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } 
 import { AudioEngine } from "./AudioEngine";
 import { Queue } from "./Queue";
 import { DiscordRpcService } from "./DiscordRPC";
+import {
+  readPlaybackSettings,
+  savePlaybackSettings,
+  type PlaybackSettings,
+} from "./playbackSettings";
 
 export type PlaybackOrderMode = "in-order" | "shuffle" | "repeat-one";
 
@@ -117,6 +122,7 @@ export class PlayerController {
   };
 
   constructor(private readonly dataSource: DataSource) {
+    this.applyPlaybackSettings(readPlaybackSettings(), false);
     this.audioEngine.setOnEnded(() => {
       void this.handleTrackEnded();
     });
@@ -180,6 +186,22 @@ export class PlayerController {
     this.emit();
     if (session.currentTrack) {
       void this.refreshRestoredTrackMetadata(session.currentTrack, restoreRequestId);
+    }
+  }
+
+  applyPlaybackSettings(settings: PlaybackSettings, persist = true): void {
+    this.audioEngine.setVolume(settings.volume);
+    this.audioEngine.setMuted(settings.muted);
+    this.state = {
+      ...this.state,
+      volume: this.audioEngine.getVolume(),
+      muted: this.audioEngine.isMuted(),
+    };
+    if (persist) {
+      savePlaybackSettings({
+        volume: this.state.volume,
+        muted: this.state.muted,
+      });
     }
   }
 
@@ -861,6 +883,10 @@ export class PlayerController {
     logInternalInfo("PlayerController.setVolume", { level });
     this.audioEngine.setVolume(level);
     this.setState({ volume: this.audioEngine.getVolume() });
+    savePlaybackSettings({
+      volume: this.state.volume,
+      muted: this.state.muted,
+    });
   }
 
   async skipToPrevious(): Promise<void> {
@@ -967,6 +993,10 @@ export class PlayerController {
     logInternalInfo("PlayerController.toggleMute", { muted: nextMuted });
     this.audioEngine.setMuted(nextMuted);
     this.setState({ muted: this.audioEngine.isMuted() });
+    savePlaybackSettings({
+      volume: this.state.volume,
+      muted: this.state.muted,
+    });
   }
 
   async getLyrics(track: Track): Promise<Lyrics | null> {

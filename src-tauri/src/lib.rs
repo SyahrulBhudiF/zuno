@@ -9,7 +9,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -62,9 +62,6 @@ const YOUTUBE_COOKIE_CHUNK_SIZE: usize = 900;
 const YOUTUBE_COOKIE_MAX_CHUNKS: usize = 16;
 const DEFAULT_CACHE_MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const CURRENT_LOG_FILE_NAME: &str = "current.log";
-const MAIN_WEBVIEW_SLEEP_RECOVERY_DELAY_MS: u64 = 900;
-const MAIN_WEBVIEW_RECOVERY_RELOAD_GRACE_MS: u64 = 150;
-const MAIN_WEBVIEW_FOCUS_RECOVERY_IDLE_MS: u64 = 60_000;
 
 static APP_LOG_FILE: OnceLock<Mutex<Option<File>>> = OnceLock::new();
 
@@ -686,34 +683,6 @@ fn greet(name: &str) -> String {
 fn quit_app(app: tauri::AppHandle) {
     eprintln!("[internal][tauri][info] quit_app invoked");
     app.exit(0);
-}
-
-fn schedule_main_webview_recovery(app: tauri::AppHandle, reason: &'static str) {
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(MAIN_WEBVIEW_SLEEP_RECOVERY_DELAY_MS));
-
-        let Some(main) = app.get_webview_window("main") else {
-            eprintln!(
-                "[internal][tauri][warn] main webview recovery skipped reason={} cause=missing_window",
-                reason
-            );
-            return;
-        };
-
-        eprintln!(
-            "[internal][tauri][info] main webview recovery reload reason={}",
-            reason
-        );
-        let _ = app.emit("main-window-recovery-reload", reason);
-        thread::sleep(Duration::from_millis(MAIN_WEBVIEW_RECOVERY_RELOAD_GRACE_MS));
-
-        if let Err(error) = main.reload() {
-            eprintln!(
-                "[internal][tauri][warn] main webview recovery reload failed reason={} error={}",
-                reason, error
-            );
-        }
-    });
 }
 
 #[tauri::command]
@@ -2049,9 +2018,6 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder.manage(macos_media::MacosMediaSession::new());
 
-    let last_main_focus_lost_at = Arc::new(Mutex::new(None::<Instant>));
-    let window_event_last_main_focus_lost_at = Arc::clone(&last_main_focus_lost_at);
-
     builder
         .setup(|app| {
             if let Err(error) = initialize_app_log(app.handle()) {
@@ -2072,11 +2038,6 @@ pub fn run() {
             }
             tauri::WindowEvent::Focused(false) => {
                 if window.label() == "main" {
-                    if let Ok(mut last_focus_lost_at) = window_event_last_main_focus_lost_at.lock()
-                    {
-                        *last_focus_lost_at = Some(Instant::now());
-                    }
-
                     let app = window.app_handle().clone();
                     thread::spawn(move || {
                         thread::sleep(Duration::from_millis(100));
@@ -2099,21 +2060,7 @@ pub fn run() {
             }
             tauri::WindowEvent::Focused(true) => {
                 if window.label() == "main" {
-                    let app = window.app_handle().clone();
-                    let _ = app.emit("window-focused", ());
-
-                    let was_idle_long_enough = window_event_last_main_focus_lost_at
-                        .lock()
-                        .ok()
-                        .and_then(|mut last_focus_lost_at| last_focus_lost_at.take())
-                        .is_some_and(|lost_at| {
-                            lost_at.elapsed()
-                                >= Duration::from_millis(MAIN_WEBVIEW_FOCUS_RECOVERY_IDLE_MS)
-                        });
-
-                    if was_idle_long_enough {
-                        schedule_main_webview_recovery(app, "main-focus-return-after-idle");
-                    }
+                    let _ = window.app_handle().emit("window-focused", ());
                 }
             }
             _ => {}

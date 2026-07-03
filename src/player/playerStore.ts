@@ -67,13 +67,27 @@ class ActivePlayerController implements PlayerControllerActions {
     tabManager.getActivePlayer().playNext(track);
   skipToNext = () => tabManager.getActivePlayer().skipToNext();
   seekTo = (time: number) => tabManager.getActivePlayer().seekTo(time);
-  setVolume = (level: number) => tabManager.getActivePlayer().setVolume(level);
+  setVolume = async (level: number) => {
+    const player = tabManager.getActivePlayer();
+    await player.setVolume(level);
+    tabManager.applyPlaybackSettings({
+      volume: player.getVolume(),
+      muted: player.isMuted(),
+    });
+  };
   skipToPrevious = () => tabManager.getActivePlayer().skipToPrevious();
   getCurrentTime = () => tabManager.getActivePlayer().getCurrentTime();
   getDuration = () => tabManager.getActivePlayer().getDuration();
   getVolume = () => tabManager.getActivePlayer().getVolume();
   isMuted = () => tabManager.getActivePlayer().isMuted();
-  toggleMute = () => tabManager.getActivePlayer().toggleMute();
+  toggleMute = async () => {
+    const player = tabManager.getActivePlayer();
+    await player.toggleMute();
+    tabManager.applyPlaybackSettings({
+      volume: player.getVolume(),
+      muted: player.isMuted(),
+    });
+  };
   getPlaybackOrderMode = () => tabManager.getActivePlayer().getPlaybackOrderMode();
   cyclePlaybackOrderMode = () => tabManager.getActivePlayer().cyclePlaybackOrderMode();
   getLyrics = (track: Parameters<PlayerController["getLyrics"]>[0]) =>

@@ -1,6 +1,7 @@
 import type { DataSource } from "../datasource/DataSource";
 import type { PlayerSession, PlayerState } from "./PlayerController";
 import { PlayerController } from "./PlayerController";
+import type { PlaybackSettings } from "./playbackSettings";
 
 export type MusicTabId = string;
 
@@ -81,6 +82,13 @@ export class TabManager {
       ? this.tabs.get(this.playbackOwnerId)
       : null;
     if (playbackOwner) void playbackOwner.player.resumeFromTabSwitch();
+    this.emit();
+  }
+
+  applyPlaybackSettings(settings: PlaybackSettings): void {
+    for (const tab of this.tabs.values()) {
+      tab.player.applyPlaybackSettings(settings, false);
+    }
     this.emit();
   }
 

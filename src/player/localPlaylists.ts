@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Playlist, Track, TrackPage } from "../datasource/types";
+import { getAppSetting, setAppSetting } from "../internal/appSettings";
 
 const STORAGE_KEY = "ytc-local-playlists-v1";
 const LOCAL_PLAYLIST_TRACKS_STORAGE_KEY = "ytc-local-playlist-tracks-v1";
@@ -15,6 +16,7 @@ let cachedPlaylistTracksRaw: string | null = null;
 let cachedPlaylistTracks: Record<string, Track[]> = {};
 let cachedTrackOrderRaw: string | null = null;
 let cachedTrackOrder: Record<string, string[]> = {};
+let hydrationStarted = false;
 
 export interface LocalPlaylist {
   id: string;
@@ -53,6 +55,7 @@ function normalizePlaylist(value: unknown): LocalPlaylist | null {
 
 function readLocalPlaylists(): LocalPlaylist[] {
   if (typeof window === "undefined") return [];
+  hydrateLocalPlaylistStorage();
   const raw = localStorage.getItem(STORAGE_KEY) ?? "[]";
   if (raw === cachedRaw) return cachedPlaylists;
   try {
@@ -73,7 +76,8 @@ function readLocalPlaylists(): LocalPlaylist[] {
 function writeLocalPlaylists(playlists: LocalPlaylist[]): void {
   if (typeof window === "undefined") return;
   const raw = JSON.stringify(playlists);
-  localStorage.setItem(STORAGE_KEY, raw);
+  writeLocalStorageJson(STORAGE_KEY, playlists);
+  void setAppSetting(STORAGE_KEY, playlists);
   cachedRaw = raw;
   cachedPlaylists = playlists;
   listeners.forEach((listener) => listener());
@@ -107,6 +111,7 @@ function normalizeStoredTrack(value: unknown): Track | null {
 
 function readLocalPlaylistTracks(): Record<string, Track[]> {
   if (typeof window === "undefined") return {};
+  hydrateLocalPlaylistStorage();
   const raw = localStorage.getItem(LOCAL_PLAYLIST_TRACKS_STORAGE_KEY) ?? "{}";
   if (raw === cachedPlaylistTracksRaw) return cachedPlaylistTracks;
   try {
@@ -134,7 +139,8 @@ function readLocalPlaylistTracks(): Record<string, Track[]> {
 function writeLocalPlaylistTracks(playlistTracks: Record<string, Track[]>): void {
   if (typeof window === "undefined") return;
   const raw = JSON.stringify(playlistTracks);
-  localStorage.setItem(LOCAL_PLAYLIST_TRACKS_STORAGE_KEY, raw);
+  writeLocalStorageJson(LOCAL_PLAYLIST_TRACKS_STORAGE_KEY, playlistTracks);
+  void setAppSetting(LOCAL_PLAYLIST_TRACKS_STORAGE_KEY, playlistTracks);
   cachedPlaylistTracksRaw = raw;
   cachedPlaylistTracks = playlistTracks;
   listeners.forEach((listener) => listener());
@@ -142,6 +148,7 @@ function writeLocalPlaylistTracks(playlistTracks: Record<string, Track[]>): void
 
 function readTrackOrder(): Record<string, string[]> {
   if (typeof window === "undefined") return {};
+  hydrateLocalPlaylistStorage();
   const raw = localStorage.getItem(LOCAL_PLAYLIST_TRACK_ORDER_KEY) ?? "{}";
   if (raw === cachedTrackOrderRaw) return cachedTrackOrder;
   try {
@@ -169,14 +176,107 @@ function readTrackOrder(): Record<string, string[]> {
 function writeTrackOrder(order: Record<string, string[]>): void {
   if (typeof window === "undefined") return;
   const raw = JSON.stringify(order);
-  localStorage.setItem(LOCAL_PLAYLIST_TRACK_ORDER_KEY, raw);
+  writeLocalStorageJson(LOCAL_PLAYLIST_TRACK_ORDER_KEY, order);
+  void setAppSetting(LOCAL_PLAYLIST_TRACK_ORDER_KEY, order);
   cachedTrackOrderRaw = raw;
   cachedTrackOrder = order;
+  listeners.forEach((listener) => listener());
 }
 
 export function subscribeToLocalPlaylists(listener: () => void): () => void {
+  hydrateLocalPlaylistStorage();
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+function normalizePlaylistList(value: unknown): LocalPlaylist[] | null {
+  if (!Array.isArray(value)) return null;
+  return value
+    .map(normalizePlaylist)
+    .filter((playlist): playlist is LocalPlaylist => Boolean(playlist));
+}
+
+function normalizeTrackMap(value: unknown): Record<string, Track[]> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .map(([playlistId, tracks]): [string, Track[]] => [
+        playlistId,
+        Array.isArray(tracks)
+          ? tracks.map(normalizeStoredTrack).filter((track): track is Track => Boolean(track))
+          : [],
+      ])
+      .filter(([, tracks]) => tracks.length > 0),
+  );
+}
+
+function normalizeTrackOrderMap(value: unknown): Record<string, string[]> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .map(([playlistId, order]): [string, string[]] => [
+        playlistId,
+        Array.isArray(order)
+          ? order.filter((item): item is string => typeof item === "string" && item.length > 0)
+          : [],
+      ])
+      .filter(([playlistId, order]) => playlistId.startsWith(LOCAL_PLAYLIST_PREFIX) && order.length > 0),
+  );
+}
+
+function writeLocalStorageJson(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Durable app settings remain the source of truth after hydration.
+  }
+}
+
+function refreshLocalPlaylistCaches(): void {
+  cachedRaw = null;
+  cachedPlaylistItemsRaw = null;
+  cachedPlaylistTracksRaw = null;
+  cachedTrackOrderRaw = null;
+  readLocalPlaylists();
+  readLocalPlaylistTracks();
+  readTrackOrder();
+}
+
+async function hydrateSetting<T>(
+  key: string,
+  normalize: (value: unknown) => T | null,
+  fallback: () => T,
+): Promise<boolean> {
+  const stored = normalize(await getAppSetting<unknown>(key));
+  if (stored) {
+    writeLocalStorageJson(key, stored);
+    return true;
+  }
+
+  const localValue = fallback();
+  if (
+    Array.isArray(localValue)
+      ? localValue.length > 0
+      : Object.keys(localValue as Record<string, unknown>).length > 0
+  ) {
+    void setAppSetting(key, localValue);
+  }
+  return false;
+}
+
+function hydrateLocalPlaylistStorage(): void {
+  if (hydrationStarted || typeof window === "undefined") return;
+  hydrationStarted = true;
+
+  void Promise.all([
+    hydrateSetting(STORAGE_KEY, normalizePlaylistList, readLocalPlaylists),
+    hydrateSetting(LOCAL_PLAYLIST_TRACKS_STORAGE_KEY, normalizeTrackMap, readLocalPlaylistTracks),
+    hydrateSetting(LOCAL_PLAYLIST_TRACK_ORDER_KEY, normalizeTrackOrderMap, readTrackOrder),
+  ]).then((results) => {
+    if (!results.some(Boolean)) return;
+    refreshLocalPlaylistCaches();
+    listeners.forEach((listener) => listener());
+  });
 }
 
 export function getLocalPlaylists(): LocalPlaylist[] {
@@ -321,7 +421,11 @@ export function reorderLocalPlaylistTracks(
 
   const nextOrder = [...playlistOrder];
   const [moved] = nextOrder.splice(fromIndex, 1);
-  nextOrder.splice(toIndex, 0, moved);
+  const insertIndex = Math.max(
+    0,
+    Math.min(fromIndex < toIndex ? toIndex - 1 : toIndex, nextOrder.length),
+  );
+  nextOrder.splice(insertIndex, 0, moved);
   writeTrackOrder({
     ...order,
     [playlistId]: nextOrder,

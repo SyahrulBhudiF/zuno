@@ -71,6 +71,8 @@ import {
   type KeyboardShortcutAction,
 } from "./settings/keyboardShortcuts";
 import { useLastFmScrobblingEnabled } from "./settings/lastfm";
+import { persistMainWindowGeometry } from "./settings/mainWindowGeometry";
+import { hydratePlaybackSettings } from "../player/playbackSettings";
 const restoredSession = loadAppSession();
 const LOADING_SCREEN_FADE_MS = 80;
 const LOADING_SCREEN_MAX_MS = 4000;
@@ -240,6 +242,36 @@ export default function App() {
     () => isMacOS && localStorage.getItem(KEYCHAIN_NOTICE_COMPLETE_KEY) !== "true"
   );
   const [showOnboardingWelcome, setShowOnboardingWelcome] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void hydratePlaybackSettings().then((settings) => {
+      if (cancelled) return;
+      tabManager.applyPlaybackSettings(settings);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cleanup: (() => void) | null = null;
+    let cancelled = false;
+
+    void persistMainWindowGeometry().then((unlisten) => {
+      if (cancelled) {
+        unlisten();
+        return;
+      }
+      cleanup = unlisten;
+    });
+
+    return () => {
+      cancelled = true;
+      cleanup?.();
+    };
+  }, []);
   const [availableUpdate, setAvailableUpdate] = useState<UpdateInfo | null>(null);
   const [isExpandedPlayerBar,setIsExpandedPlayerBar]=  useState(false)
   const dismissAvailableUpdate = useCallback(() => {
