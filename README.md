@@ -67,6 +67,7 @@ If you like this project, **starring it on Github** would help A LOT!
 | Caching | Playlists, lyrics, and more are cached for significantly faster performance |
 | Recommendations | Home Tab with personalized song sugesstions and a "random" shuffle wheel, just like on the mobile client |
 | Discord RPC | The songs you are listening to are displayed on Discord |
+| Last FM | Last FM integration to track listening |
 | Mini player | Small Mini Music player when you tab out of the app that can be moved with either right mouse or dragging |
 | Synced Lyrics | Real-time synced lyrics, not even available on the official client |
 | YouTube Music Integration | Browse, search, like songs, and play music via an integrated search bar |
@@ -92,11 +93,11 @@ Download the **newest available installer** from the [latest release](https://gi
 
 ## Roadmap 📌
 - Website with easy download buttons!
-- Last.fm integration
 - **Better lyrics consistency** (some songs still don't have them)
 - Raycast support with app specific URLs
 - Fix Windows media player controls sometimes not working
 - **Music Video** support
+- ~~Last.fm integration~~
 - ~~App Auto-Update so that you don't manually have to check for changes~~
 - ~~Maximize Button + An option for Windows-style window controls~~
 - ~~Start App on boot option~~

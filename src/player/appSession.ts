@@ -11,6 +11,24 @@ export interface AppSession {
   player: TabManagerSession;
 }
 
+function restoreWithoutAutoplay(session: AppSession): AppSession {
+  return {
+    ...session,
+    player: {
+      ...session.player,
+      players: Object.fromEntries(
+        Object.entries(session.player.players).map(([id, player]) => [
+          id,
+          {
+            ...player,
+            status: player.status === "playing" ? "paused" : player.status,
+          },
+        ]),
+      ),
+    },
+  };
+}
+
 export function loadAppSession(): AppSession | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as AppSession | null;
@@ -24,7 +42,7 @@ export function loadAppSession(): AppSession | null {
     ) {
       return null;
     }
-    return parsed;
+    return restoreWithoutAutoplay(parsed);
   } catch {
     return null;
   }

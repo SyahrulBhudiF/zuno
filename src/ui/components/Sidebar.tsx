@@ -73,6 +73,26 @@ function reorderIds(ids: string[], draggedId: string, targetId: string, insertAf
   return nextIds;
 }
 
+function mergeVisibleOrderWithStoredOrder(storedOrder: string[], visibleOrder: string[]) {
+  if (!storedOrder.length) return visibleOrder;
+
+  const visibleIds = new Set(visibleOrder);
+  const hiddenIds = storedOrder.filter((id) => !visibleIds.has(id));
+  const nextOrder = [...storedOrder];
+  let visibleIndex = 0;
+
+  for (let index = 0; index < nextOrder.length && visibleIndex < visibleOrder.length; index += 1) {
+    if (hiddenIds.includes(nextOrder[index])) continue;
+    nextOrder[index] = visibleOrder[visibleIndex];
+    visibleIndex += 1;
+  }
+
+  return [
+    ...nextOrder,
+    ...visibleOrder.slice(visibleIndex),
+  ].filter((id, index, ids) => ids.indexOf(id) === index);
+}
+
 interface SidebarProps {
   width: number;
   onWidthChange: (width: number) => void;
@@ -340,14 +360,37 @@ export function Sidebar({
 
   useEffect(() => {
     if (!libraryState.library && !localPlaylists.length) return;
+    if (!libraryState.library) {
+      if (playlistOrder.length === 0) return;
+
+      const localPlaylistIds = localPlaylists.map((playlist) => playlist.id);
+      const normalized = [
+        ...playlistOrder,
+        ...localPlaylistIds.filter((id) => !playlistOrder.includes(id)),
+      ].filter((id, index, ids) => ids.indexOf(id) === index);
+
+      if (
+        normalized.length !== playlistOrder.length ||
+        normalized.some((id, index) => id !== playlistOrder[index])
+      ) {
+        setPlaylistOrder(normalized);
+        saveOrderToStorage(
+          PLAYLIST_ORDER_KEY,
+          normalized,
+          PLAYLIST_LIKED_ORDER_MIGRATION_KEY,
+        );
+      }
+      return;
+    }
+
     const playlistIds = [
-      ...(libraryState.library?.likedSongsPlaylist ? [libraryState.library.likedSongsPlaylist.id] : []),
+      libraryState.library.likedSongsPlaylist.id,
       ...localPlaylists.map((playlist) => playlist.id),
-      ...(libraryState.library?.playlists.map((playlist) => playlist.id) ?? []),
+      ...libraryState.library.playlists.map((playlist) => playlist.id),
     ];
     if (playlistOrder.length > 0) {
       const normalized = [
-        ...(libraryState.library?.likedSongsPlaylist && !playlistOrder.includes("LM") ? ["LM"] : []),
+        ...(playlistOrder.includes("LM") ? [] : ["LM"]),
         ...playlistOrder.filter((id) => playlistIds.includes(id)),
         ...playlistIds.filter((id) => !playlistOrder.includes(id)),
       ].filter((id, index, ids) => ids.indexOf(id) === index);
@@ -521,10 +564,14 @@ export function Sidebar({
         );
 
         if (drag.itemType === "playlists") {
-          setPlaylistOrder(nextOrder);
+          const nextPlaylistOrder = mergeVisibleOrderWithStoredOrder(
+            playlistOrder,
+            nextOrder,
+          );
+          setPlaylistOrder(nextPlaylistOrder);
           saveOrderToStorage(
             PLAYLIST_ORDER_KEY,
-            nextOrder,
+            nextPlaylistOrder,
             PLAYLIST_LIKED_ORDER_MIGRATION_KEY,
           );
         } else {
@@ -562,7 +609,7 @@ export function Sidebar({
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
     };
-  }, [dropTarget]);
+  }, [dropTarget, playlistOrder]);
 
   const handleSidebarItemPointerDown = (
     event: React.PointerEvent<HTMLButtonElement>,
