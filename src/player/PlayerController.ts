@@ -42,9 +42,13 @@ export interface PlayerSession {
 type Listener = () => void;
 const DISCORD_ASSET_URL_LIMIT = 256;
 
-function isYouTubePlayerError5(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /\bYouTube player error 5\b/.test(message);
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return String(error);
 }
 
 function normalizePlaybackOrderMode(mode: unknown): PlaybackOrderMode {
@@ -280,7 +284,7 @@ export class PlayerController {
       if (requestId !== this.playTrackRequestId) return false;
 
       if (this.isTabActive) {
-        const playbackStarted = await this.audioEngine.play();
+        const playbackStarted = await this.playLoadedTrack();
         if (!playbackStarted) return false;
       }
       if (requestId !== this.playTrackRequestId) return false;
@@ -326,7 +330,7 @@ export class PlayerController {
 
       await this.ensureTrackLoaded(track);
       if (this.isTabActive) {
-        const playbackStarted = this.audioEngine.play();
+        const playbackStarted = this.playLoadedTrack();
         if (isResumingLoadedTrack) {
           this.setState({ status: "playing", error: null });
         }
@@ -715,7 +719,12 @@ export class PlayerController {
         if (!audioData) {
           throw new Error("The data source does not support local audio playback.");
         }
-        await this.audioEngine.loadNativeFallback(track.id, audioData.bytes, audioData.mimeType);
+        await this.audioEngine.loadNativeFallback(
+          track.id,
+          audioData.bytes,
+          audioData.mimeType,
+          audioData.sourceUrl,
+        );
         this.loadedTrackId = track.id;
         if (this.pendingSeekTime !== null) {
           this.audioEngine.seekTo(this.pendingSeekTime);
@@ -733,24 +742,12 @@ export class PlayerController {
       if (this.audioEngine.usesNativeAudio() && !audioData) {
         throw new Error("The data source does not support native audio playback.");
       }
-      try {
-        await this.audioEngine.loadTrack(track.id, audioData?.bytes, audioData?.mimeType);
-      } catch (error) {
-        if (!isYouTubePlayerError5(error) || !this.dataSource.getStreamData) {
-          throw error;
-        }
-
-        logInternalWarn("PlayerController.ensureTrackLoaded falling back to native audio", {
-          trackId: track.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        const fallbackAudioData = await this.dataSource.getStreamData(track);
-        await this.audioEngine.loadNativeFallback(
-          track.id,
-          fallbackAudioData.bytes,
-          fallbackAudioData.mimeType,
-        );
-      }
+      await this.audioEngine.loadTrack(
+        track.id,
+        audioData?.bytes,
+        audioData?.mimeType,
+        audioData?.sourceUrl,
+      );
 
       this.loadedTrackId = track.id;
       if (this.pendingSeekTime !== null) {
@@ -765,9 +762,16 @@ export class PlayerController {
       logInternalError("PlayerController.ensureTrackLoaded failed", error, {
         trackId: track.id,
       });
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`Unable to load audio data for playback. ${detail}`);
+      const detail = getErrorMessage(error);
+      if (track.source === "local" || this.audioEngine.usesNativeAudio()) {
+        throw new Error(`Unable to load audio data for playback. ${detail}`);
+      }
+      throw new Error(`Unable to load YouTube player for playback. ${detail}`);
     }
+  }
+
+  private async playLoadedTrack(): Promise<boolean> {
+    return this.audioEngine.play();
   }
 
   private setState(partial: Partial<PlayerState>) {
@@ -793,7 +797,7 @@ export class PlayerController {
       status: this.state.status,
       trackId: this.state.currentTrack?.id,
     });
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = getErrorMessage(error);
 
     this.setState({
       status: "error",
@@ -879,10 +883,14 @@ export class PlayerController {
     this.emit();
   }
 
-  async setVolume(level: number): Promise<void> {
-    logInternalInfo("PlayerController.setVolume", { level });
+  async setVolume(level: number, muted = level <= 0): Promise<void> {
+    logInternalInfo("PlayerController.setVolume", { level, muted });
     this.audioEngine.setVolume(level);
-    this.setState({ volume: this.audioEngine.getVolume() });
+    this.audioEngine.setMuted(muted);
+    this.setState({
+      volume: this.audioEngine.getVolume(),
+      muted: this.audioEngine.isMuted(),
+    });
     savePlaybackSettings({
       volume: this.state.volume,
       muted: this.state.muted,
@@ -954,7 +962,7 @@ export class PlayerController {
     try {
       await this.ensureTrackLoaded(this.state.currentTrack);
       if (!this.isTabActive) return;
-      const playbackStarted = await this.audioEngine.resume();
+      const playbackStarted = await this.playLoadedTrack();
       if (!playbackStarted) return;
     } catch (error) {
       this.setError(error);

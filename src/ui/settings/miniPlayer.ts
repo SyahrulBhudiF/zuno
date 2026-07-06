@@ -12,8 +12,8 @@ import {
   readLocalBooleanSetting,
   readLocalJsonSetting,
   writeLocalBooleanSetting,
-  writeLocalJsonSetting,
 } from "../../internal/durableLocalSetting";
+import { setAppSetting } from "../../internal/appSettings";
 
 const STORAGE_KEY = "mini-player-enabled";
 const POSITION_STORAGE_KEY = "mini-player-position";
@@ -21,6 +21,8 @@ const HOVER_ACTION_STORAGE_KEY = "mini-player-hover-action";
 const CHANGE_EVENT = "mini-player-enabled-change";
 const HOVER_ACTION_CHANGE_EVENT = "mini-player-hover-action-change";
 const MINI_PLAYER_BOTTOM_MARGIN = 24;
+const POSITION_SAVE_DELAY_MS = 350;
+let positionSaveTimer: number | null = null;
 
 export type MiniPlayerHoverAction = "seek" | "volume";
 
@@ -83,11 +85,28 @@ export function getSavedMiniPlayerPosition(): MiniPlayerPosition | null {
 }
 
 export function saveMiniPlayerPosition(position: MiniPlayerPosition) {
-  writeLocalJsonSetting(POSITION_STORAGE_KEY, position);
+  try {
+    localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(position));
+  } catch {
+    // Durable app settings still get the debounced write below.
+  }
+
+  if (positionSaveTimer !== null) {
+    window.clearTimeout(positionSaveTimer);
+  }
+  positionSaveTimer = window.setTimeout(() => {
+    positionSaveTimer = null;
+    void setAppSetting(POSITION_STORAGE_KEY, position);
+  }, POSITION_SAVE_DELAY_MS);
 }
 
 export function setMiniPlayerHoverAction(action: MiniPlayerHoverAction) {
-  writeLocalJsonSetting(HOVER_ACTION_STORAGE_KEY, action);
+  try {
+    localStorage.setItem(HOVER_ACTION_STORAGE_KEY, JSON.stringify(action));
+  } catch {
+    // Durable app settings still get the write below.
+  }
+  void setAppSetting(HOVER_ACTION_STORAGE_KEY, action);
   window.dispatchEvent(new Event(HOVER_ACTION_CHANGE_EVENT));
 }
 

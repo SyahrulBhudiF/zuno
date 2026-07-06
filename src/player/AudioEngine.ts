@@ -1,4 +1,4 @@
-import { logInternalError, logInternalInfo } from "../internal/logging";
+import { logInternalError, logInternalInfo, logInternalWarn } from "../internal/logging";
 
 type YouTubePlayerEvent = {
   data: number;
@@ -6,6 +6,7 @@ type YouTubePlayerEvent = {
 
 type YouTubePlayer = {
   cueVideoById(videoId: string): void;
+  loadVideoById(videoId: string): void;
   playVideo(): void;
   pauseVideo(): void;
   stopVideo(): void;
@@ -42,6 +43,7 @@ declare global {
     YT?: {
       Player: YouTubePlayerConstructor;
       PlayerState: {
+        UNSTARTED: number;
         ENDED: number;
         PLAYING: number;
         PAUSED: number;
@@ -58,9 +60,15 @@ let playbackClaimId = 0;
 let playbackOwner: AudioEngine | null = null;
 
 function shouldUseNativeAudio(): boolean {
-  // The maintained playback path is the YouTube iframe player. Native audio is
-  // kept as an explicit fallback for player errors that are specific to a webview.
+  // Native audio playback is disabled for remote YouTube tracks because the
+  // backend download path can fail with 403 errors. v1.2.65 used the iframe
+  // player on every platform, including Linux.
   return false;
+}
+
+function isPlayerStateTimeout(error: unknown): boolean {
+  return error instanceof Error
+    && /^Timed out waiting for YouTube player state: /.test(error.message);
 }
 
 function detectAudioMimeType(bytes: Uint8Array): string {
@@ -80,6 +88,12 @@ function detectAudioMimeType(bytes: Uint8Array): string {
     return "audio/mp4";
   }
   return "audio/mp4";
+}
+
+function allowYouTubeIframePlayback(host: HTMLElement): void {
+  const iframe = host.querySelector("iframe");
+  if (!iframe) return;
+  iframe.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture");
 }
 
 function loadYouTubeIframeApi(): Promise<void> {
@@ -130,12 +144,17 @@ export class AudioEngine {
     return this.useNativeAudio;
   }
 
-  async loadTrack(videoId: string, audioData?: ArrayBuffer, mimeType?: string): Promise<void> {
+  async loadTrack(
+    videoId: string,
+    audioData?: ArrayBuffer,
+    mimeType?: string,
+    sourceUrl?: string,
+  ): Promise<void> {
     if (this.useNativeAudio) {
-      if (!audioData) {
+      if (!audioData && !sourceUrl) {
         throw new Error("Native playback requires downloaded audio data.");
       }
-      await this.loadNativeAudio(videoId, audioData, mimeType);
+      await this.loadNativeAudio(videoId, audioData, mimeType, sourceUrl);
       return;
     }
 
@@ -169,11 +188,12 @@ export class AudioEngine {
 
   async loadNativeFallback(
     videoId: string,
-    audioData: ArrayBuffer,
+    audioData?: ArrayBuffer,
     mimeType?: string,
+    sourceUrl?: string,
   ): Promise<void> {
     this.player?.stopVideo();
-    await this.loadNativeAudio(videoId, audioData, mimeType);
+    await this.loadNativeAudio(videoId, audioData, mimeType, sourceUrl);
   }
 
   setOnEnded(listener: (() => void) | null): void {
@@ -205,15 +225,51 @@ export class AudioEngine {
     } else {
       player.unMute();
     }
-    player.setVolume(Math.round(this.volume * 100));
+    player.setVolume(this.getOutputVolumePercent());
+    const videoId = this.currentVideoId;
     const playing = this.waitForPlayerState(
       [window.YT!.PlayerState.PLAYING],
       15_000,
       true,
-      this.currentVideoId,
+      videoId,
     );
-    player.playVideo();
-    await playing;
+    const playerState = player.getPlayerState();
+    if (
+      playerState === window.YT!.PlayerState.CUED
+      || playerState === window.YT!.PlayerState.UNSTARTED
+    ) {
+      logInternalInfo("AudioEngine.play starting cued YouTube video", {
+        videoId,
+        playerState,
+        method: "loadVideoById",
+      });
+      player.loadVideoById(videoId);
+    } else {
+      logInternalInfo("AudioEngine.play starting YouTube video", {
+        videoId,
+        playerState,
+        method: "playVideo",
+      });
+      player.playVideo();
+    }
+    try {
+      await playing;
+    } catch (error) {
+      if (
+        !isPlayerStateTimeout(error)
+        || claimId !== playbackClaimId
+        || playbackOwner !== this
+      ) {
+        throw error;
+      }
+
+      logInternalWarn("AudioEngine.play continuing after slow YouTube start", {
+        videoId: this.currentVideoId,
+        playerState: player.getPlayerState(),
+        playerVideoId: player.getVideoData().video_id ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     if (claimId !== playbackClaimId || playbackOwner !== this) {
       player.pauseVideo();
       return false;
@@ -277,17 +333,33 @@ export class AudioEngine {
   }
 
   setVolume(level: number): void {
-    this.volume = Math.min(1, Math.max(0, level));
-    if (this.audio) this.audio.volume = this.volume;
-    this.player?.setVolume(Math.round(this.volume * 100));
+    const nextVolume = Math.min(1, Math.max(0, level));
+    const beforePlayerVolume = this.player ? this.player.getVolume() : null;
+    const beforeAudioVolume = this.audio?.volume ?? null;
+    this.volume = nextVolume;
+    this.applyOutputVolume();
+    logInternalInfo("AudioEngine.setVolume", {
+      requestedLevel: level,
+      volume: this.volume,
+      hasNativeAudio: Boolean(this.audio),
+      hasYouTubePlayer: Boolean(this.player),
+      beforeAudioVolume,
+      afterAudioVolume: this.audio?.volume ?? null,
+      beforePlayerVolume,
+      afterPlayerVolume: this.player ? this.player.getVolume() : null,
+      muted: this.muted,
+      playerMuted: this.player?.isMuted() ?? null,
+      currentVideoId: this.currentVideoId,
+    });
   }
 
   getVolume(): number {
-    if (this.audio) return this.audio.volume;
-    return this.player ? this.player.getVolume() / 100 : this.volume;
+    return this.volume;
   }
 
   setMuted(isMuted: boolean): void {
+    const beforeAudioMuted = this.audio?.muted ?? null;
+    const beforePlayerMuted = this.player?.isMuted() ?? null;
     this.muted = isMuted;
     if (this.audio) this.audio.muted = isMuted;
     if (isMuted) {
@@ -295,11 +367,21 @@ export class AudioEngine {
     } else {
       this.player?.unMute();
     }
+    this.applyOutputVolume();
+    logInternalInfo("AudioEngine.setMuted", {
+      muted: this.muted,
+      hasNativeAudio: Boolean(this.audio),
+      hasYouTubePlayer: Boolean(this.player),
+      beforeAudioMuted,
+      afterAudioMuted: this.audio?.muted ?? null,
+      beforePlayerMuted,
+      afterPlayerMuted: this.player?.isMuted() ?? null,
+      currentVideoId: this.currentVideoId,
+    });
   }
 
   isMuted(): boolean {
-    if (this.audio) return this.audio.muted;
-    return this.player?.isMuted() ?? this.muted;
+    return this.muted;
   }
 
   getCurrentTime(): number {
@@ -314,15 +396,18 @@ export class AudioEngine {
 
   private async loadNativeAudio(
     videoId: string,
-    audioData: ArrayBuffer,
+    audioData?: ArrayBuffer,
     mimeType?: string,
+    sourceUrl?: string,
   ): Promise<void> {
     const requestId = ++this.loadRequestId;
     this.releaseNativeAudio();
 
-    const bytes = new Uint8Array(audioData);
-    const blob = new Blob([bytes], { type: mimeType || detectAudioMimeType(bytes) });
-    const objectUrl = URL.createObjectURL(blob);
+    const bytes = audioData ? new Uint8Array(audioData) : null;
+    const detectedMimeType = mimeType || (bytes ? detectAudioMimeType(bytes) : "audio/mp4");
+    const objectUrl = sourceUrl ?? URL.createObjectURL(new Blob([bytes ?? new Uint8Array()], {
+      type: detectedMimeType,
+    }));
     const audio = new Audio();
     audio.preload = "auto";
     audio.src = objectUrl;
@@ -335,7 +420,7 @@ export class AudioEngine {
       );
     });
     this.audio = audio;
-    this.audioObjectUrl = objectUrl;
+    this.audioObjectUrl = sourceUrl ? null : objectUrl;
     this.currentVideoId = videoId;
     this.applyNativeAudioSettings();
 
@@ -365,15 +450,27 @@ export class AudioEngine {
     if (requestId !== this.loadRequestId) return;
     logInternalInfo("AudioEngine native audio loaded", {
       videoId,
-      byteLength: audioData.byteLength,
-      mimeType: blob.type,
+      byteLength: audioData?.byteLength ?? null,
+      mimeType: detectedMimeType,
+      hasSourceUrl: Boolean(sourceUrl),
     });
   }
 
   private applyNativeAudioSettings(): void {
     if (!this.audio) return;
-    this.audio.volume = this.volume;
+    this.audio.volume = this.muted ? 0 : this.volume;
     this.audio.muted = this.muted;
+  }
+
+  private applyOutputVolume(): void {
+    if (this.audio) {
+      this.audio.volume = this.muted ? 0 : this.volume;
+    }
+    this.player?.setVolume(this.getOutputVolumePercent());
+  }
+
+  private getOutputVolumePercent(): number {
+    return this.muted ? 0 : Math.round(this.volume * 100);
   }
 
   private releaseNativeAudio(): void {
@@ -429,11 +526,15 @@ export class AudioEngine {
 
     const host = document.createElement("div");
     host.style.position = "fixed";
-    host.style.left = "-10000px";
-    host.style.top = "0";
+    host.style.right = "0";
+    host.style.bottom = "0";
     host.style.width = "200px";
     host.style.height = "200px";
+    host.style.opacity = "0.01";
     host.style.pointerEvents = "none";
+    host.style.zIndex = "0";
+    const target = document.createElement("div");
+    host.appendChild(target);
     document.body.appendChild(host);
 
     return new Promise((resolve, reject) => {
@@ -444,7 +545,7 @@ export class AudioEngine {
         reject(new Error("Timed out while creating the YouTube player."));
       }, 15_000);
 
-      player = new window.YT!.Player(host, {
+      player = new window.YT!.Player(target, {
         width: 200,
         height: 200,
         playerVars: {
@@ -454,13 +555,18 @@ export class AudioEngine {
           enablejsapi: 1,
           origin: window.location.origin,
           playsinline: 1,
-          widget_referrer: `${window.location.origin}/`,
+          widget_referrer: "https://music.youtube.com/",
         },
         events: {
           onReady: () => {
             window.clearTimeout(timeoutId);
-            player.setVolume(Math.round(this.volume * 100));
-            player.unMute();
+            allowYouTubeIframePlayback(host);
+            player.setVolume(this.getOutputVolumePercent());
+            if (this.muted) {
+              player.mute();
+            } else {
+              player.unMute();
+            }
             logInternalInfo("AudioEngine YouTube player ready");
             resolve(player);
           },

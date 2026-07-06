@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::io::{Read, Write};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -109,6 +109,26 @@ fn cache_error(message: impl Into<String>) -> CommandError {
     CommandError {
         message: message.into(),
     }
+}
+
+fn signed_googlevideo_local_address(url: &url::Url) -> Option<IpAddr> {
+    if !url
+        .host_str()
+        .is_some_and(|host| host.ends_with(".googlevideo.com"))
+    {
+        return None;
+    }
+
+    let signed_ip = url.query_pairs().find_map(|(key, value)| {
+        (key == "ip")
+            .then(|| value.parse::<IpAddr>().ok())
+            .flatten()
+    })?;
+
+    Some(match signed_ip {
+        IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+    })
 }
 
 fn local_audio_mime_type(path: &Path) -> &'static str {
@@ -292,6 +312,9 @@ fn read_app_settings(
     let bytes = fs::read(path).map_err(|error| CommandError {
         message: format!("application settings read failed: {error}"),
     })?;
+    if bytes.iter().all(|byte| byte.is_ascii_whitespace()) {
+        return Ok(HashMap::new());
+    }
     serde_json::from_slice(&bytes).map_err(|error| CommandError {
         message: format!("application settings parse failed: {error}"),
     })
@@ -1187,6 +1210,7 @@ struct ProxyHttpRequestInput {
     method: String,
     headers: HashMap<String, String>,
     body_base64: Option<String>,
+    timeout_ms: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -1195,6 +1219,27 @@ struct ProxyHttpResponse {
     headers: HashMap<String, String>,
     body_base64: String,
 }
+
+#[derive(Clone)]
+struct MediaItem {
+    bytes: Arc<Vec<u8>>,
+    mime_type: String,
+}
+
+struct MediaServer {
+    origin: String,
+    items: Arc<Mutex<HashMap<String, MediaItem>>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioSourcePayload {
+    url: String,
+    mime_type: String,
+    byte_length: usize,
+}
+
+static MEDIA_SERVER: OnceLock<MediaServer> = OnceLock::new();
 
 fn collect_json_renderer_counts(value: &serde_json::Value, counts: &mut HashMap<String, usize>) {
     match value {
@@ -1218,6 +1263,126 @@ fn collect_json_renderer_counts(value: &serde_json::Value, counts: &mut HashMap<
     }
 }
 
+fn media_server() -> Result<&'static MediaServer, CommandError> {
+    if let Some(server) = MEDIA_SERVER.get() {
+        return Ok(server);
+    }
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| CommandError {
+        message: format!("media server bind failed: {error}"),
+    })?;
+    let port = listener.local_addr().map_err(|error| CommandError {
+        message: format!("media server local address failed: {error}"),
+    })?.port();
+    let items = Arc::new(Mutex::new(HashMap::<String, MediaItem>::new()));
+    let thread_items = Arc::clone(&items);
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    let items = Arc::clone(&thread_items);
+                    thread::spawn(move || handle_media_request(stream, items));
+                }
+                Err(error) => {
+                    eprintln!("[internal][tauri][warn] media server accept failed error={}", error);
+                }
+            }
+        }
+    });
+
+    let server = MediaServer {
+        origin: format!("http://127.0.0.1:{port}"),
+        items,
+    };
+    let _ = MEDIA_SERVER.set(server);
+    MEDIA_SERVER.get().ok_or_else(|| CommandError {
+        message: "media server initialization failed".into(),
+    })
+}
+
+fn handle_media_request(
+    mut stream: std::net::TcpStream,
+    items: Arc<Mutex<HashMap<String, MediaItem>>>,
+) {
+    let mut buffer = [0_u8; 4096];
+    let read_len = match stream.read(&mut buffer) {
+        Ok(len) => len,
+        Err(error) => {
+            eprintln!("[internal][tauri][warn] media server read failed error={}", error);
+            return;
+        }
+    };
+    let request = String::from_utf8_lossy(&buffer[..read_len]);
+    let mut lines = request.lines();
+    let request_line = lines.next().unwrap_or_default();
+    let mut request_parts = request_line.split_whitespace();
+    let method = request_parts.next().unwrap_or_default();
+    let path = request_parts.next().unwrap_or_default();
+    if method != "GET" && method != "HEAD" {
+        let _ = stream.write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n");
+        return;
+    }
+
+    let range_header = lines.find_map(|line| {
+        line.strip_prefix("Range:")
+            .or_else(|| line.strip_prefix("range:"))
+            .map(str::trim)
+            .map(str::to_string)
+    });
+    let key = path
+        .trim_start_matches("/audio/")
+        .split('?')
+        .next()
+        .unwrap_or_default();
+    let item = match items.lock().ok().and_then(|items| items.get(key).cloned()) {
+        Some(item) => item,
+        None => {
+            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+            return;
+        }
+    };
+
+    let total_len = item.bytes.len();
+    let (status, start, end) = parse_media_range(range_header.as_deref(), total_len)
+        .unwrap_or(("200 OK", 0, total_len.saturating_sub(1)));
+    let body_len = if total_len == 0 { 0 } else { end - start + 1 };
+    let content_range = if status.starts_with("206") {
+        format!("Content-Range: bytes {start}-{end}/{total_len}\r\n")
+    } else {
+        String::new()
+    };
+    let headers = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {}\r\nAccept-Ranges: bytes\r\n{}Content-Length: {body_len}\r\nConnection: close\r\n\r\n",
+        item.mime_type,
+        content_range,
+    );
+    let _ = stream.write_all(headers.as_bytes());
+    if method == "HEAD" || total_len == 0 {
+        return;
+    }
+    let _ = stream.write_all(&item.bytes[start..=end]);
+}
+
+fn parse_media_range(range_header: Option<&str>, total_len: usize) -> Option<(&'static str, usize, usize)> {
+    let value = range_header?.strip_prefix("bytes=")?;
+    if total_len == 0 {
+        return None;
+    }
+    let (start_raw, end_raw) = value.split_once('-')?;
+    let start = if start_raw.is_empty() {
+        let suffix_len = end_raw.parse::<usize>().ok()?;
+        total_len.saturating_sub(suffix_len)
+    } else {
+        start_raw.parse::<usize>().ok()?
+    };
+    let end = if end_raw.is_empty() {
+        total_len - 1
+    } else {
+        end_raw.parse::<usize>().ok()?.min(total_len - 1)
+    };
+    (start <= end && start < total_len).then_some(("206 Partial Content", start, end))
+}
+
 #[tauri::command]
 async fn fetch_audio_bytes(url: String, track_id: String) -> Result<Vec<u8>, CommandError> {
     let started_at = Instant::now();
@@ -1225,7 +1390,21 @@ async fn fetch_audio_bytes(url: String, track_id: String) -> Result<Vec<u8>, Com
         "[internal][tauri][info] fetch_audio_bytes start url={} track_id={}",
         url, track_id
     );
-    let response = reqwest::Client::new()
+    let request_url = url::Url::parse(&url).map_err(|error| CommandError {
+        message: format!("audio URL parse failed: {error}"),
+    })?;
+    let mut client_builder = reqwest::Client::builder();
+    if let Some(local_address) = signed_googlevideo_local_address(&request_url) {
+        eprintln!(
+            "[internal][tauri][info] fetch_audio_bytes forcing signed IP family family={}",
+            if local_address.is_ipv6() { "ipv6" } else { "ipv4" }
+        );
+        client_builder = client_builder.local_address(local_address);
+    }
+    let client = client_builder.build().map_err(|error| CommandError {
+        message: format!("audio HTTP client creation failed: {error}"),
+    })?;
+    let response = client
         .get(&url)
         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .header("Accept", "*/*")
@@ -1278,6 +1457,50 @@ async fn fetch_audio_bytes(url: String, track_id: String) -> Result<Vec<u8>, Com
     );
 
     Ok(body.to_vec())
+}
+
+#[tauri::command]
+async fn fetch_audio_source(
+    url: String,
+    track_id: String,
+    mime_type: String,
+) -> Result<AudioSourcePayload, CommandError> {
+    let bytes = fetch_audio_bytes(url, track_id.clone()).await?;
+    if bytes.len() >= 12 && &bytes[4..8] != b"ftyp" {
+        let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(120)]).replace('\n', " ");
+        return Err(CommandError {
+            message: format!("Audio download was not an MP4 file. Response started with: {preview}"),
+        });
+    }
+
+    let server = media_server()?;
+    let key = format!(
+        "{}-{}",
+        track_id,
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or_default()
+    );
+    let byte_length = bytes.len();
+    {
+        let mut items = server.items.lock().map_err(|_| CommandError {
+            message: "media server cache lock poisoned".into(),
+        })?;
+        items.insert(
+            key.clone(),
+            MediaItem {
+                bytes: Arc::new(bytes),
+                mime_type: mime_type.clone(),
+            },
+        );
+    }
+
+    Ok(AudioSourcePayload {
+        url: format!("{}/audio/{}", server.origin, key),
+        mime_type,
+        byte_length,
+    })
 }
 
 #[tauri::command]
@@ -1716,8 +1939,24 @@ async fn try_youtube_api(
         audio_url.chars().take(200).collect::<String>()
     );
 
+    let audio_url_parsed = url::Url::parse(&audio_url).map_err(|error| CommandError {
+        message: format!("audio URL parse failed: {error}"),
+    })?;
+    let mut audio_client_builder = reqwest::Client::builder();
+    if let Some(local_address) = signed_googlevideo_local_address(&audio_url_parsed) {
+        eprintln!(
+            "[internal][tauri][info] fetch_youtube_music_audio forcing signed IP family attempt={} family={}",
+            attempt_name,
+            if local_address.is_ipv6() { "ipv6" } else { "ipv4" }
+        );
+        audio_client_builder = audio_client_builder.local_address(local_address);
+    }
+    let audio_client = audio_client_builder.build().map_err(|error| CommandError {
+        message: format!("audio HTTP client creation failed: {error}"),
+    })?;
+
     // Download the audio
-    let mut audio_request = client
+    let mut audio_request = audio_client
         .get(&audio_url)
         .header("User-Agent", user_agent)
         .header("Accept", "*/*")
@@ -1803,28 +2042,17 @@ async fn proxy_http_request(
     let mut client_builder = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36");
 
-    if request_url
-        .host_str()
-        .is_some_and(|host| host.ends_with(".googlevideo.com"))
-    {
-        let signed_ip = request_url.query_pairs().find_map(|(key, value)| {
-            (key == "ip")
-                .then(|| value.parse::<IpAddr>().ok())
-                .flatten()
-        });
+    if let Some(timeout_ms) = input.timeout_ms {
+        client_builder = client_builder.timeout(Duration::from_millis(timeout_ms));
+    }
 
-        if let Some(signed_ip) = signed_ip {
-            let local_address = match signed_ip {
-                IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-                IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
-            };
-            eprintln!(
-                "[internal][tauri][info] proxy_http_request forcing signed IP family url={} family={}",
-                request_target,
-                if signed_ip.is_ipv6() { "ipv6" } else { "ipv4" }
-            );
-            client_builder = client_builder.local_address(local_address);
-        }
+    if let Some(local_address) = signed_googlevideo_local_address(&request_url) {
+        eprintln!(
+            "[internal][tauri][info] proxy_http_request forcing signed IP family url={} family={}",
+            request_target,
+            if local_address.is_ipv6() { "ipv6" } else { "ipv4" }
+        );
+        client_builder = client_builder.local_address(local_address);
     }
 
     let client = client_builder.build().map_err(|error| CommandError {
@@ -1990,6 +2218,14 @@ pub fn run() {
 
     #[allow(unused_mut)]
     let mut context = tauri::generate_context!();
+    #[cfg(target_os = "linux")]
+    {
+        for window in &mut context.config_mut().app.windows {
+            if window.label == "main" {
+                window.decorations = true;
+            }
+        }
+    }
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .manage(CacheLock(Mutex::new(())))
@@ -2075,6 +2311,7 @@ pub fn run() {
             app_settings_clear,
             open_current_log,
             fetch_audio_bytes,
+            fetch_audio_source,
             fetch_youtube_music_audio,
             proxy_http_request,
             save_youtube_credentials,

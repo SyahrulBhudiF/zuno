@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { logInternalError } from "../../internal/logging";
+import { isLinux } from "../platform";
 import {
   hydrateLocalBooleanSetting,
   readLocalBooleanSetting,
@@ -34,7 +35,11 @@ function readWindowsStyleWindowControls() {
 }
 
 function readNativeWindowControls() {
-  return readBooleanSetting(NATIVE_CONTROLS_STORAGE_KEY);
+  return readLocalBooleanSetting(NATIVE_CONTROLS_STORAGE_KEY, isLinux);
+}
+
+function emitWindowControlsChange() {
+  window.dispatchEvent(new Event(CHANGE_EVENT));
 }
 
 export function setWindowsStyleWindowControls(enabled: boolean) {
@@ -51,7 +56,10 @@ export async function applyNativeWindowControls(enabled = readNativeWindowContro
     await getCurrentWindow().setDecorations(enabled);
     document.documentElement.toggleAttribute("data-native-window-controls", enabled);
   } catch (error) {
+    document.documentElement.toggleAttribute("data-native-window-controls", false);
     logInternalError("windowControls.applyNativeWindowControls failed", error);
+  } finally {
+    emitWindowControlsChange();
   }
 }
 
@@ -60,9 +68,9 @@ export async function hydrateWindowControlSettings() {
     hydrateLocalBooleanSetting(WINDOWS_STYLE_STORAGE_KEY, false, CHANGE_EVENT),
     hydrateLocalBooleanSetting(
       NATIVE_CONTROLS_STORAGE_KEY,
-      false,
+      isLinux,
       CHANGE_EVENT,
-      applyNativeWindowControls,
+      () => applyNativeWindowControls(),
     ),
   ]);
 }

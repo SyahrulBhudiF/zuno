@@ -87,11 +87,15 @@ export function TitleBar({
     }
   };
 
-  const handleToggleFullscreen = async () => {
+  const handleToggleMaximize = async () => {
     try {
-      await appWindow.setFullscreen(!(await appWindow.isFullscreen()));
+      if (await appWindow.isMaximized()) {
+        await appWindow.unmaximize();
+      } else {
+        await appWindow.maximize();
+      }
     } catch (error) {
-      logInternalError("TitleBar.fullscreen failed", error);
+      logInternalError("TitleBar.maximize failed", error);
     }
   };
 
@@ -165,6 +169,7 @@ export function TitleBar({
           if (event.button !== 0) return;
           void startWindowDrag();
         }}
+        onDoubleClick={() => void handleToggleMaximize()}
       />
 
       {!nativeWindowControls && (
@@ -181,9 +186,9 @@ export function TitleBar({
           </button>
           <button
             type="button"
-            aria-label="Fullscreen"
+            aria-label="Maximize"
             className={`${styles.windowButton} ${styles.windowButtonMaximize}`}
-            onClick={() => void handleToggleFullscreen()}
+            onClick={() => void handleToggleMaximize()}
           >
             <span aria-hidden="true" className={styles.windowIcon}>
               □

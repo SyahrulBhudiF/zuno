@@ -1,4 +1,4 @@
-import { IconX } from "@tabler/icons-react";
+import { IconRefresh, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Lyrics } from "../../datasource/types";
 import { logInternalWarn } from "../../internal/logging";
@@ -83,6 +83,7 @@ export function LyricsView({ onClose }: LyricsViewProps) {
   }, [activeIndex, manualScrollUntil]);
 
   const handleManualScroll = () => {
+    if (activeIndex < 0) return;
     const resumeAt = performance.now() + AUTO_SCROLL_RESUME_MS;
     setManualScrollUntil(resumeAt);
     if (autoScrollTimerRef.current !== null) {
@@ -92,6 +93,18 @@ export function LyricsView({ onClose }: LyricsViewProps) {
       setManualScrollUntil(0);
       autoScrollTimerRef.current = null;
     }, AUTO_SCROLL_RESUME_MS);
+  };
+
+  const handleResync = () => {
+    if (autoScrollTimerRef.current !== null) {
+      window.clearTimeout(autoScrollTimerRef.current);
+      autoScrollTimerRef.current = null;
+    }
+    setManualScrollUntil(0);
+    lineRefs.current[activeIndex]?.scrollIntoView({
+      block: "center",
+      behavior: "smooth",
+    });
   };
 
   useEffect(() => () => {
@@ -158,6 +171,17 @@ export function LyricsView({ onClose }: LyricsViewProps) {
           ))}
         </div>
       </div>
+      {manualScrollUntil > 0 && activeIndex >= 0 && (
+        <button
+          type="button"
+          className={styles.resyncButton}
+          onClick={handleResync}
+          aria-label="Resync lyrics to current playback position"
+        >
+          <IconRefresh size={16} aria-hidden="true" />
+          <span>Resync</span>
+        </button>
+      )}
       <div className={styles.footer}>
         {lyrics?.sourceLabel && <span>Lyrics from {lyrics.sourceLabel}</span>}
       </div>

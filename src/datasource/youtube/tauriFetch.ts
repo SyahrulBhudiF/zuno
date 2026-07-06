@@ -7,6 +7,10 @@ type ProxyHttpResponse = {
   body_base64: string;
 };
 
+type TauriFetchInit = RequestInit & {
+  timeoutMs?: number;
+};
+
 function toBase64(bytes: Uint8Array): string {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 1) {
@@ -94,6 +98,12 @@ function getCookieValue(cookieHeader: string | undefined, name: string): string 
   return null;
 }
 
+function getSapisidAuthCookie(cookieHeader: string | undefined): string | null {
+  return getCookieValue(cookieHeader, "SAPISID")
+    ?? getCookieValue(cookieHeader, "__Secure-1PAPISID")
+    ?? getCookieValue(cookieHeader, "__Secure-3PAPISID");
+}
+
 async function sha1Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(value));
   return [...new Uint8Array(digest)]
@@ -105,7 +115,7 @@ async function applyMusicCookieAuth(headers: Record<string, string>): Promise<vo
   if (headers["x-youtube-client-name"] !== "67") return;
 
   const origin = "https://music.youtube.com";
-  const sapisid = getCookieValue(headers.cookie, "SAPISID");
+  const sapisid = getSapisidAuthCookie(headers.cookie);
   if (sapisid) {
     const timestamp = Math.floor(Date.now() / 1000);
     const hash = await sha1Hex(`${timestamp} ${sapisid} ${origin}`);
@@ -149,7 +159,7 @@ async function buildBodyBase64(input: RequestInfo | URL, init?: RequestInit): Pr
   return undefined;
 }
 
-export async function tauriFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+export async function tauriFetch(input: RequestInfo | URL, init?: TauriFetchInit): Promise<Response> {
   const startedAt = performance.now();
   let sourceHeaders: HeadersInit | undefined;
   
@@ -190,6 +200,7 @@ export async function tauriFetch(input: RequestInfo | URL, init?: RequestInit): 
         method,
         headers,
         body_base64,
+        timeout_ms: init?.timeoutMs,
       },
     });
 

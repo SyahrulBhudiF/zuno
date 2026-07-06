@@ -11,8 +11,9 @@ import type {
 } from "./types";
 
 export type StreamData = {
-  bytes: ArrayBuffer;
+  bytes?: ArrayBuffer;
   mimeType?: string;
+  sourceUrl?: string;
 };
 
 export abstract class DataSource {

@@ -114,6 +114,15 @@ Download the **newest available installer** from the [latest release](https://gi
 - **macOS** supported. Sometimes some experimental releases don't work at first, so try some older ones if that is the case.
 - **Linux** supported. Sometimes some experimental releases don't work at first, so try some older ones if that is the case
 
+### Linux Notes
+On some Wayland desktops, the AppImage can open a blank grey window with an EGL error. If that happens, try launching it with:
+
+```bash
+LD_PRELOAD=/usr/lib/libwayland-client.so ./Just.Another.Music.Client_1.2.71_amd64.AppImage
+```
+
+If playback or window controls still fail, open the app log from Settings and include it with the issue report. The exact desktop environment, display server, and distro help a lot for Linux bugs.
+
 ### MacOs Issues
 **MacOs may prompt you with a Keychain popup asking for permission.** The app stores one encryption key in its own Keychain entry. Your YouTube Music session is encrypted with that key before it is saved in the app data directory.
 

@@ -151,6 +151,40 @@
   text-align: center;
 }
 
+.resyncButton {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  min-width: 104px;
+  height: 38px;
+  padding: 0 15px;
+  border: 1px solid rgb(255 255 255 / 16%);
+  border-radius: 12px;
+  background: rgb(18 18 20 / 72%);
+  color: rgb(255 255 255 / 88%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  box-shadow: 0 14px 36px rgb(0 0 0 / 26%);
+  backdrop-filter: blur(18px) saturate(130%);
+  cursor: pointer;
+  transition: border-color 160ms var(--easing-smooth), background 160ms var(--easing-smooth),
+    color 160ms var(--easing-smooth), transform 160ms var(--easing-smooth);
+}
+
+.resyncButton:hover {
+  border-color: rgb(255 255 255 / 28%);
+  background: rgb(32 32 35 / 82%);
+  color: #fff;
+  transform: translateX(-50%) translateY(-1px);
+}
+
 .footer {
   position: absolute;
   z-index: 2;

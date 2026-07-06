@@ -86,6 +86,7 @@ import {
   setLastFmScrobblingEnabled,
   useLastFmScrobblingEnabled,
 } from "../settings/lastfm";
+import { isLinux } from "../platform";
 import styles from "./SettingsPage.module.css";
 
 const GITHUB_REPOSITORY_URL = "https://github.com/2latemc/JustAnotherMusicClient";
@@ -1162,13 +1163,22 @@ export function SettingsPage({
             <label className={styles.toggleRow}>
               <span className={styles.toggleDescription}>
                 <strong>Use OS native controls</strong>
-                <span>Let the operating system draw the window frame and title bar.</span>
+                <span>
+                  {isLinux
+                    ? "Let the operating system draw the window frame and title bar. The app restarts to apply this on Linux."
+                    : "Let the operating system draw the window frame and title bar."}
+                </span>
               </span>
               <input
                 className={styles.toggleInput}
                 type="checkbox"
                 checked={nativeWindowControls}
-                onChange={(event) => setNativeWindowControls(event.target.checked)}
+                onChange={(event) => {
+                  setNativeWindowControls(event.target.checked);
+                  if (isLinux) {
+                    void relaunch().catch(() => window.location.reload());
+                  }
+                }}
               />
               <span className={styles.toggle} aria-hidden="true" />
             </label>

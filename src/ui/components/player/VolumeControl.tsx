@@ -1,5 +1,6 @@
 import { IconVolume, IconVolumeOff } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
+import { logInternalDebug } from "../../../internal/logging";
 import { playerController, usePlayerState } from "../../../player/playerStore";
 import styles from "./VolumeControl.module.css";
 
@@ -76,21 +77,39 @@ export function VolumeControl() {
     return () => slider.removeEventListener("wheel", preventBackgroundScroll);
   }, []);
 
-  const updateVolume = (value: number, updateDisplay = true) => {
+  const updateVolume = (value: number, updateDisplay = true, source = "unknown") => {
     const clampedValue = Math.min(1, Math.max(0, value));
     const roundedValue = Math.round(clampedValue * 100) / 100;
+
+    logInternalDebug("VolumeControl.updateVolume", {
+      source,
+      inputValue: value,
+      roundedValue,
+      updateDisplay,
+      displayedVolume: displayedVolumeRef.current,
+      stateVolume: volume,
+      isMuted,
+      pointerDown: isPointerDownRef.current,
+      isDragging: isDraggingRef.current,
+    });
 
     setVolume(roundedValue);
     if (updateDisplay) {
       cancelVolumeAnimation();
       setVolumeDisplay(roundedValue);
     }
-    const shouldBeMuted = roundedValue === 0;
-    if (isMuted !== shouldBeMuted) {
-      setIsMuted(shouldBeMuted);
-      void playerController.toggleMute();
-    }
+    setIsMuted(roundedValue === 0);
     void playerController.setVolume(roundedValue);
+  };
+
+  const getVolumeFromPointer = (event: React.PointerEvent<HTMLInputElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (bounds.width <= 0) return displayedVolumeRef.current;
+    return (event.clientX - bounds.left) / bounds.width;
+  };
+
+  const handleVolumeInput = (event: React.FormEvent<HTMLInputElement>) => {
+    updateVolume(Number(event.currentTarget.value), true, "input");
   };
 
   const handleVolumeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -100,14 +119,16 @@ export function VolumeControl() {
       && shouldAnimatePointerChangeRef.current
       && !isDraggingRef.current
     );
-    updateVolume(value, !shouldAnimate);
+    updateVolume(value, !shouldAnimate, "change");
     if (shouldAnimate) {
       animateVolumeTo(value);
     }
   };
 
   const handleVolumePointerDown = (event: React.PointerEvent<HTMLInputElement>) => {
-    event.currentTarget.setPointerCapture(event.pointerId);
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
     pointerStartRef.current = { x: event.clientX, y: event.clientY };
     isPointerDownRef.current = true;
     isDraggingRef.current = false;
@@ -116,10 +137,21 @@ export function VolumeControl() {
     const thumbX = sliderBounds.left + sliderBounds.width * displayedVolumeRef.current;
     const thumbHitArea = Math.max(14, sliderBounds.height / 2);
     shouldAnimatePointerChangeRef.current = Math.abs(event.clientX - thumbX) > thumbHitArea;
+
+    if (shouldAnimatePointerChangeRef.current) {
+      const nextVolume = getVolumeFromPointer(event);
+      logInternalDebug("VolumeControl.pointerDown jump", {
+        pointerX: event.clientX,
+        nextVolume,
+        currentTargetValue: Number(event.currentTarget.value),
+      });
+      updateVolume(nextVolume, false, "pointerDown");
+      animateVolumeTo(nextVolume);
+    }
   };
 
   const handleVolumePointerMove = (event: React.PointerEvent<HTMLInputElement>) => {
-    if (!isPointerDownRef.current || isDraggingRef.current) return;
+    if (!isPointerDownRef.current) return;
 
     const distance = Math.hypot(
       event.clientX - pointerStartRef.current.x,
@@ -129,8 +161,13 @@ export function VolumeControl() {
 
     isDraggingRef.current = true;
     shouldAnimatePointerChangeRef.current = false;
-    cancelVolumeAnimation();
-    setVolumeDisplay(Number(event.currentTarget.value));
+    const nextVolume = getVolumeFromPointer(event);
+    logInternalDebug("VolumeControl.pointerMove drag", {
+      pointerX: event.clientX,
+      nextVolume,
+      currentTargetValue: Number(event.currentTarget.value),
+    });
+    updateVolume(nextVolume, true, "pointerMove");
   };
 
   const handleVolumePointerEnd = (event: React.PointerEvent<HTMLInputElement>) => {
@@ -152,7 +189,7 @@ export function VolumeControl() {
 
     const currentVolume = isMuted ? 0 : volume;
     const direction = scrollDelta < 0 ? 1 : -1;
-    updateVolume(currentVolume + direction * 0.05);
+    updateVolume(currentVolume + direction * 0.05, true, "wheel");
   };
 
   const handleToggleMute = () => {
@@ -179,6 +216,7 @@ export function VolumeControl() {
         max="1"
         step="0.01"
         value={displayedVolume}
+        onInput={handleVolumeInput}
         onChange={handleVolumeChange}
         onPointerDown={handleVolumePointerDown}
         onPointerMove={handleVolumePointerMove}

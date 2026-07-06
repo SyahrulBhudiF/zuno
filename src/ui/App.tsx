@@ -1274,6 +1274,7 @@ export default function App() {
         && playerState.status !== "loading"
       ) {
         event.preventDefault();
+        event.stopPropagation();
         if (event.target instanceof HTMLElement) {
           event.target.blur();
         }
@@ -1311,8 +1312,8 @@ export default function App() {
       }
     };
 
-    window.addEventListener("keydown", handleShortcut);
-    return () => window.removeEventListener("keydown", handleShortcut);
+    window.addEventListener("keydown", handleShortcut, true);
+    return () => window.removeEventListener("keydown", handleShortcut, true);
   }, [
     activeTab?.view,
     activeTabId,
@@ -1526,12 +1527,6 @@ useEffect(() => {
   const setup = async () => {
     const unlisten = await listen<{ volume: number }>("mini-player:volume", (event) => {
       const volume = Math.min(1, Math.max(0, event.payload.volume));
-      const shouldBeMuted = volume === 0;
-
-      if (playerController.isMuted() !== shouldBeMuted) {
-        void playerController.toggleMute();
-      }
-
       void playerController.setVolume(volume);
     });
     return unlisten;
