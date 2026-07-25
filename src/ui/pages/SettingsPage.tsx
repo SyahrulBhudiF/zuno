@@ -1,7 +1,21 @@
-import { type KeyboardEvent, useEffect, useState, useSyncExternalStore } from "react";
+import {
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import { Switch } from "@/components/motion/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/motion/select";
 import {
   BugIcon,
-  ChevronDownIcon,
   CoffeeIcon,
   FolderAddIcon,
   FolderIcon,
@@ -120,6 +134,76 @@ const SETTINGS_CARD = "flex flex-col gap-5 rounded-2xl bg-card/50 p-6";
  */
 const SETTINGS_FIELD =
   "min-w-0 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-inset focus:ring-ring/60";
+
+/**
+ * One settings row: label and description on the left, control on the right.
+ *
+ * The wrapper is a `div`, not a `label`, because the controls are now buttons
+ * (`role="switch"`, `role="listbox"`) rather than native inputs — a button inside a label
+ * gets its activation swallowed by the label's own click forwarding. The association is made
+ * explicitly instead, via `aria-labelledby` on the control, so screen readers still announce
+ * the row title when the control takes focus.
+ */
+function SettingRow({
+  title,
+  description,
+  disabled,
+  children,
+}: {
+  title: string;
+  description?: ReactNode;
+  disabled?: boolean;
+  /** Receives the id of the row title so the control can point `aria-labelledby` at it. */
+  children: (labelId: string) => ReactNode;
+}) {
+  const labelId = useId();
+  return (
+    <div
+      className={cn(
+        "flex items-start justify-between gap-6 py-2.5",
+        disabled && "pointer-events-none opacity-50",
+      )}
+    >
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span id={labelId} className="text-sm font-medium text-foreground">
+          {title}
+        </span>
+        {description ? (
+          <span className="text-sm text-muted-foreground">{description}</span>
+        ) : null}
+      </span>
+      <span className="flex shrink-0 items-center gap-2 pt-0.5">{children(labelId)}</span>
+    </div>
+  );
+}
+
+/** The common case: a row whose only control is a switch. */
+function SettingToggle({
+  title,
+  description,
+  checked,
+  onCheckedChange,
+  disabled,
+}: {
+  title: string;
+  description?: ReactNode;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <SettingRow title={title} description={description} disabled={disabled}>
+      {(labelId) => (
+        <Switch
+          checked={checked}
+          onCheckedChange={onCheckedChange}
+          disabled={disabled}
+          aria-labelledby={labelId}
+        />
+      )}
+    </SettingRow>
+  );
+}
 
 /** Quiet outbound links at the foot of the page. */
 const SETTINGS_FOOTER_LINK =
@@ -670,22 +754,13 @@ export function SettingsPage({
             </div>
 
             <div className="flex flex-col gap-5">
-              <label className={cn("flex items-center justify-between gap-4 py-2", !lastFmSession && "opacity-50")}>
-                <span className={SETTING_LABEL}>
-                  <strong>Scrobble plays</strong>
-                  <span>
-                    Send now playing updates and scrobbles after a track reaches the Last.fm listening threshold.
-                  </span>
-                </span>
-                <input
-                  className="size-4 shrink-0 accent-[var(--color-primary)]"
-                  type="checkbox"
-                  checked={lastFmSession ? lastFmScrobblingEnabled : false}
-                  disabled={!lastFmSession}
-                  onChange={(event) => setLastFmScrobblingEnabled(event.target.checked)}
-                />
-                <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
-              </label>
+              <SettingToggle
+                title="Scrobble plays"
+                description="Send now playing updates and scrobbles after a track reaches the Last.fm listening threshold."
+                checked={lastFmSession ? lastFmScrobblingEnabled : false}
+                disabled={!lastFmSession}
+                onCheckedChange={setLastFmScrobblingEnabled}
+              />
 
               <div className="flex flex-wrap items-center gap-2">
                 <span className={SETTING_LABEL}>
@@ -825,38 +900,22 @@ export function SettingsPage({
             </div>
 
             <div className="flex flex-col gap-5">
-              <label className={cn("flex items-center justify-between gap-4 py-2", autostartLoading && "opacity-50")}>
-                <span className={SETTING_LABEL}>
-                  <strong>Launch at startup</strong>
-                  <span>Start Zuno when your computer starts.</span>
-                </span>
-                <input
-                  className="size-4 shrink-0 accent-[var(--color-primary)]"
-                  type="checkbox"
-                  checked={autostartEnabled}
-                  disabled={autostartLoading}
-                  onChange={(event) => void handleAutostartChange(event.target.checked)}
-                />
-                <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
-              </label>
+              <SettingToggle
+                title="Launch at startup"
+                description="Start Zuno when your computer starts."
+                checked={autostartEnabled}
+                disabled={autostartLoading}
+                onCheckedChange={(checked) => void handleAutostartChange(checked)}
+              />
 
               {autostartError && <p className="text-sm text-destructive">{autostartError}</p>}
 
-              <label className="flex items-center justify-between gap-4 py-2">
-                <span className={SETTING_LABEL}>
-                  <strong>Remember window size and location</strong>
-                  <span>Reopen the main window with its last size and screen position.</span>
-                </span>
-                <input
-                  className="size-4 shrink-0 accent-[var(--color-primary)]"
-                  type="checkbox"
-                  checked={mainWindowGeometryPersistenceEnabled}
-                  onChange={(event) => {
-                    setMainWindowGeometryPersistenceEnabled(event.target.checked);
-                  }}
-                />
-                <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
-              </label>
+              <SettingToggle
+                title="Remember window size and location"
+                description="Reopen the main window with its last size and screen position."
+                checked={mainWindowGeometryPersistenceEnabled}
+                onCheckedChange={setMainWindowGeometryPersistenceEnabled}
+              />
 
               <div className="flex flex-col gap-3">
                 <div className="flex flex-wrap items-end justify-between gap-3">
@@ -986,19 +1045,12 @@ export function SettingsPage({
 
               {logError && <p className="text-sm text-destructive">{logError}</p>}
 
-              <label className="flex items-center justify-between gap-4 py-2">
-                <span className={SETTING_LABEL}>
-                  <strong>Potato PC mode</strong>
-                  <span>Disables animations, blur effects, and the animated star background.</span>
-                </span>
-                <input
-                  className="size-4 shrink-0 accent-[var(--color-primary)]"
-                  type="checkbox"
-                  checked={paperPcMode}
-                  onChange={(event) => setPaperPcMode(event.target.checked)}
-                />
-                <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
-              </label>
+              <SettingToggle
+                title="Potato PC mode"
+                description="Disables animations, blur effects, and the animated star background."
+                checked={paperPcMode}
+                onCheckedChange={setPaperPcMode}
+              />
 
               <div className="flex flex-wrap items-end justify-between gap-4 py-2">
                 <span className={SETTING_LABEL}>
@@ -1159,39 +1211,34 @@ export function SettingsPage({
               <QueuePanelIcon className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/15 text-primary" size={22} />
             </div>
 
-            <label className="flex items-center justify-between gap-4 py-2">
-              <span className={SETTING_LABEL}>
-                <strong>Mini player</strong>
-                <span>Show compact playback controls when the main window is not focused.</span>
-              </span>
-              <input
-                className="size-4 shrink-0 accent-[var(--color-primary)]"
-                type="checkbox"
-                checked={miniPlayerEnabled}
-                onChange={(event) => setMiniPlayerEnabled(event.target.checked)}
-              />
-              <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
-            </label>
+            <SettingToggle
+              title="Mini player"
+              description="Show compact playback controls when the main window is not focused."
+              checked={miniPlayerEnabled}
+              onCheckedChange={setMiniPlayerEnabled}
+            />
 
-            <label className="flex items-center justify-between gap-4 py-2">
-              <span className={SETTING_LABEL}>
-                <strong>Mini player hover bar</strong>
-                <span>Choose what the expanded hover slider controls.</span>
-              </span>
-              <span className="flex items-center gap-2">
-                <select
-                  className="min-w-0 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-inset focus:ring-ring/60"
+            <SettingRow
+              title="Mini player hover bar"
+              description="Choose what the expanded hover slider controls."
+            >
+              {() => (
+                <Select
+                  className="w-44"
                   value={miniPlayerHoverAction}
-                  onChange={(event) => {
-                    setMiniPlayerHoverAction(event.target.value as MiniPlayerHoverAction);
-                  }}
+                  onValueChange={(value) =>
+                    setMiniPlayerHoverAction(value as MiniPlayerHoverAction)}
                 >
-                  <option value="seek">Song position</option>
-                  <option value="volume">Volume</option>
-                </select>
-                <ChevronDownIcon size={17} aria-hidden="true" />
-              </span>
-            </label>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="seek">Song position</SelectItem>
+                    <SelectItem value="volume">Volume</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+            </SettingRow>
 
             <div className="flex items-center justify-between gap-4 py-2">
               <span className={SETTING_LABEL}>
@@ -1208,43 +1255,27 @@ export function SettingsPage({
               </button>
             </div>
 
-            <label className="flex items-center justify-between gap-4 py-2">
-              <span className={SETTING_LABEL}>
-                <strong>Windows-style controls</strong>
-                <span>Use minimize, maximize, and close buttons with square edges.</span>
-              </span>
-              <input
-                className="size-4 shrink-0 accent-[var(--color-primary)]"
-                type="checkbox"
-                checked={windowsStyleWindowControls}
-                disabled={nativeWindowControls}
-                onChange={(event) => setWindowsStyleWindowControls(event.target.checked)}
-              />
-              <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
-            </label>
+            <SettingToggle
+              title="Windows-style controls"
+              description="Use minimize, maximize, and close buttons with square edges."
+              checked={windowsStyleWindowControls}
+              disabled={nativeWindowControls}
+              onCheckedChange={setWindowsStyleWindowControls}
+            />
 
-            <label className="flex items-center justify-between gap-4 py-2">
-              <span className={SETTING_LABEL}>
-                <strong>Use OS native controls</strong>
-                <span>
-                  {isLinux
-                    ? "Let the operating system draw the window frame and title bar. The app restarts to apply this on Linux."
-                    : "Let the operating system draw the window frame and title bar."}
-                </span>
-              </span>
-              <input
-                className="size-4 shrink-0 accent-[var(--color-primary)]"
-                type="checkbox"
-                checked={nativeWindowControls}
-                onChange={(event) => {
-                  setNativeWindowControls(event.target.checked);
-                  if (isLinux) {
-                    void relaunch().catch(() => window.location.reload());
-                  }
-                }}
-              />
-              <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
-            </label>
+            <SettingToggle
+              title="Use OS native controls"
+              description={isLinux
+                ? "Let the operating system draw the window frame and title bar. The app restarts to apply this on Linux."
+                : "Let the operating system draw the window frame and title bar."}
+              checked={nativeWindowControls}
+              onCheckedChange={(checked) => {
+                setNativeWindowControls(checked);
+                if (isLinux) {
+                  void relaunch().catch(() => window.location.reload());
+                }
+              }}
+            />
           </section>
 
           <section className={SETTINGS_CARD} aria-labelledby="behavior-settings-title">
@@ -1252,19 +1283,12 @@ export function SettingsPage({
               <h2 className="text-lg" id="behavior-settings-title">Behavior</h2>
             </div>
 
-            <label className="flex items-center justify-between gap-4 py-2">
-              <span className={SETTING_LABEL}>
-                <strong>Always show extra controls</strong>
-                <span>Keep lyrics and queue visible instead of showing them only on hover.</span>
-              </span>
-              <input
-                className="size-4 shrink-0 accent-[var(--color-primary)]"
-                type="checkbox"
-                checked={extraPlayerControlsAlwaysVisible}
-                onChange={(event) => setExtraPlayerControlsAlwaysVisible(event.target.checked)}
-              />
-              <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
-            </label>
+            <SettingToggle
+              title="Always show extra controls"
+              description="Keep lyrics and queue visible instead of showing them only on hover."
+              checked={extraPlayerControlsAlwaysVisible}
+              onCheckedChange={setExtraPlayerControlsAlwaysVisible}
+            />
           </section>
         </div>
       )}
@@ -1337,20 +1361,12 @@ export function SettingsPage({
               </p>
             </div>
 
-            <label className="flex items-center justify-between gap-4 py-2">
-              <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground">
-                <span>Reduced motion mode</span>
-                <span className="text-sm text-muted-foreground">
-                  Disables animations, blur and shadows across the app.
-                </span>
-              </span>
-              <input
-                className="size-4 shrink-0 accent-[var(--color-primary)]"
-                type="checkbox"
-                checked={paperPcMode}
-                onChange={(event) => setPaperPcMode(event.target.checked)}
-              />
-            </label>
+            <SettingToggle
+              title="Reduced motion mode"
+              description="Disables animations, blur and shadows across the app."
+              checked={paperPcMode}
+              onCheckedChange={setPaperPcMode}
+            />
           </section>
         </div>
       )}
