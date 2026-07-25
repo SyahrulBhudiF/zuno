@@ -221,8 +221,8 @@ Defense in depth that *is* in place:
 "plugins": { "updater": {
   "pubkey": "<minisign public key>",
   "endpoints": [
-    "https://github.com/2latemc/JustAnotherMusicClient/releases/latest/download/latest.json",
-    "https://raw.githubusercontent.com/2latemc/JustAnotherMusicClient/updater-channel/latest.json"
+    "https://github.com/noFAYZ/zuno/releases/latest/download/latest.json",
+    "https://raw.githubusercontent.com/noFAYZ/zuno/updater-channel/latest.json"
   ]}}
 ```
 

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { Loader, SpinnerSteps } from "@/components/motion/loader";
+import { SpinnerSteps } from "@/components/motion/loader";
 import { cn } from "@/lib/utils";
 import {
   PauseActiveIcon,

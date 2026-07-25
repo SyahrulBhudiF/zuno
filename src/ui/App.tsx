@@ -1786,7 +1786,7 @@ useEffect(() => {
         onOpenPlaylist={handleNavigatePlaylist}
         onQueryChange={setOnboardingSearchQuery}
       />
-      {loadingScreenState !== "hidden" && (
+      {!loadingScreenState !== "hidden" && (
         <AppLoadingScreen isLeaving={loadingScreenState === "leaving"} />
       )}
       {showKeychainNotice ? (

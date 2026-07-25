@@ -1,7 +1,7 @@
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import appIcon from "../../../assets/img/Logo.png";
-import { AudioLoader } from "@/components/motion/magnetic";
+import introVideo from "../../../assets/img/zuno.mp4";
 
 const LOADING_LINES = [
   " Finding your rhythm...",
@@ -44,6 +44,20 @@ export function AppLoadingScreen({ isLeaving }: AppLoadingScreenProps) {
           src={appIcon}
           alt=""
         /> 
+
+<motion.video
+  initial={{ opacity: 0, scale: 0.92 }}
+  animate={{ opacity: 1, scale: 1 }}
+  transition={{ type: "spring", stiffness: 260, damping: 24 }}
+  className="size-20 rounded-2xl object-cover"
+  autoPlay
+  muted
+  loop
+  playsInline
+  preload="auto"
+>
+  <source src={introVideo} type="video/mp4" />
+</motion.video>
  
       <div className="flex items-end gap-4">
        {/*  <AudioLoader /> */}  <strong className="text-sm font-medium text-foreground">{loadingLine}</strong>

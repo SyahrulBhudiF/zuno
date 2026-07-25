@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Loader, SpinnerSteps } from "@/components/motion/loader";
+import { SpinnerSteps } from "@/components/motion/loader";
 import { cn } from "@/lib/utils";
 import { PlayActiveIcon, QueuePanelIcon } from "@/ui/icons";
 import { tauriFetch } from "../../../datasource/youtube/tauriFetch";

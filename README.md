@@ -1,199 +1,189 @@
+<p align="center">
+  <img width="120px" src="assets/img/Logo.png" alt="Zuno" />
+</p>
+
+<h1 align="center">Zuno</h1>
+
+<p align="center">
+  A fast, native-feeling desktop client for YouTube Music.<br />
+  Built with Tauri, React and TypeScript for <b>Windows, macOS and Linux</b>.
+</p>
+
+<p align="center">
+  <a href="https://github.com/noFAYZ/zuno/releases/latest"><img src="https://img.shields.io/github/downloads/noFAYZ/zuno/total?style=for-the-badge&color=ff0033&label=downloads" alt="Downloads"></a>
+  <a href="https://github.com/noFAYZ/zuno/releases/latest"><img src="https://img.shields.io/github/package-json/v/noFAYZ/zuno?style=for-the-badge&color=ff3d00&label=version" alt="Version"></a>
+  <a href="https://github.com/noFAYZ/zuno/blob/main/LICENSE"><img src="https://img.shields.io/github/license/noFAYZ/zuno?style=for-the-badge&color=ff6900" alt="License"></a>
+  <a href="https://github.com/noFAYZ/zuno/stargazers"><img src="https://img.shields.io/github/stars/noFAYZ/zuno?style=for-the-badge&color=ff9700&label=stars" alt="Stars"></a>
+</p>
 
 <p align="center">
   <picture>
-    <source width="831px" media="(prefers-color-scheme: dark)" srcset="assets\img\Logo_Header_SMALLER.png" />
-    <img width="831px" src="assets\img\LogoHeader_LIGHT.png" />
+    <source media="(prefers-color-scheme: dark)" srcset="docs/zuno-d.PNG" />
+    <source media="(prefers-color-scheme: light)" srcset="docs/zuno-l.PNG" />
+    <img src="docs/zuno-d.PNG" alt="Zuno home view" width="900" />
   </picture>
-  <p align="center">
-    <a href="https://github.com/2latemc/JustAnotherMusicClient/releases/latest"><img src="https://img.shields.io/github/downloads/2latemc/JustAnotherMusicClient/total?style=for-the-badge&color=FF0000&label=downloads" alt="Downloads"></a>
-    <a href="https://github.com/2latemc/JustAnotherMusicClient/releases/latest"><img src="https://img.shields.io/github/package-json/v/2latemc/JustAnotherMusicClient?style=for-the-badge&color=ff3d00&label=version" alt="Version">
-    <a href="https://github.com/2latemc/JustAnotherMusicClient/blob/main/LICENSE"><img src="https://img.shields.io/github/license/2latemc/JustAnotherMusicClient?style=for-the-badge&color=ff6900" alt="License">
-    <a href="https://github.com/2latemc/JustAnotherMusicClient/"><img src="https://img.shields.io/github/stars/2latemc/JustAnotherMusicClient?style=for-the-badge&color=ff9700&label=stars" alt="Stars">
-     <a href="https://www.reddit.com/r/JustAnotherMusicC/"><img src="https://img.shields.io/badge/reddit-orange?style=for-the-badge&logo=reddit&logoColor=black&link=https%3A%2F%2Fwww.reddit.com%2Fr%2FJustAnotherMusicC%2F" alt="Reddit">
-  </p> 
-  
 </p>
-<br>
 
-A desktop YouTube Music client built with Tauri, React, and TypeScript for **Windows, MacOs & Linux**.
+> [!IMPORTANT]
+> Zuno is an independent, unofficial project. It is not affiliated with, authorized by,
+> sponsored by, or endorsed by YouTube or Google.
 
-<br>
+<br />
 
-> **IMPORTANT** This is an independent, unofficial project and is not affiliated with, authorized by, sponsored by, or endorsed by YouTube or Google. The only reason I am making this, is becuase there is no official YouTube music desktop client. 
+## About
 
-<br>
+Zuno brings YouTube Music to the desktop as a focused application rather than a browser tab.
+There is no official YouTube Music desktop client, so the goal here is a polished one that
+feels native on each platform and stays fast with large libraries.
+
+If you find it useful, **starring the repo** genuinely helps.
+
+<br />
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><b>Dark</b></td>
+    <td width="50%"><b>Light</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/zuno-d.PNG" alt="Zuno in dark theme" /></td>
+    <td><img src="docs/zuno-l.PNG" alt="Zuno in light theme" /></td>
+  </tr>
+</table>
+
 <p align="center">
- <a href="https://ko-fi.com/totally2late">
-    <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Donate on Ko-fi" width="350">
-  </a>
-  <br>
-
-</picture>
-
-## About ℹ️
-
-JustAnotherMusicClient brings YouTube Music to the desktop in a focused, native-feeling application. YouTube does not provide an official desktop client, so this project aims to provide a polished alternative that integrates with YouTube Music while keeping the experience fast and familiar.
-
-If you like this project, **starring it on Github** would help A LOT! 
-
-**Contact for legal purposes:** team@2late.org
-
-[**Buy me a cofee**](https://ko-fi.com/totally2late): This supports development and helps me update this project and pay for hosting! If you want a feature to be finished a bit faster, mabey add it to a message there (; 
-  
-<source
-      width="831px"
-      media="(prefers-color-scheme: dark)"
-      srcset="assets\img\Screenshot01.png"
-    >
-    <img 
-      width="831px"
-      src="assets\img\Screenshot01.png"
-    >
-<p align="center">
-  <a href="https://www.reddit.com/r/JustAnotherMusicC/">
-    <picture>
-          <source height="70px" media="(prefers-color-scheme: dark)" srcset="[https://user-images.githubusercontent.com/13122796/178032351-9d9d5619-8ef7-470a-9eec-2744ece54553.png](https://github.com/user-attachments/assets/05511c93-a52f-44ee-80ce-97b49cc974e0)" />
-      <img height="70px" src="https://github.com/user-attachments/assets/05511c93-a52f-44ee-80ce-97b49cc974e0" />
-    </picture>
-  </a>
+  <img src="docs/zuno.JPG" alt="Zuno with the sidebar collapsed" width="760" />
+  <br />
+  <sub>Collapsed sidebar — the library rail stays reachable while the content column takes the width.</sub>
 </p>
-<p></p>
-<br></br>
 
-## Features ✨
-| Feature  | Description |
+<br />
+
+## Features
+
+| Feature | Description |
 |---|---|
-| Multiple Tabs | Create multiple music tabs, each with its own playback queue, volume, and player state |
-| Caching | Playlists, lyrics, and more are cached for significantly faster performance |
-| Recommendations | Home Tab with personalized song sugesstions and a "random" shuffle wheel, just like on the mobile client |
-| Discord RPC | The songs you are listening to are displayed on Discord |
-| Last FM | Last FM integration to track listening |
-| Mini player | Small Mini Music player when you tab out of the app that can be moved with either right mouse or dragging |
-| Synced Lyrics | Real-time synced lyrics, not even available on the official client |
-| YouTube Music Integration | Browse, search, like songs, and play music via an integrated search bar |
-| Account Support | Sign in to access your library, playlists, recommendations, and other account features |
-| Song Management | Add songs to playlists or queue, view your queue, quickly via Ctrl+S or right-click |
-## Download ⏬
+| **Multiple tabs** | Each tab keeps its own queue, volume and player state |
+| **Cylinder carousel** | "Made for you" picks roll through a 3D shelf rather than sitting in a grid |
+| **Light & dark themes** | Follows the OS by default, or pin either one |
+| **Mini player** | A morphing capsule that appears when you tab away; drag it anywhere, hover to expand |
+| **Synced lyrics** | Real-time synced lyrics, not available on the official web client |
+| **Caching** | Playlists, lyrics and artwork are cached, so revisits are instant |
+| **Recommendations** | Personalised suggestions plus a "surprise me" shuffle |
+| **Discord Rich Presence** | Shows what you are listening to on Discord |
+| **Last.fm** | Scrobbling and now-playing updates |
+| **Account support** | Sign in for your library, playlists and recommendations |
+| **Song management** | Add to playlists or queue from anywhere, via right-click or keyboard |
+| **Local files** | Build playlists from folders on your own machine |
 
-Download the **newest available installer** from the [latest release](https://github.com/2latemc/JustAnotherMusicClient/releases/latest) for either Windows, MacOs or Linux.
-<a href="https://github.com/2latemc/JustAnotherMusicClient/releases/latest">
-  <picture>
-    <source
-      width="831px"
-      media="(prefers-color-scheme: dark)"
-      srcset="assets/img/Screenshot02.png"
-    >
-    <img
-      width="831px"
-      src="assets/img/Screenshot02.png"
-      alt="Screenshot"
-    >
-  </picture>
-</a>
+<br />
 
-## Roadmap 📌
-- Website with easy download buttons!
-- **Better lyrics consistency** (some songs still don't have them)
-- Raycast support with app specific URLs
-- Fix Windows media player controls sometimes not working
-- **Music Video** support
-- ~~Last.fm integration~~
-- ~~App Auto-Update so that you don't manually have to check for changes~~
-- ~~Maximize Button + An option for Windows-style window controls~~
-- ~~Start App on boot option~~
-- ~~Liked songs playlist support~~
-- ~~Discord RCP is coming~~
-- ~~Full Linux and MacOS support~~
-- ~~Space to pause sometimes selects elements instead of pausing / resuming~~
-- ~~Cap Too long Song names and make them smoothly move vertically~~
-- ~~Artist Pages with monthly listeners, playlists and popular songs alongside streams amount feature when clicking on the artist name, also integrate into the search results so that one can find artists~~
+## Download
 
-## Platform Support 💻
+Grab the newest installer from the **[latest release](https://github.com/noFAYZ/zuno/releases/latest)**
+for Windows, macOS or Linux.
 
-- **Windows** is the primary supported platform.
-- **macOS** supported. Sometimes some experimental releases don't work at first, so try some older ones if that is the case.
-- **Linux** supported. Sometimes some experimental releases don't work at first, so try some older ones if that is the case
+<br />
 
-### Linux Notes
-On some Wayland desktops, the AppImage can open a blank grey window with an EGL error. If that happens, try launching it with:
+## Platform support
+
+- **Windows** — primary supported platform.
+- **macOS** — supported.
+- **Linux** — supported.
+
+### Linux notes
+
+On some Wayland desktops the AppImage can open a blank grey window with an EGL error. If that
+happens, try:
 
 ```bash
-LD_PRELOAD=/usr/lib/libwayland-client.so ./Just.Another.Music.Client_1.2.71_amd64.AppImage
+LD_PRELOAD=/usr/lib/libwayland-client.so ./Zuno_<version>_amd64.AppImage
 ```
 
-If playback or window controls still fail, open the app log from Settings and include it with the issue report. The exact desktop environment, display server, and distro help a lot for Linux bugs.
+If playback or window controls still fail, open the app log from **Settings → Library →
+Application log** and attach it to an issue. The desktop environment, display server and
+distro all help a lot for Linux bugs.
 
-### MacOs Issues
-**MacOs may prompt you with a Keychain popup asking for permission.** The app stores one encryption key in its own Keychain entry. Your YouTube Music session is encrypted with that key before it is saved in the app data directory.
+### macOS notes
 
-If you do not need signing into YouTube Music you dont need to grant Keychain permissions. If you do it is recommended to click "always allow" in the popup to prevent MacOs from being annoying 
+macOS may show a Keychain prompt. Zuno stores one encryption key in its own Keychain entry,
+and your YouTube Music session is encrypted with that key before being written to the app
+data directory. Choosing **Always Allow** avoids repeated prompts.
+
+If you do not intend to sign in to YouTube Music, you can decline it.
+
+<br />
+
+## For developers
+
+### Prerequisites
+
+- Node.js LTS and npm
+- [Rust and Cargo](https://rustup.rs/)
+- C++ build tools (MSVC on Windows)
+- Microsoft Edge WebView2 Runtime (Windows)
+
+The Tauri CLI ships in the project's dev dependencies — no global install needed.
+
+### Install, run, build
+
+```bash
+npm install
+npm run tauri dev
+npm run tauri build
+```
+
+### Architecture
+
+The `docs/` folder documents the codebase:
+
+- [`docs/architecture.md`](docs/architecture.md) — system overview and module map
+- [`docs/frontend.md`](docs/frontend.md) — React structure, styling tokens, icon conventions
+- [`docs/backend.md`](docs/backend.md) — Rust commands and the IPC surface
+
+### Contributing
+
+Contributions are welcome. Fork the repo, branch, test locally, and open a pull request
+describing what changed and why. For larger changes, open an issue first so the approach can
+be discussed.
+
+By contributing you agree to the [Contributor License Agreement](CLA.md).
+
+<br />
+
+## Credits
+
+Zuno is a fork of **[JustAnotherMusicClient](https://github.com/2latemc/JustAnotherMusicClient)**
+by [2latemc](https://github.com/2latemc), used under the Apache 2.0 licence. The original
+project did the hard groundwork of getting YouTube Music working on the desktop.
+
+If you want to support the original author, they accept donations
+[on Ko-fi](https://ko-fi.com/totally2late).
+
+<br />
 
 ## Legal
-**This project DOES NOT offer any downloading functionality. This is a client providing Theme and Decorative additions for audio listening only.**
 
-**If anyone from Google reads this:** There was no official client, I just wanted a good desktop client. Thats why I made this, please don't sue me!
-**Contact me here:** team@2late.org
+**Zuno provides no downloading functionality.** It is a client for audio listening, with
+theming and interface additions.
 
-The application interacts with YouTube and YouTube Music. Access to those services remains governed by their respective terms, policies, availability, and regional restrictions.
+Zuno interacts with YouTube and YouTube Music. Access to those services remains governed by
+their own terms, policies, availability and regional restrictions.
 
-JustAnotherMusicClient does not host or claim ownership of music, videos, artwork, metadata, or other content supplied by third parties. Rights in that content remain with their respective owners.
+Zuno does not host or claim ownership of music, videos, artwork, metadata, or any other
+content supplied by third parties. Rights in that content remain with their respective
+owners.
 
-The project is not intended to circumvent access controls, geographic restrictions, advertising, paid service requirements, or content licensing. It is also not intended to enable unauthorized downloading, copying, redistribution, or public performance of third-party content.
+The project is not intended to circumvent access controls, geographic restrictions,
+advertising, paid service requirements, or content licensing, nor to enable unauthorised
+downloading, copying, redistribution or public performance of third-party content.
 
-YouTube and YouTube Music are trademarks of Google LLC. All other trademarks are the property of their respective owners. References to third-party products are used only to describe compatibility and integration.
+YouTube and YouTube Music are trademarks of Google LLC. All other trademarks are the property
+of their respective owners. References to third-party products describe compatibility and
+integration only.
 
 - [YouTube Terms of Service](https://www.youtube.com/static?template=terms)
 - [YouTube API Services Terms of Service](https://developers.google.com/youtube/terms/api-services-terms-of-service)
 - [YouTube API Services Developer Policies](https://developers.google.com/youtube/terms/developer-policies)
-
-
-
-## For Developers 🛠️
-
-### Prerequisites
-
-Install these before running the app:
-
-- Node.js LTS and npm
-- [Rust and Cargo](https://rustup.rs/)
-- Windows C++ build tools
-- Microsoft Edge WebView2 Runtime
-
-The Tauri CLI is included in the project's development dependencies. A global Tauri installation is not required.
-
-
-### Install
-
-```powershell
-npm install
-```
-
-### Run
-
-```powershell
-npm run tauri dev
-```
-
-### Build
-
-```powershell
-npm run tauri build
-```
-
-### Contributing
-
-Contributions are welcome. Fork the repository, create a branch for your change, test it locally, and open a pull request with a clear description of what you changed and why.
-
-By submitting a contribution, you agree to the [Contributor License Agreement](CLA.md). You retain copyright in your contribution while granting the project owner the rights needed to use, modify, distribute, commercialize, and relicense it.
-
-For larger changes, consider opening an issue first so the approach can be discussed before implementation.
-
-### Common Issues
-
-#### Rust is not installed
-
-Install Rust and Cargo from [rustup.rs](https://rustup.rs/), restart your terminal, and run the command again.
-
-#### WebView2 is missing
-
-Install the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/), then run the app again.
