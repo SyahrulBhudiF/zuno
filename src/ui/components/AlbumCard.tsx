@@ -1,7 +1,7 @@
 import { type MouseEvent, type ReactNode } from "react";
-import { IconPlayerPlay } from "@tabler/icons-react";
+import { TiltCard } from "@/components/motion/tilt-card";
+import { PlayActiveIcon } from "@/ui/icons";
 import { TrackArtwork } from "./TrackArtwork";
-import styles from "./AlbumCard.module.css";
 
 interface AlbumCardProps {
   color?: string;
@@ -24,7 +24,7 @@ export function AlbumCard({
 }: AlbumCardProps) {
   return (
     <div
-      className={styles.card}
+      className="group/card flex w-full cursor-pointer flex-col gap-2 rounded-xl p-2 transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       onClick={onClick}
       onContextMenu={onContextMenu}
       onKeyDown={(event) => {
@@ -33,20 +33,30 @@ export function AlbumCard({
       role="button"
       tabIndex={0}
     >
-      <div className={styles.cover} style={{ backgroundColor: color }}>
-        <TrackArtwork
-          className={styles.artwork}
-          artworkUrl={artworkUrl}
-          iconSize={48}
-          variant="album"
-        />
-        <div className={styles.playOverlay}>
-          <IconPlayerPlay size={32} className={styles.playIcon} />
+      <TiltCard max={9} className="aspect-square w-full overflow-hidden rounded-lg">
+        <div className="relative size-full" style={{ backgroundColor: color }}>
+          <TrackArtwork
+            className="size-full object-cover"
+            artworkUrl={artworkUrl}
+            iconSize={48}
+            variant="album"
+          />
+          {/* Play affordance fades in on hover rather than sitting permanently on the art. */}
+          <div className="pointer-events-none absolute inset-0 grid place-items-center bg-background/50 opacity-0 transition-opacity group-hover/card:opacity-100">
+            <span className="grid size-12 place-items-center rounded-full bg-primary text-primary-foreground shadow-lg">
+              <PlayActiveIcon size={26} />
+            </span>
+          </div>
         </div>
-      </div>
-      {title && <span className={styles.title}>{title}</span>}
+      </TiltCard>
+
+      {title && (
+        <span className="line-clamp-2 text-sm font-medium text-foreground">{title}</span>
+      )}
       {(subtitleContent || subtitle) && (
-        <span className={styles.subtitle}>{subtitleContent ?? subtitle}</span>
+        <span className="line-clamp-1 text-xs text-muted-foreground">
+          {subtitleContent ?? subtitle}
+        </span>
       )}
     </div>
   );

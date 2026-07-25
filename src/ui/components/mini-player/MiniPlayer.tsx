@@ -9,21 +9,23 @@ import {
   type MouseEvent,
   type PointerEvent,
 } from "react";
+import { cn } from "@/lib/utils";
 import { emit, listen } from "@tauri-apps/api/event";
-import { cursorPosition, getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
+import { cursorPosition, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { Loader } from "@/components/motion/loader";
 import {
-  IconLoader2,
-  IconPlayerPause,
-  IconPlayerPlay,
-  IconPlayerSkipBack,
-  IconPlayerSkipForward,
-  IconX,
-} from "@tabler/icons-react";
+  ArrowUpIcon,
+  CloseIcon,
+  PauseActiveIcon,
+  PlayActiveIcon,
+  SkipNextIcon,
+  SkipPreviousIcon,
+} from "@/ui/icons";
 import { saveMiniPlayerPosition, useMiniPlayerHoverAction } from "../../settings/miniPlayer";
 import { isLinux, isMacOS, isWindows } from "../../platform";
+import { Marquee } from "@/components/motion/marquee";
 import { TrackArtwork } from "../TrackArtwork";
-import styles from "./MiniPlayer.module.css";
 
 interface PlayerSync {
   status: string;
@@ -43,16 +45,56 @@ interface VolumeSync {
 }
 
 const win = getCurrentWindow();
-const PILL_WIDTH = 160;
-const BOTTOM_PILL_HEIGHT = 40;
-const TOP_PILL_HEIGHT = 36;
-const GAP = 2;
-const HOVER_MARGIN_X = 10;
+
+/*
+ * One capsule that morphs, rather than two stacked pills.
+ *
+ * The capsule shrink-wraps its content (`w-max`), and the window is sized from the
+ * capsule's *measured* width — no chrome arithmetic to drift out of sync with the markup.
+ * Collapsed it is capped small (COLLAPSED_MAX_WIDTH); hovering lets it grow to fit the
+ * transport row, and the ResizeObserver below resizes the window to match either state.
+ */
+const COLLAPSED_HEIGHT = 44;
+/** Combined height of the two rows. The expanded capsule adds its padding on top. */
+const EXPANDED_HEIGHT = 84;
+/** Corner radius = half the collapsed height: a true stadium collapsed, a squircle-ish
+ *  rounded rect expanded. Same corner throughout, which is what makes the morph read. */
+const CAPSULE_RADIUS = COLLAPSED_HEIGHT / 2;
+/** Inset applied on hover. One spacing unit (`p-1`) on this app's 0.34rem scale; kept as a
+ *  number because the expanded height and the window height are derived from it. */
+const EXPANDED_PADDING = 6;
+const EXPANDED_CAPSULE_HEIGHT = EXPANDED_HEIGHT + EXPANDED_PADDING * 2;
+/** Slack around the capsule for the hover margin and the press/scale transform. */
+const WINDOW_PADDING = 8;
+/*
+ * The capsule is given an explicit width instead of shrink-wrapping, and the title column
+ * takes whatever is left over (`flex-1 min-w-0`). That is the entire layout contract:
+ * chrome can be added, removed or resized without anyone recomputing a text-column
+ * constant, and no combination of values can overflow the capsule and be quietly clipped
+ * by `overflow-hidden`. Width is also animatable this way, so the morph is continuous.
+ */
+const COLLAPSED_WIDTH = 160;
+const EXPANDED_WIDTH = 260;
+/** Thickness of the progress ring around the artwork. */
+const PROGRESS_RING_WIDTH = 2;
+const HOVER_MARGIN_X = 0;
 const HOVER_MARGIN_Y = 8;
-const COLLAPSE_GRACE_MS = 300;
+/*
+ * Hysteresis: while expanded, the capsule is only released once the cursor clears a
+ * *larger* box than the one that opened it. Expanding also re-centres the window, which can
+ * shift the edge out from under a stationary cursor — without this the pill can oscillate,
+ * and no grace period fixes that because the cursor genuinely leaves the region.
+ */
+const HOVER_RELEASE_SLACK = 6;
+const COLLAPSE_GRACE_MS = 0;
+/** How often the cached window rect is re-read as a safety net (poll ticks). */
+const WINDOW_RECT_REFRESH_TICKS = 20;
 const RIGHT_MOUSE_BUTTON = 2;
 const LEFT_MOUSE_BUTTON = 0;
 const INTERACTIVE_SELECTOR = "button, input, a, [role='button']";
+
+const MINI_BUTTON =
+  "flex size-7 shrink-0 items-center justify-center rounded-full text-neutral-300 transition-all hover:bg-white/10 hover:text-white active:scale-90 disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50";
 
 export default function MiniPlayer() {
   const [playerState, setPlayerState] = useState<PlayerSync>({
@@ -79,6 +121,13 @@ export default function MiniPlayer() {
   const seekTargetRef = useRef(0);
   const pendingSeekTargetRef = useRef<number | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const capsuleRef = useRef<HTMLDivElement | null>(null);
+  const titleViewportRef = useRef<HTMLDivElement | null>(null);
+  const titleTextRef = useRef<HTMLSpanElement | null>(null);
+  const [isTitleOverflowing, setIsTitleOverflowing] = useState(false);
+  const capsuleWidthRef = useRef(0);
+  const appliedWidthRef = useRef(0);
+  const windowRectRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const macAlbumDragActiveRef = useRef(false);
   const macAlbumDragMovedRef = useRef(false);
   const suppressNextAlbumArtClickRef = useRef(false);
@@ -92,6 +141,19 @@ export default function MiniPlayer() {
   const setExpandedBoth = (value: boolean) => {
     expandedRef.current = value;
     setExpanded(value);
+  };
+
+  /*
+   * The hover poll used to ask the backend for position *and* size on every 50ms tick —
+   * 60 IPC round-trips a second, forever, for values that only change when the window is
+   * moved or resized. Both of those are events we already observe, so the rect is cached
+   * and merely re-validated periodically in case something moves it behind our back.
+   */
+  const refreshWindowRect = async () => {
+    const [position, size] = await Promise.all([win.outerPosition(), win.outerSize()]);
+    const rect = { x: position.x, y: position.y, width: size.width, height: size.height };
+    windowRectRef.current = rect;
+    return rect;
   };
 
   const saveCurrentPosition = async () => {
@@ -109,6 +171,98 @@ export default function MiniPlayer() {
       void saveCurrentPosition();
     }, 500);
   };
+
+  // Only scroll a title that actually overflows the column — a permanent marquee is noise.
+  useEffect(() => {
+    const viewport = titleViewportRef.current;
+    const text = titleTextRef.current;
+    if (!viewport || !text) return;
+
+    const update = () => setIsTitleOverflowing(text.scrollWidth - viewport.clientWidth > 1);
+    update();
+
+    const observer = new ResizeObserver(update);
+    observer.observe(viewport);
+    observer.observe(text);
+    return () => observer.disconnect();
+  }, [playerState.title]);
+
+  /*
+   * Keep the window exactly as wide as the capsule actually renders.
+   *
+   * A ResizeObserver on the real element beats computing width from constants: it can't
+   * drift when the markup changes, and it accounts for fonts loading late. Only width is
+   * tracked — the capsule's height changes on hover, and the window is already tall
+   * enough for the expanded state, so height must stay put or hovering would jitter.
+   */
+  useEffect(() => {
+    const capsule = capsuleRef.current;
+    if (!capsule) return;
+
+    let cancelled = false;
+    let frame = 0;
+
+    const applyWidth = async (cssWidth: number) => {
+      const targetWidth = Math.min(
+        EXPANDED_WIDTH + WINDOW_PADDING * 2,
+        Math.ceil(cssWidth) + WINDOW_PADDING * 2,
+      );
+      if (targetWidth <= 0 || targetWidth === appliedWidthRef.current) return;
+      appliedWidthRef.current = targetWidth;
+
+      try {
+        const previousPosition = await win.outerPosition();
+        const previousSize = await win.outerSize();
+        const centerX = previousPosition.x + previousSize.width / 2;
+        const scale = window.devicePixelRatio || 1;
+
+        await win.setSize(new LogicalSize(targetWidth, previousSize.height / scale));
+        if (cancelled) return;
+
+        // Re-read: the applied physical size depends on the monitor's scale factor.
+        const nextSize = await win.outerSize();
+        const nextPosition = new PhysicalPosition(
+          Math.round(centerX - nextSize.width / 2),
+          previousPosition.y,
+        );
+        await win.setPosition(nextPosition);
+        if (cancelled) return;
+
+        // We just moved and resized ourselves; the hover poll reads this cache.
+        windowRectRef.current = {
+          x: nextPosition.x,
+          y: nextPosition.y,
+          width: nextSize.width,
+          height: nextSize.height,
+        };
+
+        const savedPosition = { x: nextPosition.x, y: nextPosition.y };
+        saveMiniPlayerPosition(savedPosition);
+        void emit("mini-player:position-changed", savedPosition);
+      } catch (_) {
+        // A failed resize just keeps the previous width; never worth interrupting playback.
+      }
+    };
+
+    const sync = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const width = capsule.getBoundingClientRect().width;
+        capsuleWidthRef.current = width;
+        void applyWidth(width);
+      });
+    };
+
+    const observer = new ResizeObserver(sync);
+    observer.observe(capsule);
+    sync();
+
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, []);
 
   useEffect(() => {
     const setup = async () => {
@@ -203,6 +357,9 @@ export default function MiniPlayer() {
     const setup = async () => {
       const unlisten = await win.onMoved(({ payload }) => {
         const nextPosition = { x: payload.x, y: payload.y };
+        if (windowRectRef.current) {
+          windowRectRef.current = { ...windowRectRef.current, ...nextPosition };
+        }
         saveMiniPlayerPosition(nextPosition);
         void emit("mini-player:position-changed", nextPosition);
       });
@@ -221,6 +378,7 @@ export default function MiniPlayer() {
     let lastOverAt = 0;
     let hasEnabledPassThrough = false;
     let running = true;
+    let ticks = 0;
     let timer: ReturnType<typeof setTimeout>;
 
     const poll = async () => {
@@ -232,18 +390,37 @@ export default function MiniPlayer() {
           hasEnabledPassThrough = true;
         }
 
-        const cursor = await cursorPosition();
-        const position = await win.outerPosition();
-        const size = await win.outerSize();
-        const totalHeight = expandedRef.current
-          ? BOTTOM_PILL_HEIGHT + GAP + TOP_PILL_HEIGHT
-          : BOTTOM_PILL_HEIGHT;
+        const staleRect = ticks % WINDOW_RECT_REFRESH_TICKS === 0;
+        ticks += 1;
 
-        const pillLeft = position.x + (size.width - PILL_WIDTH) / 2 - HOVER_MARGIN_X;
-        const pillBottom = position.y + size.height;
-        const pillTop = pillBottom - totalHeight - HOVER_MARGIN_Y;
-        const pillRight = pillLeft + PILL_WIDTH + (HOVER_MARGIN_X * 2);
-        const hoverBottom = pillBottom + HOVER_MARGIN_Y;
+        const [cursor, rect] = await Promise.all([
+          cursorPosition(),
+          staleRect || !windowRectRef.current
+            ? refreshWindowRect()
+            : Promise.resolve(windowRectRef.current),
+        ]);
+        const scale = window.devicePixelRatio || 1;
+
+        /*
+         * Hit-test the capsule, not the window. The window carries slack on every side
+         * (WINDOW_PADDING), so treating the whole window as hoverable would expand the pill
+         * from transparent dead space.
+         * Measured width is in CSS px; window geometry is physical, hence the scale.
+         */
+        const capsuleHeight =
+          (expandedRef.current ? EXPANDED_CAPSULE_HEIGHT : COLLAPSED_HEIGHT) * scale;
+        const capsuleWidth = capsuleWidthRef.current * scale;
+        const capsuleCenterX = rect.x + rect.width / 2;
+        const capsuleBottom = rect.y + rect.height - WINDOW_PADDING * scale;
+
+        // Once open, the region the cursor must leave is deliberately bigger than the one
+        // it had to enter. See HOVER_RELEASE_SLACK.
+        const slack = (expandedRef.current ? HOVER_RELEASE_SLACK : 0) * scale;
+        const pillLeft = capsuleCenterX - capsuleWidth / 2 - HOVER_MARGIN_X - slack;
+        const pillRight = capsuleCenterX + capsuleWidth / 2 + HOVER_MARGIN_X + slack;
+        const pillBottom = capsuleBottom;
+        const pillTop = capsuleBottom - capsuleHeight - HOVER_MARGIN_Y - slack;
+        const hoverBottom = pillBottom + HOVER_MARGIN_Y + slack;
         const over = cursor.x >= pillLeft
           && cursor.x <= pillRight
           && cursor.y >= pillTop
@@ -650,43 +827,40 @@ export default function MiniPlayer() {
       ? (displayedTime / timeState.duration) * 100
       : 0;
 
+  // Playback progress is drawn as a ring around the artwork, so the collapsed pill
+  // communicates position without spending any of its 100px budget on a progress bar.
+  const trackProgress = timeState.duration > 0
+    ? Math.min(100, Math.max(0, (displayedTime / timeState.duration) * 100))
+    : 0;
+
   return (
     <div
       ref={wrapperRef}
-      className={`${styles.wrapper} ${expanded ? styles.wrapperExpanded : ""}`}
+      className="flex h-full w-full items-end justify-center bg-transparent"
+      style={{ paddingBottom: WINDOW_PADDING }}
       onBlur={handleMacFocusOut}
     >
+      {/*
+        A single capsule that morphs between states instead of two floating pills.
+        `w-max` shrink-wraps it to its content; the window is then measured from this
+        element, so there is exactly zero dead space around the design.
+      */}
       <div
-        className={`${styles.expandedPill} ${expanded ? styles.expandedPillVisible : ""}`}
-        onMouseEnter={handleMacPointerEnter}
-        onMouseLeave={handleMacPointerLeave}
-      >
-        <input
-          type="range"
-          min={0}
-          max={sliderMax}
-          step={sliderStep}
-          value={sliderValue}
-          onInput={handleSliderInput}
-          onChange={handleSliderInput}
-          onKeyUp={handleSliderKeyUp}
-          onPointerDown={handleSliderPointerDown}
-          onPointerUp={handleSliderPointerEnd}
-          onPointerCancel={handleSliderPointerCancel}
-          className={styles.scrubberInput}
-          aria-label={hoverAction === "volume" ? "Volume" : "Song position"}
-          style={{
-            "--slider-progress": `${sliderProgress}%`,
-          } as CSSProperties}
-        />
-      </div>
-
-      <div
-        className={[
-          styles.miniContainer,
-          expanded ? styles.miniContainerExpanded : "",
-          isDragging ? styles.dragging : "",
-        ].filter(Boolean).join(" ")}
+        ref={capsuleRef}
+        className={cn(
+          "relative flex flex-col overflow-hidden",
+          "bg-neutral-900/80 backdrop-blur-xl",
+          "ring-1 ring-white/10 transition-[height,width,padding,background-color] duration-300",
+          "[transition-timing-function:cubic-bezier(0.32,0.72,0,1)]",
+          expanded ? "bg-neutral-900/95 ring-white/15" : "",
+          isDragging ? "cursor-grabbing" : "cursor-grab",
+        )}
+        style={{
+          height: expanded ? EXPANDED_CAPSULE_HEIGHT : COLLAPSED_HEIGHT,
+          width: expanded ? EXPANDED_WIDTH : COLLAPSED_WIDTH,
+          borderRadius: CAPSULE_RADIUS,
+          padding: expanded ? EXPANDED_PADDING : 0,
+        }}
         onMouseEnter={handleMacPointerEnter}
         onMouseLeave={handleMacPointerLeave}
         onMouseDown={(event) => void handleContainerMouseDown(event)}
@@ -695,51 +869,198 @@ export default function MiniPlayer() {
         }}
         onContextMenu={(event) => event.preventDefault()}
       >
-        <button
-          className={styles.albumArt}
-          onMouseDown={(event) => void handleAlbumArtMouseDown(event)}
-          onClick={handleAlbumArtClick}
-          aria-label="Restore"
-        >
-          <TrackArtwork
-            artworkUrl={artworkUrl ?? undefined}
-            className={styles.albumArtwork}
-            iconSize={18}
-            loading="eager"
+        {/*
+          Album-reactive backdrop: the artwork itself, blown up and blurred past recognition,
+          tints the glass with the record's own palette. It costs no extra network request
+          (the same URL the artwork element loads) and no colour extraction, yet the capsule
+          takes on a different mood per track — which is the thing a flat neutral pill can
+          never do. Deliberately weak so white text keeps its contrast.
+        */}
+        {artworkUrl ? (
+          <span
+            key={artworkUrl}
+            className="pointer-events-none absolute inset-0 -z-10 scale-150 bg-cover bg-center opacity-30 blur-2xl"
+            style={{ backgroundImage: `url("${artworkUrl}")` }}
+            aria-hidden="true"
           />
-        </button>
+        ) : null}
 
-        <div className={styles.controls}>
-          <button className={styles.btn} onClick={() => emit("mini-player:skip-previous")} aria-label="Previous">
-            <IconPlayerSkipBack size={17} fill="currentColor" aria-hidden="true" />
-          </button>
-          <button className={styles.btn} onClick={() => emit("mini-player:toggle-play-pause")} aria-label={isLoading ? "Loading song" : isPlaying ? "Pause" : "Play"}>
-            <span className={styles.iconStage} aria-hidden="true">
-              <span className={`${styles.playbackIcon} ${!isLoading && !isPlaying ? styles.activeIcon : ""}`}>
-                <IconPlayerPlay size={17} fill="currentColor" />
-              </span>
-              <span className={`${styles.playbackIcon} ${!isLoading && isPlaying ? styles.activeIcon : ""}`}>
-                <IconPlayerPause size={17} fill="currentColor" />
-              </span>
-              <span className={`${styles.playbackIcon} ${styles.loadingIcon} ${isLoading ? styles.activeIcon : ""}`}>
-                <IconLoader2 size={17} />
-              </span>
+        {/* Specular top edge — the highlight a real glass material catches. */}
+        <span
+          className="pointer-events-none absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-white/25 to-transparent"
+          aria-hidden="true"
+        />
+
+        {/* ── Identity row: always visible ─────────────────────────────── */}
+        <div
+          className={cn(
+            "flex shrink-0 items-center gap-2 pl-1.5 transition-[padding] duration-300",
+            expanded ? "pr-3" : "pr-2",
+          )}
+          style={{ height: COLLAPSED_HEIGHT }}
+        >
+          <button
+            className="group/art relative grid size-8 shrink-0 place-items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+            onMouseDown={(event) => void handleAlbumArtMouseDown(event)}
+            onClick={handleAlbumArtClick}
+            aria-label="Restore main window"
+            title="Restore"
+          >
+            {/*
+              Progress drawn as a ring around the art: position without spending width.
+              The conic gradient fills the whole disc, so a radial mask cuts the centre out
+              to leave a hairline ring — thickness is one constant rather than the gap
+              between the button and the artwork.
+            */}
+            <span
+              className="absolute inset-0 rounded-full"
+              style={{
+                background: `conic-gradient(rgba(255,255,255,0.92) ${trackProgress}%, rgba(255,255,255,0.16) 0)`,
+                maskImage: `radial-gradient(closest-side, transparent calc(100% - ${PROGRESS_RING_WIDTH}px), #000 calc(100% - ${PROGRESS_RING_WIDTH}px))`,
+                WebkitMaskImage: `radial-gradient(closest-side, transparent calc(100% - ${PROGRESS_RING_WIDTH}px), #000 calc(100% - ${PROGRESS_RING_WIDTH}px))`,
+              }}
+              aria-hidden="true"
+            />
+            <TrackArtwork
+              artworkUrl={artworkUrl ?? undefined}
+              className={cn(
+                "relative size-[26px] shrink-0 rounded-full bg-neutral-800 transition-transform duration-300",
+                isPlaying && "motion-safe:animate-[spin_12s_linear_infinite]",
+                "group-hover/art:scale-90",
+              )}
+              iconSize={15}
+              loading="eager"
+            />
+            <span
+              className="pointer-events-none absolute inset-0 grid place-items-center rounded-full bg-black/60 opacity-0 transition-opacity duration-200 group-hover/art:opacity-100"
+              aria-hidden="true"
+            >
+              <ArrowUpIcon size={13} />
             </span>
           </button>
-          <button className={styles.btn} onClick={() => emit("mini-player:skip-next")} aria-label="Next">
-            <IconPlayerSkipForward size={17} fill="currentColor" aria-hidden="true" />
+
+          {/* Takes whatever the chrome leaves. `min-w-0` is what lets it actually shrink —
+              a flex item's default `min-width:auto` would let the title push the row wider
+              than the capsule and get clipped instead of scrolling. */}
+          <div
+            className="min-w-0 flex-1 overflow-hidden"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <div ref={titleViewportRef} className="relative overflow-hidden">
+              <span
+                ref={titleTextRef}
+                aria-hidden={isTitleOverflowing}
+                className={cn(
+                  "block whitespace-nowrap text-[12px] font-semibold leading-tight tracking-[-0.01em] text-white",
+                  isTitleOverflowing && "invisible absolute",
+                )}
+              >
+                {playerState.title ?? "Nothing playing"}
+              </span>
+              {isTitleOverflowing && (
+                <Marquee
+                  speed={18}
+                  gap="2rem"
+                  className="text-[12px] font-semibold leading-tight tracking-[-0.01em] text-white"
+                >
+                  <span className="whitespace-nowrap" title={playerState.title ?? undefined}>
+                    {playerState.title}
+                  </span>
+                </Marquee>
+              )}
+            </div>
+            {playerState.artist ? (
+              <p className="truncate text-[10px] leading-tight text-white/55">
+                {playerState.artist}
+              </p>
+            ) : null}
+          </div>
+
+          <button
+            className={cn(
+              "flex size-6 shrink-0 items-center justify-center rounded-full text-white/50 transition-all duration-200",
+              "hover:bg-white/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60",
+              expanded ? "ml-1 scale-100 opacity-100" : "pointer-events-none w-0 scale-75 opacity-0",
+            )}
+            type="button"
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={() => void handleClose()}
+            aria-label="Close mini player"
+            title="Close"
+          >
+            <CloseIcon size={13} aria-hidden="true" />
           </button>
         </div>
 
-        <button
-          className={`${styles.closeButton} ${expanded ? styles.closeButtonVisible : ""}`}
-          type="button"
-          onMouseDown={(event) => event.stopPropagation()}
-          onClick={() => void handleClose()}
-          aria-label="Close mini player"
+        {/* ── Control row ───────────────────────────────────────────────
+            Collapsed it is clamped to zero width so it cannot hold the capsule open past
+            the collapsed cap; expanding releases it and the capsule grows to fit. */}
+        <div
+          className={cn(
+            "flex items-center gap-2 transition-[opacity,width,padding] duration-300",
+            expanded
+              ? "px-3 opacity-100 delay-75"
+              : "pointer-events-none w-0 overflow-hidden px-0 opacity-0",
+          )}
+          style={{ height: EXPANDED_HEIGHT - COLLAPSED_HEIGHT }}
+          aria-hidden={!expanded}
         >
-          <IconX size={14} aria-hidden="true" />
-        </button>
+          <div className="flex shrink-0 items-center gap-0.5">
+            <button
+              className={MINI_BUTTON}
+              onClick={() => emit("mini-player:skip-previous")}
+              aria-label="Previous"
+              tabIndex={expanded ? 0 : -1}
+            >
+              <SkipPreviousIcon size={15} aria-hidden="true" />
+            </button>
+            <button
+              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white text-neutral-900 transition-transform duration-150 hover:scale-105 active:scale-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+              onClick={() => emit("mini-player:toggle-play-pause")}
+              aria-label={isLoading ? "Loading song" : isPlaying ? "Pause" : "Play"}
+              tabIndex={expanded ? 0 : -1}
+            >
+              <span className="relative grid size-4 place-items-center" aria-hidden="true">
+                <span className={cn("absolute transition-opacity duration-150", isLoading || isPlaying ? "opacity-0" : "opacity-100")}>
+                  <PlayActiveIcon size={15} />
+                </span>
+                <span className={cn("absolute transition-opacity duration-150", !isLoading && isPlaying ? "opacity-100" : "opacity-0")}>
+                  <PauseActiveIcon size={15} />
+                </span>
+                <span className={cn("absolute transition-opacity duration-150", isLoading ? "opacity-100" : "opacity-0")}>
+                  <Loader variant="spinner" size={13} />
+                </span>
+              </span>
+            </button>
+            <button
+              className={MINI_BUTTON}
+              onClick={() => emit("mini-player:skip-next")}
+              aria-label="Next"
+              tabIndex={expanded ? 0 : -1}
+            >
+              <SkipNextIcon size={15} aria-hidden="true" />
+            </button>
+          </div>
+
+          <input
+            type="range"
+            min={0}
+            max={sliderMax}
+            step={sliderStep}
+            value={sliderValue}
+            onInput={handleSliderInput}
+            onChange={handleSliderInput}
+            onKeyUp={handleSliderKeyUp}
+            onPointerDown={handleSliderPointerDown}
+            onPointerUp={handleSliderPointerEnd}
+            onPointerCancel={handleSliderPointerCancel}
+            tabIndex={expanded ? 0 : -1}
+            className="h-1 min-w-24 flex-1 cursor-pointer appearance-none rounded-full bg-transparent [&::-webkit-slider-runnable-track]:h-1 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-[linear-gradient(to_right,#fff_var(--slider-progress),rgba(255,255,255,0.18)_var(--slider-progress))] [&::-webkit-slider-thumb]:size-2.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:-mt-[3px] [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:transition-transform hover:[&::-webkit-slider-thumb]:scale-125"
+            aria-label={hoverAction === "volume" ? "Volume" : "Song position"}
+            style={{ "--slider-progress": `${sliderProgress}%` } as CSSProperties}
+          />
+        </div>
       </div>
     </div>
   );

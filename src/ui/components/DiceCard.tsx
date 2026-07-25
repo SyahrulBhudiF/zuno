@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { IconArrowsShuffle, IconMusic } from "@tabler/icons-react";
+import { cn } from "@/lib/utils";
+import { ShuffleActiveIcon } from "@/ui/icons";
 import type { Track } from "../../datasource/types";
-import styles from "./DiceCard.module.css";
+import { PickCard } from "./PickCard";
 
 interface DiceCardProps {
   tracks: Track[];
@@ -22,31 +23,25 @@ export function DiceCard({ tracks, isSpinning = false, onClick }: DiceCardProps)
 
   const preview = tracks[previewIndex % Math.max(1, tracks.length)];
 
+  /*
+   * Shares PickCard's shell so the surprise tile is a peer of the picks rather than a
+   * differently-shaped outlier in the same row. Only the badge differs: a shuffle mark that
+   * is always visible (this card's whole purpose) and spins while it is choosing, where a
+   * track card reveals a play button on hover.
+   */
   return (
-    <button
-      className={styles.card}
-      onClick={onClick}
-      type="button"
+    <PickCard
+      artworkUrl={preview?.artworkUrl}
+      title="Surprise me"
+      subtitle="Pick something for me"
       disabled={tracks.length === 0 || isSpinning}
-      aria-label="Surprise me with a recommendation"
-    >
-      <div className={styles.cover}>
-        {preview?.artworkUrl ? (
-          <img
-            key={`${preview.id}-${previewIndex}`}
-            className={`${styles.artwork} ${isSpinning ? styles.spinning : ""}`}
-            src={preview.artworkUrl}
-            alt=""
-          />
-        ) : (
-          <IconMusic size={48} className={styles.fallbackIcon} />
-        )}
-        <span className={styles.shuffleBadge}>
-          <IconArrowsShuffle size={20} />
-        </span>
-      </div>
-      <span className={styles.title}>Surprise me</span>
-      <span className={styles.subtitle}>Pick something for me</span>
-    </button>
+      onSelect={onClick}
+      accessory={
+        <ShuffleActiveIcon
+          size={22}
+          className={cn(isSpinning && "motion-safe:animate-spin")}
+        />
+      }
+    />
   );
 }

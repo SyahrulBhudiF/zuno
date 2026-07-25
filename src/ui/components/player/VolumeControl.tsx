@@ -1,8 +1,22 @@
-import { IconVolume, IconVolumeOff } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
+import { VolumeLoudIcon, VolumeMutedIcon, VolumeSmallIcon } from "@/ui/icons";
 import { logInternalDebug } from "../../../internal/logging";
 import { playerController, usePlayerState } from "../../../player/playerStore";
-import styles from "./VolumeControl.module.css";
+
+/* Same rationale as SeekBar: native input keeps the wheel/drag/animation behaviour. */
+const VOLUME_SLIDER = [
+  "h-1 w-24 cursor-pointer appearance-none rounded-full bg-transparent",
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+  "[&::-webkit-slider-runnable-track]:h-1 [&::-webkit-slider-runnable-track]:rounded-full",
+  "[&::-webkit-slider-runnable-track]:bg-[linear-gradient(to_right,var(--color-foreground)_var(--slider-progress),var(--color-muted)_var(--slider-progress))]",
+  "[&::-moz-range-track]:h-1 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-muted",
+  "[&::-moz-range-progress]:h-1 [&::-moz-range-progress]:rounded-full [&::-moz-range-progress]:bg-foreground",
+  "[&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full",
+  "[&::-webkit-slider-thumb]:-mt-1 [&::-webkit-slider-thumb]:bg-foreground [&::-webkit-slider-thumb]:opacity-0",
+  "[&::-webkit-slider-thumb]:transition-opacity",
+  "group-hover/volume:[&::-webkit-slider-thumb]:opacity-100 focus-visible:[&::-webkit-slider-thumb]:opacity-100",
+  "[&::-moz-range-thumb]:size-3 [&::-moz-range-thumb]: [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-foreground",
+].join(" ");
 
 export function VolumeControl() {
   const playerState = usePlayerState();
@@ -200,14 +214,20 @@ export function VolumeControl() {
   };
 
   return (
-    <div className={styles.volumeControl}>
+    <div className="group/volume flex items-center gap-1.5">
       <button
         type="button"
-        className={styles.muteButton}
+        className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onClick={handleToggleMute}
         aria-label={isMuted ? "Unmute" : "Mute"}
       >
-        {isMuted ? <IconVolumeOff size={18} /> : <IconVolume size={18} />}
+        {isMuted ? (
+          <VolumeMutedIcon size={18} />
+        ) : displayedVolume < 0.5 ? (
+          <VolumeSmallIcon size={18} />
+        ) : (
+          <VolumeLoudIcon size={18} />
+        )}
       </button>
       <input
         ref={sliderRef}
@@ -223,7 +243,7 @@ export function VolumeControl() {
         onPointerUp={handleVolumePointerEnd}
         onPointerCancel={handleVolumePointerEnd}
         onWheel={handleVolumeWheel}
-        className={styles.volumeSlider}
+        className={VOLUME_SLIDER}
         style={{
           "--slider-progress": `${displayedVolume * 100}%`,
         } as React.CSSProperties}

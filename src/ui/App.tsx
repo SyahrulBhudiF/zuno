@@ -1,14 +1,28 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { MotionConfig } from "motion/react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Album, Artist, Playlist, SearchResults, Track } from "../datasource/types";
 import { useDisableContextMenu } from "./hooks/useDisableContextMenu";
 import { HomePage } from "./pages/HomePage";
-import { AlbumView } from "./pages/AlbumView";
-import { PlaylistView } from "./pages/PlaylistView";
-import { SearchResultsPage } from "./pages/SearchResultsPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { LyricsView } from "./pages/LyricsView";
-import { ArtistView } from "./pages/ArtistView";
+
+/*
+ * Every page used to be statically imported, so the whole app — settings, lyrics, all four
+ * browse views — was parsed before the first frame could paint. Only Home is reachable at
+ * startup, so the rest load on first navigation.
+ *
+ * The chunks come off local disk in a Tauri app, not the network, so the win here is startup
+ * parse/compile time rather than transfer size. Each page is a named export, hence the
+ * default-shim; `lazy` requires a module whose default is the component.
+ */
+const AlbumView = lazy(() => import("./pages/AlbumView").then((m) => ({ default: m.AlbumView })));
+const ArtistView = lazy(() => import("./pages/ArtistView").then((m) => ({ default: m.ArtistView })));
+const PlaylistView = lazy(() =>
+  import("./pages/PlaylistView").then((m) => ({ default: m.PlaylistView })));
+const SearchResultsPage = lazy(() =>
+  import("./pages/SearchResultsPage").then((m) => ({ default: m.SearchResultsPage })));
+const SettingsPage = lazy(() =>
+  import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const LyricsView = lazy(() => import("./pages/LyricsView").then((m) => ({ default: m.LyricsView })));
 import { SearchOverlay } from "./components/SearchOverlay";
 import { TrackContextMenuProvider } from "./components/TrackContextMenu";
 import { PlaylistContextMenuProvider } from "./components/PlaylistContextMenu";
@@ -27,7 +41,6 @@ import {
   usePlayerSession,
   usePlayerState,
 } from "../player/playerStore";
-import styles from "./App.module.css";
 import { clearAppSession, loadAppSession, saveAppSession } from "../player/appSession";
 import { useMediaSession } from "../player/useMediaSession";
 import { LastFmService } from "../player/LastFm";
@@ -54,10 +67,17 @@ import {
   type OnboardingStep,
 } from "./components/Onboarding";
 import { isLinux, isMacOS } from "./platform";
+import { usePaperPcMode } from "./settings/paperPcMode";
 
 import { emit, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { availableMonitors, currentMonitor, primaryMonitor } from "@tauri-apps/api/window";
+import {
+  availableMonitors,
+  currentMonitor,
+  getCurrentWindow,
+  primaryMonitor,
+} from "@tauri-apps/api/window";
+import { logInternalWarn } from "../internal/logging";
 import { PhysicalPosition } from "@tauri-apps/api/dpi";
 import {
   getSavedMiniPlayerPosition,
@@ -73,6 +93,7 @@ import {
 import { useLastFmScrobblingEnabled } from "./settings/lastfm";
 import { persistMainWindowGeometry } from "./settings/mainWindowGeometry";
 import { hydratePlaybackSettings } from "../player/playbackSettings";
+import { StarField } from "./components/StarField";
 const restoredSession = loadAppSession();
 const LOADING_SCREEN_FADE_MS = 80;
 const LOADING_SCREEN_MAX_MS = 4000;
@@ -83,7 +104,10 @@ const LOADING_SCREEN_MIN_MS = 1000;
 const MOUSE_BACK_BUTTON = 3;
 const MOUSE_FORWARD_BUTTON = 4;
 const MINI_PLAYER_BOTTOM_MARGIN = 24;
-const MAIN_WINDOW_DRAG_BACKGROUND_SUPPRESS_MS = 10000;
+// Safety net only — the suppression is normally cleared on pointerup or refocus.
+// A long fixed timeout used to swallow the mini player when the window was moved
+// and then minimised shortly after.
+const MAIN_WINDOW_DRAG_BACKGROUND_SUPPRESS_MS = 1500;
 const SLEEP_RECOVERY_TIMER_INTERVAL_MS = 15000;
 const SLEEP_RECOVERY_TIMER_DRIFT_MS = 60000;
 const TAB_SHORTCUT_ACTIONS: KeyboardShortcutAction[] = [
@@ -215,6 +239,42 @@ export default function App() {
   const miniPlayerEnabled = useMiniPlayerEnabled();
   const keyboardShortcuts = useKeyboardShortcuts();
   const lastFmScrobblingEnabled = useLastFmScrobblingEnabled();
+  // Paper-PC mode kills CSS animation via !important; this makes beUI's JS-driven
+  // motion honour the same setting, since motion only reads the OS media query.
+  const paperPcMode = usePaperPcMode();
+
+  // The window is transparent so the app root can round its own corners. When the window
+  // is maximised or fullscreen those corners would expose the desktop, so drop the radius.
+  useEffect(() => {
+    const appWindow = getCurrentWindow();
+    let disposed = false;
+
+    const syncWindowRadius = async () => {
+      try {
+        const [maximized, fullscreen] = await Promise.all([
+          appWindow.isMaximized(),
+          appWindow.isFullscreen(),
+        ]);
+        if (disposed) return;
+        document.documentElement.toggleAttribute(
+          "data-window-maximized",
+          maximized || fullscreen,
+        );
+      } catch (error) {
+        logInternalWarn("App.syncWindowRadius failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+
+    void syncWindowRadius();
+    const unlistenResized = appWindow.onResized(() => void syncWindowRadius());
+
+    return () => {
+      disposed = true;
+      void unlistenResized.then((unlisten) => unlisten());
+    };
+  }, []);
 
   const [tabs, setTabs] = useState<Tab[]>(
     () => restoredSession?.tabs.map(stripNavigationHistory) ?? [{ id: "1", view: "home" }],
@@ -1354,16 +1414,20 @@ useEffect(() => {
       if (miniWin) await miniWin.hide();
     };
 
-    const showMiniPlayerIfAllowed = async () => {
+    /**
+     * @param force bypasses the drag/restore suppression windows. Used for an explicit
+     *   minimise, where the user's intent to background the app is unambiguous.
+     */
+    const showMiniPlayerIfAllowed = async (_event?: unknown, force = false) => {
       const miniWin = await WebviewWindow.getByLabel("mini-player");
       if (!miniWin) return;
 
-      if (Date.now() < mainWindowDragSuppressUntilRef.current) {
+      if (!force && Date.now() < mainWindowDragSuppressUntilRef.current) {
         await miniWin.hide();
         return;
       }
 
-      if (Date.now() < miniPlayerRestoreSuppressUntilRef.current) {
+      if (!force && Date.now() < miniPlayerRestoreSuppressUntilRef.current) {
         await miniWin.hide();
         return;
       }
@@ -1405,14 +1469,30 @@ useEffect(() => {
       }
     };
 
-    const unlistenBackgrounded = await listen("main-window-backgrounded", showMiniPlayerIfAllowed);
+    const unlistenBackgrounded = await listen("main-window-backgrounded", () =>
+      showMiniPlayerIfAllowed(),
+    );
+    // Minimise always wins over the drag suppression below.
+    const unlistenMinimized = await listen("main-window-minimized", () =>
+      showMiniPlayerIfAllowed(undefined, true),
+    );
 
     const handleMainWindowDragStarted = () => {
       mainWindowDragSuppressUntilRef.current = Date.now() + MAIN_WINDOW_DRAG_BACKGROUND_SUPPRESS_MS;
     };
+    // Dragging ends on pointer release; clearing here means the suppression lasts for the
+    // gesture rather than for a fixed timeout that outlives it.
+    const handleMainWindowDragEnded = () => {
+      mainWindowDragSuppressUntilRef.current = 0;
+    };
 
-    const unlistenFocus = await listen("window-focused", hideMiniPlayer);
+    const unlistenFocus = await listen("window-focused", () => {
+      mainWindowDragSuppressUntilRef.current = 0;
+      void hideMiniPlayer();
+    });
     window.addEventListener("main-window-drag-started", handleMainWindowDragStarted);
+    window.addEventListener("pointerup", handleMainWindowDragEnded);
+    window.addEventListener("pointercancel", handleMainWindowDragEnded);
     const unlistenRestoreMain = await listen("mini-player:restore-main", async () => {
       miniPlayerRestoreSuppressUntilRef.current = Date.now() + 800;
       await hideMiniPlayer();
@@ -1431,7 +1511,10 @@ useEffect(() => {
 
     return () => {
       window.removeEventListener("main-window-drag-started", handleMainWindowDragStarted);
+      window.removeEventListener("pointerup", handleMainWindowDragEnded);
+      window.removeEventListener("pointercancel", handleMainWindowDragEnded);
       unlistenBackgrounded();
+      unlistenMinimized();
       unlistenFocus();
       unlistenRestoreMain();
       unlistenPositionChanged();
@@ -1542,10 +1625,22 @@ useEffect(() => {
   });
 }, [playerState.muted, playerState.volume]);
   return (
+    <MotionConfig reducedMotion={paperPcMode ? "always" : "user"}>
     <ArtistNavigationProvider onNavigate={handleNavigateArtist}>
     <TrackContextMenuProvider libraryController={libraryController}>
     <PlaylistContextMenuProvider libraryController={libraryController}>
-    <div className={styles.root}>
+    {/*
+      `ring-inset` is load-bearing: the window is transparent, so an outward ring would be
+      drawn into nothing and clipped. The specular line along the top edge is the same cue
+      the picks cards and the mini player use, which is what makes the whole app read as one
+      material rather than three separately-styled surfaces.
+    */}
+    <div className="relative flex h-screen flex-col overflow-hidden rounded-[var(--window-radius)] ring-1 ring-inset ring-[var(--window-edge)]">
+    {!paperPcMode && <StarField />}
+    <span
+      className="pointer-events-none absolute inset-x-0 top-0 z-50 h-px bg-linear-to-r from-transparent via-[var(--window-edge-highlight)] to-transparent"
+      aria-hidden="true"
+    />
       <TitleBar
         tabs={tabs}
         activeTabId={activeTabId}
@@ -1561,17 +1656,17 @@ useEffect(() => {
         onCloseTab={handleCloseTab}
         onSwitchTab={handleSwitchTab}
         onReorderTab={handleReorderTab}
+        onOpenSettings={handleOpenSettings}
         onboardingFirstTabId={onboardingStep ? onboardingFirstTabId : undefined}
       />
       
-      <div className={styles.content}>
+      <div className="flex min-h-0 flex-1 flex-col">
        
         <Layout
           sidebarWidth={sidebarWidth}
           onSidebarWidthChange={setSidebarWidth}
           onNavigateAlbum={handleNavigateAlbum}
           onNavigatePlaylist={handleNavigatePlaylist}
-          onOpenSettings={handleOpenSettings}
           showSearchBar={activeTab?.view !== "settings" && !playerUIState.isLyricsOpen}
           onOpenSearch={() => setIsSearchOpen(true)}
           canGoBack={canNavigateBack}
@@ -1597,10 +1692,13 @@ useEffect(() => {
         onClose={() => setIsExpandedPlayerBar(false)} 
       /> */}
 
+          {/* Chunks resolve off local disk in single-digit ms, so an empty fallback reads as
+              an instant transition rather than a flash of spinner. */}
+          <Suspense fallback={<div className="min-h-0 flex-1" />}>
           {playerUIState.isLyricsOpen && activeTab?.view !== "settings" ? (
             <LyricsView onClose={() => playerUIStore.setLyricsOpen(false)} />
           ) : (
-          <div key={activeViewKey} className={styles.viewTransition}>
+          <div key={activeViewKey} className="min-h-0 flex-1">
             {activeTab?.view === "home" && (
               <HomePage
                 tabId={activeTabId}
@@ -1662,6 +1760,7 @@ useEffect(() => {
             )}
           </div>
           )}
+          </Suspense>
         </Layout>
       </div>
       
@@ -1713,5 +1812,6 @@ useEffect(() => {
     </PlaylistContextMenuProvider>
     </TrackContextMenuProvider>
     </ArtistNavigationProvider>
+    </MotionConfig>
   );
 }

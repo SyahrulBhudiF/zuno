@@ -1,21 +1,30 @@
-import { type CSSProperties, type KeyboardEvent, useEffect, useState, useSyncExternalStore } from "react";
+import { type KeyboardEvent, useEffect, useState, useSyncExternalStore } from "react";
 import {
-  IconBrandLastfm,
-  IconBug,
-  IconChevronDown,
-  IconCoffee,
-  IconFileDescription,
-  IconFolder,
-  IconFolderPlus,
-  IconFolderOpen,
-  IconLayoutSidebarRight,
-  IconLogin,
-  IconLogout,
-  IconRefresh,
-  IconStar,
-  IconTrash,
-  IconUser,
-} from "@tabler/icons-react";
+  BugIcon,
+  ChevronDownIcon,
+  CoffeeIcon,
+  FolderAddIcon,
+  FolderIcon,
+  FolderOpenIcon,
+  KeyIcon,
+  LastFmIcon,
+  LoginIcon,
+  LogFileIcon,
+  LogoutIcon,
+  PaletteIcon,
+  QueuePanelIcon,
+  RefreshIcon,
+  StarIcon,
+  TrashIcon,
+  UserIcon,
+} from "@/ui/icons";
+import { motion } from "motion/react";
+import { cn } from "@/lib/utils";
+import {
+  setThemePreference,
+  useThemePreference,
+  type ThemePreference,
+} from "../settings/theme";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -87,19 +96,64 @@ import {
   useLastFmScrobblingEnabled,
 } from "../settings/lastfm";
 import { isLinux } from "../platform";
-import styles from "./SettingsPage.module.css";
+import { GITHUB_NEW_ISSUE_URL, GITHUB_REPOSITORY_URL } from "../links";
 
-const GITHUB_REPOSITORY_URL = "https://github.com/2latemc/JustAnotherMusicClient";
-const GITHUB_NEW_ISSUE_URL = `${GITHUB_REPOSITORY_URL}/issues/new/choose`;
 const KOFI_URL = "https://ko-fi.com/totally2late";
 
-type SettingsTab = "about" | "system" | "shortcuts" | "window";
+/*
+ * Label + description pair used by every settings row.
+ *
+ * `flex flex-col` is the load-bearing part: both children are inline elements, so without a
+ * block/flex wrapper the description runs straight on from the label ("Scrobble playsSend
+ * now playing updates...") — the CSS Modules used to stack them and the Tailwind migration
+ * dropped it.
+ */
+const SETTING_LABEL =
+  "flex flex-col gap-0.5 text-sm text-muted-foreground [&>strong]:text-sm [&>strong]:font-medium [&>strong]:text-foreground";
 
-const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
-  { id: "about", label: "About" },
-  { id: "system", label: "System" },
-  { id: "window", label: "Style" },
-  { id: "shortcuts", label: "Shortcuts" },
+/** Section card. One shape for every group so the page reads as a single system. */
+const SETTINGS_CARD = "flex flex-col gap-5 rounded-2xl bg-card/50 p-6";
+
+/**
+ * Text field. Preflight strips the browser's default input chrome, and these two fields were
+ * left bare by the CSS Modules migration — they rendered as invisible text on the card.
+ */
+const SETTINGS_FIELD =
+  "min-w-0 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-inset focus:ring-ring/60";
+
+/** Quiet outbound links at the foot of the page. */
+const SETTINGS_FOOTER_LINK =
+  "flex items-center gap-2 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-md";
+
+type SettingsTab = "about" | "appearance" | "system" | "shortcuts" | "window";
+
+const SETTINGS_TABS: Array<{
+  id: SettingsTab;
+  label: string;
+  description: string;
+  icon: typeof UserIcon;
+}> = [
+  { id: "about", label: "Account", description: "Sign-in, Last.fm, updates", icon: UserIcon },
+  { id: "appearance", label: "Appearance", description: "Theme and motion", icon: PaletteIcon },
+  { id: "system", label: "Library", description: "Cache and local files", icon: FolderIcon },
+  { id: "window", label: "Window", description: "Chrome and mini player", icon: QueuePanelIcon },
+  { id: "shortcuts", label: "Shortcuts", description: "Keyboard bindings", icon: KeyIcon },
+];
+
+const THEME_OPTIONS: Array<{
+  value: ThemePreference;
+  label: string;
+  hint: string;
+  swatch: string;
+}> = [
+  { value: "light", label: "Light", hint: "Always light", swatch: "bg-white" },
+  { value: "dark", label: "Dark", hint: "Always dark", swatch: "bg-neutral-900" },
+  {
+    value: "system",
+    label: "System",
+    hint: "Match the OS",
+    swatch: "bg-linear-to-br from-white to-neutral-900",
+  },
 ];
 
 interface SettingsPageProps {
@@ -146,6 +200,7 @@ export function SettingsPage({
   const [lastFmBusy, setLastFmBusy] = useState(false);
   const [lastFmError, setLastFmError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("about");
+  const themePreference = useThemePreference();
   const [listeningShortcut, setListeningShortcut] = useState<KeyboardShortcutAction | null>(null);
   const keyboardShortcuts = useKeyboardShortcuts();
   const paperPcMode = usePaperPcMode();
@@ -163,7 +218,6 @@ export function SettingsPage({
   );
   const account = libraryState.library?.account;
   const isSignedIn = libraryState.status === "ready" && account;
-  const activeTabIndex = Math.max(0, SETTINGS_TABS.findIndex((tab) => tab.id === activeTab));
   const authBusy = libraryState.status === "restoring"
     || libraryState.status === "authorizing"
     || libraryState.status === "loading";
@@ -485,152 +539,156 @@ export function SettingsPage({
   };
 
   return (
-    <main className={styles.page}>
-      <div className={styles.heading}>
-        <span className={styles.eyebrow}>Application</span>
+    <main className="flex min-h-0 flex-1 flex-col gap-7">
+      <header className="flex flex-col gap-1.5">
         <h1>Settings</h1>
-        <p>Manage account, system, and window behavior.</p>
-      </div>
+        <p className="text-sm text-muted-foreground">
+          Manage your account, library, appearance, and window behaviour.
+        </p>
+      </header>
 
-      <div className={styles.githubActions}>
-        <button
-          className={styles.githubButton}
-          type="button"
-          onClick={() => void openUrl(KOFI_URL)}
+      {/* Vertical nav rather than a pill row: it has room for a description per
+          category and scales as sections are added, the way desktop settings do.
+          The nav sticks so the categories stay reachable while a long panel scrolls. */}
+      <div className="flex min-h-0 flex-1 items-start gap-10">
+        <nav
+          className="sticky top-0 flex w-56 shrink-0 flex-col gap-0.5"
+          role="tablist"
+          aria-label="Settings categories"
         >
-          <IconCoffee size={18} />
-          Buy me a coffee
-        </button>
-        <button
-          className={styles.secondaryButton}
-          type="button"
-          onClick={() => void openUrl(GITHUB_REPOSITORY_URL)}
-        >
-          <IconStar size={18} />
-          Star on GitHub
-        </button>
-        <button
-          className={styles.secondaryButton}
-          type="button"
-          onClick={() => void openUrl(GITHUB_NEW_ISSUE_URL)}
-        >
-          <IconBug size={18} />
-          Report an issue or request a feature
-        </button>
-      </div>
+          {SETTINGS_TABS.map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActiveTab(tab.id)}
+                className={cn(
+                  "group/tab relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                  isActive ? "text-foreground" : "text-muted-foreground hover:bg-card/60 hover:text-foreground",
+                )}
+              >
+                {isActive && (
+                  <motion.span
+                    layoutId="settings-tab-active"
+                    transition={{ type: "spring", stiffness: 520, damping: 42 }}
+                    className="absolute inset-0 -z-10 rounded-xl bg-card"
+                  />
+                )}
+                <span
+                  className={cn(
+                    "grid size-8 shrink-0 place-items-center rounded-lg transition-colors",
+                    isActive ? "bg-primary/15 text-primary" : "bg-card/70 text-muted-foreground",
+                  )}
+                >
+                  <Icon size={17} aria-hidden="true" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium">{tab.label}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {tab.description}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </nav>
 
-      <div
-        className={styles.tabs}
-        role="tablist"
-        aria-label="Settings categories"
-        style={{
-          "--active-tab-offset": `${activeTabIndex * 100}%`,
-          "--tab-count": SETTINGS_TABS.length,
-        } as CSSProperties}
-      >
-        {SETTINGS_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            className={activeTab === tab.id ? styles.activeTab : ""}
-            role="tab"
-            aria-selected={activeTab === tab.id}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+        <div className="flex min-h-0 w-full min-w-0 max-w-2xl flex-1 flex-col">
 
       {activeTab === "about" && (
-        <div className={styles.tabPanel} role="tabpanel" aria-label="About settings">
-          <section className={styles.card} aria-labelledby="account-settings-title">
-            <div className={styles.cardHeader}>
+        <div className="flex flex-col gap-5" role="tabpanel" aria-label="About settings">
+          <section className={SETTINGS_CARD} aria-labelledby="account-settings-title">
+            <div className="flex items-center gap-3">
               <div>
-                <h2 id="account-settings-title">Account</h2>
+                <h2 className="text-lg" id="account-settings-title">Account</h2>
                 <p>{isSignedIn ? "Signed in to YouTube Music" : "No account connected"}</p>
               </div>
-              <span className={`${styles.status} ${isSignedIn ? styles.connected : ""}`}>
+              <span className={cn("text-sm text-muted-foreground", isSignedIn && "text-primary")}>
                 {isSignedIn ? "Connected" : "Signed out"}
               </span>
             </div>
 
-            <div className={styles.accountRow}>
+            <div className="flex items-center gap-3">
               {account?.artworkUrl ? (
-                <img className={styles.avatar} src={account.artworkUrl} alt="" />
+                <img className="size-11 shrink-0 rounded-full object-cover" src={account.artworkUrl} alt="" />
               ) : (
-                <div className={styles.avatarPlaceholder}>
-                  <IconUser size={30} />
+                <div className="grid size-11 shrink-0 place-items-center rounded-full bg-card text-muted-foreground">
+                  <UserIcon size={30} />
                 </div>
               )}
 
-              <div className={styles.accountDetails}>
-                <span className={styles.accountName}>{account?.name ?? "YouTube Music"}</span>
-                <span className={styles.accountDescription}>
+              <div className="flex min-w-0 flex-col">
+                <span className="truncate text-base font-medium text-foreground">{account?.name ?? "YouTube Music"}</span>
+                <span className="text-sm text-muted-foreground">
                   {isSignedIn ? "Your library and listening history are available." : "Sign in to load your library."}
                 </span>
               </div>
 
               {isSignedIn ? (
                 <button
-                  className={styles.signOutButton}
+                  className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   type="button"
                   onClick={() => void libraryController.signOut()}
                 >
-                  <IconLogout size={18} />
+                  <LogoutIcon size={18} />
                   Sign out
                 </button>
               ) : (
                 <button
-                  className={styles.signInButton}
+                  className="flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   type="button"
                   disabled={authBusy}
                   onClick={() => void onSignIn()}
                 >
-                  <IconLogin size={18} />
+                  <LoginIcon size={18} />
                   {authBusy ? "Connecting..." : "Sign in"}
                 </button>
               )}
             </div>
 
-            {libraryState.error && <p className={styles.error}>{libraryState.error}</p>}
+            {libraryState.error && <p className="text-sm text-destructive">{libraryState.error}</p>}
           </section>
 
-          <section className={styles.card} aria-labelledby="lastfm-settings-title">
-            <div className={styles.cardHeader}>
+          <section className={SETTINGS_CARD} aria-labelledby="lastfm-settings-title">
+            <div className="flex items-center gap-3">
               <div>
-                <h2 id="lastfm-settings-title">Last.fm</h2>
+                <h2 className="text-lg" id="lastfm-settings-title">Last.fm</h2>
                 <p>
                   {lastFmSession
                     ? `Connected as ${lastFmSession.username}`
                     : "Connect Last.fm to scrobble your listening history."}
                 </p>
               </div>
-              <span className={`${styles.status} ${lastFmSession ? styles.connected : ""}`}>
+              <span className={cn("text-sm text-muted-foreground", lastFmSession && "text-primary")}>
                 {lastFmSession ? "Connected" : "Signed out"}
               </span>
             </div>
 
-            <div className={styles.settingsList}>
-              <label className={`${styles.settingRow} ${!lastFmSession ? styles.toggleRowDisabled : ""}`}>
-                <span className={styles.toggleDescription}>
+            <div className="flex flex-col gap-5">
+              <label className={cn("flex items-center justify-between gap-4 py-2", !lastFmSession && "opacity-50")}>
+                <span className={SETTING_LABEL}>
                   <strong>Scrobble plays</strong>
                   <span>
                     Send now playing updates and scrobbles after a track reaches the Last.fm listening threshold.
                   </span>
                 </span>
                 <input
-                  className={styles.toggleInput}
+                  className="size-4 shrink-0 accent-[var(--color-primary)]"
                   type="checkbox"
                   checked={lastFmSession ? lastFmScrobblingEnabled : false}
                   disabled={!lastFmSession}
                   onChange={(event) => setLastFmScrobblingEnabled(event.target.checked)}
                 />
-                <span className={styles.toggle} aria-hidden="true" />
+                <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
               </label>
 
-              <div className={styles.actionRow}>
-                <span className={styles.toggleDescription}>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={SETTING_LABEL}>
                   <strong>Account connection</strong>
                   <span>
                     {lastFmAuth
@@ -642,49 +700,49 @@ export function SettingsPage({
                 </span>
                 {lastFmSession ? (
                   <button
-                    className={styles.secondaryButton}
+                    className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     type="button"
                     disabled={lastFmBusy}
                     onClick={() => void handleDisconnectLastFm()}
                   >
-                    <IconBrandLastfm size={18} />
+                    <LastFmIcon size={18} />
                     {lastFmBusy ? "Disconnecting..." : "Disconnect"}
                   </button>
                 ) : lastFmAuth ? (
                   <button
-                    className={styles.signInButton}
+                    className="flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     type="button"
                     disabled={lastFmBusy}
                     onClick={() => void handleFinishLastFmAuth()}
                   >
-                    <IconBrandLastfm size={18} />
+                    <LastFmIcon size={18} />
                     {lastFmBusy ? "Finishing..." : "Finish connection"}
                   </button>
                 ) : (
                   <button
-                    className={styles.signInButton}
+                    className="flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     type="button"
                     disabled={lastFmBusy}
                     onClick={() => void handleStartLastFmAuth()}
                   >
-                    <IconBrandLastfm size={18} />
+                    <LastFmIcon size={18} />
                     {lastFmBusy ? "Opening..." : "Connect Last.fm"}
                   </button>
                 )}
               </div>
 
-              {lastFmError && <p className={styles.error}>{lastFmError}</p>}
+              {lastFmError && <p className="text-sm text-destructive">{lastFmError}</p>}
             </div>
           </section>
 
-          <section className={styles.card} aria-labelledby="about-settings-title">
-            <div className={styles.compactHeader}>
-              <h2 id="about-settings-title">About</h2>
+          <section className={SETTINGS_CARD} aria-labelledby="about-settings-title">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg" id="about-settings-title">About</h2>
             </div>
 
-            <div className={styles.settingsList}>
-              <div className={styles.actionRow}>
-                <span className={styles.toggleDescription}>
+            <div className="flex flex-col gap-5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={SETTING_LABEL}>
                   <strong>Updates</strong>
                   <span>
                     Installed version: {
@@ -695,18 +753,18 @@ export function SettingsPage({
                   </span>
                 </span>
                 <button
-                  className={styles.secondaryButton}
+                  className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   type="button"
                   disabled={updateStatus === "checking"}
                   onClick={() => void handleCheckForUpdates()}
                 >
-                  <IconRefresh size={18} />
+                  <RefreshIcon size={18} />
                   {updateStatus === "checking" ? "Checking..." : "Check for updates"}
                 </button>
               </div>
 
               {updateResult && (
-                <div className={styles.updateResult}>
+                <div className="flex flex-col gap-1">
                   <span>
                     {updateStatus === "installing"
                       ? updateProgress?.percent !== undefined
@@ -716,7 +774,7 @@ export function SettingsPage({
                   </span>
                   {updateResult.canInstall && (
                     <button
-                      className={styles.githubButton}
+                      className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                       type="button"
                       disabled={updateStatus === "installing"}
                       onClick={() => void handleInstallUpdate()}
@@ -725,7 +783,7 @@ export function SettingsPage({
                     </button>
                   )}
                   <button
-                    className={styles.secondaryButton}
+                    className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     type="button"
                     onClick={() => void openUrl(updateResult.releaseUrl)}
                   >
@@ -734,23 +792,23 @@ export function SettingsPage({
                 </div>
               )}
               {updateStatus === "current" && (
-                <p className={styles.updateMessage}>You are up to date.</p>
+                <p className="text-sm text-muted-foreground">You are up to date.</p>
               )}
               {updateStatus === "error" && (
-                <p className={styles.error}>{updateError}</p>
+                <p className="text-sm text-destructive">{updateError}</p>
               )}
 
-              <div className={styles.actionRow}>
-                <span className={styles.toggleDescription}>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={SETTING_LABEL}>
                   <strong>Quick start</strong>
                   <span>Replay the guided introduction.</span>
                 </span>
                 <button
-                  className={styles.secondaryButton}
+                  className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   type="button"
                   onClick={onRestartOnboarding}
                 >
-                  <IconRefresh size={18} />
+                  <RefreshIcon size={18} />
                   Start onboarding
                 </button>
               </div>
@@ -760,54 +818,55 @@ export function SettingsPage({
       )}
 
       {activeTab === "system" && (
-        <div className={styles.tabPanel} role="tabpanel" aria-label="System settings">
-          <section className={styles.card} aria-labelledby="system-settings-title">
-            <div className={styles.compactHeader}>
-              <h2 id="system-settings-title">System</h2>
+        <div className="flex flex-col gap-5" role="tabpanel" aria-label="System settings">
+          <section className={SETTINGS_CARD} aria-labelledby="system-settings-title">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg" id="system-settings-title">System</h2>
             </div>
 
-            <div className={styles.settingsList}>
-              <label className={`${styles.settingRow} ${autostartLoading ? styles.toggleRowDisabled : ""}`}>
-                <span className={styles.toggleDescription}>
+            <div className="flex flex-col gap-5">
+              <label className={cn("flex items-center justify-between gap-4 py-2", autostartLoading && "opacity-50")}>
+                <span className={SETTING_LABEL}>
                   <strong>Launch at startup</strong>
-                  <span>Start Just Another Music Client when your computer starts.</span>
+                  <span>Start Zuno when your computer starts.</span>
                 </span>
                 <input
-                  className={styles.toggleInput}
+                  className="size-4 shrink-0 accent-[var(--color-primary)]"
                   type="checkbox"
                   checked={autostartEnabled}
                   disabled={autostartLoading}
                   onChange={(event) => void handleAutostartChange(event.target.checked)}
                 />
-                <span className={styles.toggle} aria-hidden="true" />
+                <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
               </label>
 
-              {autostartError && <p className={styles.error}>{autostartError}</p>}
+              {autostartError && <p className="text-sm text-destructive">{autostartError}</p>}
 
-              <label className={styles.settingRow}>
-                <span className={styles.toggleDescription}>
+              <label className="flex items-center justify-between gap-4 py-2">
+                <span className={SETTING_LABEL}>
                   <strong>Remember window size and location</strong>
                   <span>Reopen the main window with its last size and screen position.</span>
                 </span>
                 <input
-                  className={styles.toggleInput}
+                  className="size-4 shrink-0 accent-[var(--color-primary)]"
                   type="checkbox"
                   checked={mainWindowGeometryPersistenceEnabled}
                   onChange={(event) => {
                     setMainWindowGeometryPersistenceEnabled(event.target.checked);
                   }}
                 />
-                <span className={styles.toggle} aria-hidden="true" />
+                <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
               </label>
 
-              <div className={styles.localPlaylistsBlock}>
-                <div className={styles.localPlaylistHeader}>
-                  <span className={styles.toggleDescription}>
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <span className={SETTING_LABEL}>
                     <strong>Local playlists</strong>
                     <span>Create playlists from folders on this computer.</span>
                   </span>
-                  <div className={styles.localPlaylistCreate}>
+                  <div className="flex flex-wrap items-center gap-2">
                     <input
+                      className={cn(SETTINGS_FIELD, "w-44")}
                       type="text"
                       value={localPlaylistName}
                       placeholder="Playlist name"
@@ -818,40 +877,41 @@ export function SettingsPage({
                       }}
                     />
                     <button
-                      className={styles.secondaryButton}
+                      className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                       type="button"
                       onClick={handleCreateLocalPlaylist}
                     >
-                      <IconFolderPlus size={18} />
-                      Create local playlist
+                      <FolderAddIcon size={18} />
+                      Create
                     </button>
                   </div>
                 </div>
 
-                {localPlaylistError && <p className={styles.error}>{localPlaylistError}</p>}
+                {localPlaylistError && <p className="text-sm text-destructive">{localPlaylistError}</p>}
 
                 {localPlaylists.length > 0 && (
-                  <div className={styles.localPlaylistList}>
+                  <div className="flex flex-col gap-1.5">
                     {localPlaylists.map((playlist) => (
-                      <div className={styles.localPlaylistItem} key={playlist.id}>
-                        <div className={styles.localPlaylistTitleRow}>
-                          <span className={styles.localPlaylistTitle}>
-                            <IconFolder size={18} aria-hidden="true" />
+                      <div className="flex items-center justify-between gap-3 rounded-lg bg-background/40 px-3 py-2 text-sm" key={playlist.id}>
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className="truncate text-foreground">
+                            <FolderIcon size={18} aria-hidden="true" />
                             {playlist.name}
                           </span>
                           <button
-                            className={styles.dangerButton}
+                            className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                             type="button"
                             onClick={() => deleteLocalPlaylist(playlist.id)}
                           >
-                            <IconTrash size={18} />
+                            <TrashIcon size={18} />
                             Delete
                           </button>
                         </div>
 
-                        <div className={styles.localPathControls}>
-                          <span className={styles.localPathInputGroup}>
+                        <div className="flex flex-col gap-2">
+                          <span className="flex items-center gap-2">
                             <input
+                              className={cn(SETTINGS_FIELD, "flex-1")}
                               type="text"
                               value={localPlaylistPathInputs[playlist.id] ?? ""}
                               placeholder="/Users/name/Music"
@@ -866,17 +926,17 @@ export function SettingsPage({
                             />
                             <button
                               type="button"
-                              className={styles.localPathBrowseButton}
+                              className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                               disabled={localPlaylistBrowsingId === playlist.id}
                               title="Browse for folder"
                               aria-label={`Browse for a folder for ${playlist.name}`}
                               onClick={() => void handleBrowseLocalPlaylistPath(playlist.id)}
                             >
-                              <IconFolderOpen size={17} aria-hidden="true" />
+                              <FolderOpenIcon size={17} aria-hidden="true" />
                             </button>
                           </span>
                           <button
-                            className={styles.secondaryButton}
+                            className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                             type="button"
                             onClick={() => handleAddLocalPlaylistPath(playlist.id)}
                           >
@@ -885,22 +945,22 @@ export function SettingsPage({
                         </div>
 
                         {playlist.paths.length > 0 ? (
-                          <div className={styles.localPathList}>
+                          <div className="flex flex-col gap-1.5">
                             {playlist.paths.map((path) => (
-                              <div className={styles.localPathItem} key={path}>
+                              <div className="flex items-center justify-between gap-3 rounded-lg bg-background/40 px-3 py-2 text-sm" key={path}>
                                 <span>{path}</span>
                                 <button
                                   type="button"
                                   aria-label={`Remove ${path}`}
                                   onClick={() => removeLocalPlaylistPath(playlist.id, path)}
                                 >
-                                  <IconTrash size={16} aria-hidden="true" />
+                                  <TrashIcon size={16} aria-hidden="true" />
                                 </button>
                               </div>
                             ))}
                           </div>
                         ) : (
-                          <p className={styles.localPlaylistEmpty}>No paths added yet.</p>
+                          <p className="px-1 py-3 text-sm text-muted-foreground">No paths added yet.</p>
                         )}
                       </div>
                     ))}
@@ -908,54 +968,57 @@ export function SettingsPage({
                 )}
               </div>
 
-              <div className={styles.actionRow}>
-                <span className={styles.toggleDescription}>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={SETTING_LABEL}>
                   <strong>Application log</strong>
                   <span>Open the current log file for sharing or troubleshooting.</span>
                 </span>
                 <button
-                  className={styles.secondaryButton}
+                  className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   type="button"
                   disabled={logOpening}
                   onClick={() => void handleOpenLog()}
                 >
-                  <IconFileDescription size={18} />
+                  <LogFileIcon size={18} />
                   {logOpening ? "Opening..." : "Open log"}
                 </button>
               </div>
 
-              {logError && <p className={styles.error}>{logError}</p>}
+              {logError && <p className="text-sm text-destructive">{logError}</p>}
 
-              <label className={styles.settingRow}>
-                <span className={styles.toggleDescription}>
+              <label className="flex items-center justify-between gap-4 py-2">
+                <span className={SETTING_LABEL}>
                   <strong>Potato PC mode</strong>
                   <span>Disables animations, blur effects, and the animated star background.</span>
                 </span>
                 <input
-                  className={styles.toggleInput}
+                  className="size-4 shrink-0 accent-[var(--color-primary)]"
                   type="checkbox"
                   checked={paperPcMode}
                   onChange={(event) => setPaperPcMode(event.target.checked)}
                 />
-                <span className={styles.toggle} aria-hidden="true" />
+                <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
               </label>
 
-              <div className={styles.cacheRow}>
-                <div className={styles.cacheUsage}>
-                  <span>Cache</span>
-                  <strong>
+              <div className="flex flex-wrap items-end justify-between gap-4 py-2">
+                <span className={SETTING_LABEL}>
+                  <strong>Cache</strong>
+                  <span className="tabular-nums">
                     {cacheStats
                       ? `${formatBytes(cacheStats.usedBytes)} of ${formatBytes(cacheStats.maxBytes)}`
-                      : "Loading..."}
-                  </strong>
-                  <span>{cacheStats?.entryCount ?? 0} cached items</span>
-                </div>
+                      : "Loading…"}
+                    {cacheStats ? ` · ${cacheStats.entryCount} items` : ""}
+                  </span>
+                </span>
 
-                <div className={styles.cacheControls}>
-                  <label className={styles.cacheSizeField}>
-                    <span>Maximum size</span>
-                    <span className={styles.inputWithUnit}>
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* The caption sits above the field rather than inside it: nested in a
+                      fixed-width pill it wrapped onto two lines and squeezed the number. */}
+                  <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                    Maximum size
+                    <span className="flex w-28 items-center gap-1.5 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring/60">
                       <input
+                        className="w-full min-w-0 bg-transparent tabular-nums outline-none"
                         type="number"
                         min="0.25"
                         max="64"
@@ -964,11 +1027,11 @@ export function SettingsPage({
                         disabled={cacheBusy}
                         onChange={(event) => setCacheSizeGb(event.target.value)}
                       />
-                      <span>GB</span>
+                      <span className="shrink-0 text-muted-foreground">GB</span>
                     </span>
                   </label>
                   <button
-                    className={styles.secondaryButton}
+                    className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     type="button"
                     disabled={cacheBusy}
                     onClick={() => void saveCacheSize()}
@@ -976,31 +1039,31 @@ export function SettingsPage({
                     Save
                   </button>
                   <button
-                    className={styles.dangerButton}
+                    className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     type="button"
                     disabled={cacheBusy}
                     onClick={() => void handleClearCache()}
                   >
-                    <IconTrash size={18} />
+                    <TrashIcon size={18} />
                     Clear cache
                   </button>
                 </div>
               </div>
 
-              {cacheError && <p className={styles.error}>{cacheError}</p>}
+              {cacheError && <p className="text-sm text-destructive">{cacheError}</p>}
 
-              <div className={styles.actionRow}>
-                <span className={styles.toggleDescription}>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={SETTING_LABEL}>
                   <strong>Delete all app data</strong>
                   <span>Reset settings, cache, account, queue, tabs, onboarding, and local data.</span>
                 </span>
                 <button
-                  className={styles.dangerButton}
+                  className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   type="button"
                   disabled={resetSettingsBusy}
                   onClick={() => void handleClearAllSettings()}
                 >
-                  <IconTrash size={18} />
+                  <TrashIcon size={18} />
                   {resetSettingsBusy
                     ? "Deleting..."
                     : resetSettingsConfirming
@@ -1009,31 +1072,31 @@ export function SettingsPage({
                 </button>
               </div>
 
-              {resetSettingsError && <p className={styles.error}>{resetSettingsError}</p>}
+              {resetSettingsError && <p className="text-sm text-destructive">{resetSettingsError}</p>}
             </div>
           </section>
         </div>
       )}
 
       {activeTab === "shortcuts" && (
-        <div className={styles.tabPanel} role="tabpanel" aria-label="Keyboard shortcut settings">
-          <section className={styles.card} aria-labelledby="keyboard-shortcuts-settings-title">
-            <div className={styles.compactHeader}>
-              <h2 id="keyboard-shortcuts-settings-title">Keyboard shortcuts</h2>
+        <div className="flex flex-col gap-5" role="tabpanel" aria-label="Keyboard shortcut settings">
+          <section className={SETTINGS_CARD} aria-labelledby="keyboard-shortcuts-settings-title">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg" id="keyboard-shortcuts-settings-title">Keyboard shortcuts</h2>
             </div>
 
-            <div className={styles.settingsList}>
-              <div className={styles.actionRow}>
-                <span className={styles.toggleDescription}>
+            <div className="flex flex-col gap-5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={SETTING_LABEL}>
                   <strong>Reset shortcuts</strong>
                   <span>Restore every keyboard shortcut to its default.</span>
                 </span>
                 <button
-                  className={styles.secondaryButton}
+                  className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   type="button"
                   onClick={resetKeyboardShortcuts}
                 >
-                  <IconRefresh size={18} />
+                  <RefreshIcon size={18} />
                   Reset all
                 </button>
               </div>
@@ -1043,14 +1106,14 @@ export function SettingsPage({
                 const isListening = listeningShortcut === shortcutAction.id;
 
                 return (
-                  <div className={styles.shortcutRow} key={shortcutAction.id}>
-                    <span className={styles.toggleDescription}>
+                  <div className="flex items-center justify-between gap-4 py-2" key={shortcutAction.id}>
+                    <span className={SETTING_LABEL}>
                       <strong>{shortcutAction.label}</strong>
                       <span>{shortcutAction.description}</span>
                     </span>
-                    <div className={styles.shortcutControls}>
+                    <div className="flex items-center gap-2">
                       <button
-                        className={`${styles.shortcutCapture} ${isListening ? styles.shortcutCaptureListening : ""}`}
+                        className={cn("min-w-32 rounded-lg bg-background px-2.5 py-1.5 text-center text-sm text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring", isListening && "text-primary")}
                         type="button"
                         aria-pressed={isListening}
                         onClick={() => setListeningShortcut(shortcutAction.id)}
@@ -1062,14 +1125,14 @@ export function SettingsPage({
                         {isListening ? "Press shortcut..." : formatKeyboardShortcut(shortcut)}
                       </button>
                       <button
-                        className={styles.secondaryButton}
+                        className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                         type="button"
                         onClick={() => resetKeyboardShortcut(shortcutAction.id)}
                       >
                         Reset
                       </button>
                       <button
-                        className={styles.secondaryButton}
+                        className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                         type="button"
                         disabled={!shortcut}
                         onClick={() => setKeyboardShortcut(shortcutAction.id, null)}
@@ -1086,38 +1149,38 @@ export function SettingsPage({
       )}
 
       {activeTab === "window" && (
-        <div className={styles.tabPanel} role="tabpanel" aria-label="Style settings">
-          <section className={styles.card} aria-labelledby="window-settings-title">
-            <div className={styles.cardHeader}>
+        <div className="flex flex-col gap-5" role="tabpanel" aria-label="Style settings">
+          <section className={SETTINGS_CARD} aria-labelledby="window-settings-title">
+            <div className="flex items-center gap-3">
               <div>
-                <h2 id="window-settings-title">Window controls</h2>
+                <h2 className="text-lg" id="window-settings-title">Window controls</h2>
                 <p>Choose the title bar buttons and compact player behavior.</p>
               </div>
-              <IconLayoutSidebarRight className={styles.cardIcon} size={22} />
+              <QueuePanelIcon className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/15 text-primary" size={22} />
             </div>
 
-            <label className={styles.toggleRow}>
-              <span className={styles.toggleDescription}>
+            <label className="flex items-center justify-between gap-4 py-2">
+              <span className={SETTING_LABEL}>
                 <strong>Mini player</strong>
                 <span>Show compact playback controls when the main window is not focused.</span>
               </span>
               <input
-                className={styles.toggleInput}
+                className="size-4 shrink-0 accent-[var(--color-primary)]"
                 type="checkbox"
                 checked={miniPlayerEnabled}
                 onChange={(event) => setMiniPlayerEnabled(event.target.checked)}
               />
-              <span className={styles.toggle} aria-hidden="true" />
+              <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
             </label>
 
-            <label className={styles.selectRow}>
-              <span className={styles.toggleDescription}>
+            <label className="flex items-center justify-between gap-4 py-2">
+              <span className={SETTING_LABEL}>
                 <strong>Mini player hover bar</strong>
                 <span>Choose what the expanded hover slider controls.</span>
               </span>
-              <span className={styles.selectControl}>
+              <span className="flex items-center gap-2">
                 <select
-                  className={styles.selectInput}
+                  className="min-w-0 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-inset focus:ring-ring/60"
                   value={miniPlayerHoverAction}
                   onChange={(event) => {
                     setMiniPlayerHoverAction(event.target.value as MiniPlayerHoverAction);
@@ -1126,17 +1189,17 @@ export function SettingsPage({
                   <option value="seek">Song position</option>
                   <option value="volume">Volume</option>
                 </select>
-                <IconChevronDown size={17} aria-hidden="true" />
+                <ChevronDownIcon size={17} aria-hidden="true" />
               </span>
             </label>
 
-            <div className={styles.settingActionRow}>
-              <span className={styles.toggleDescription}>
+            <div className="flex items-center justify-between gap-4 py-2">
+              <span className={SETTING_LABEL}>
                 <strong>Mini player position</strong>
                 <span>Move the mini player back to the bottom center of this screen.</span>
               </span>
               <button
-                className={styles.secondaryButton}
+                className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 type="button"
                 disabled={miniPlayerResetting}
                 onClick={() => void handleResetMiniPlayerPosition()}
@@ -1145,23 +1208,23 @@ export function SettingsPage({
               </button>
             </div>
 
-            <label className={styles.toggleRow}>
-              <span className={styles.toggleDescription}>
+            <label className="flex items-center justify-between gap-4 py-2">
+              <span className={SETTING_LABEL}>
                 <strong>Windows-style controls</strong>
                 <span>Use minimize, maximize, and close buttons with square edges.</span>
               </span>
               <input
-                className={styles.toggleInput}
+                className="size-4 shrink-0 accent-[var(--color-primary)]"
                 type="checkbox"
                 checked={windowsStyleWindowControls}
                 disabled={nativeWindowControls}
                 onChange={(event) => setWindowsStyleWindowControls(event.target.checked)}
               />
-              <span className={styles.toggle} aria-hidden="true" />
+              <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
             </label>
 
-            <label className={styles.toggleRow}>
-              <span className={styles.toggleDescription}>
+            <label className="flex items-center justify-between gap-4 py-2">
+              <span className={SETTING_LABEL}>
                 <strong>Use OS native controls</strong>
                 <span>
                   {isLinux
@@ -1170,7 +1233,7 @@ export function SettingsPage({
                 </span>
               </span>
               <input
-                className={styles.toggleInput}
+                className="size-4 shrink-0 accent-[var(--color-primary)]"
                 type="checkbox"
                 checked={nativeWindowControls}
                 onChange={(event) => {
@@ -1180,32 +1243,152 @@ export function SettingsPage({
                   }
                 }}
               />
-              <span className={styles.toggle} aria-hidden="true" />
+              <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
             </label>
           </section>
 
-          <section className={styles.card} aria-labelledby="behavior-settings-title">
-            <div className={styles.compactHeader}>
-              <h2 id="behavior-settings-title">Behavior</h2>
+          <section className={SETTINGS_CARD} aria-labelledby="behavior-settings-title">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg" id="behavior-settings-title">Behavior</h2>
             </div>
 
-            <label className={styles.toggleRow}>
-              <span className={styles.toggleDescription}>
+            <label className="flex items-center justify-between gap-4 py-2">
+              <span className={SETTING_LABEL}>
                 <strong>Always show extra controls</strong>
                 <span>Keep lyrics and queue visible instead of showing them only on hover.</span>
               </span>
               <input
-                className={styles.toggleInput}
+                className="size-4 shrink-0 accent-[var(--color-primary)]"
                 type="checkbox"
                 checked={extraPlayerControlsAlwaysVisible}
                 onChange={(event) => setExtraPlayerControlsAlwaysVisible(event.target.checked)}
               />
-              <span className={styles.toggle} aria-hidden="true" />
+              <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground" aria-hidden="true" />
             </label>
           </section>
         </div>
       )}
 
+      {activeTab === "appearance" && (
+        <div className="flex flex-col gap-5" role="tabpanel" aria-label="Appearance settings">
+          <section className={SETTINGS_CARD} aria-labelledby="theme-settings-title">
+            <div className="flex items-center gap-3">
+              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/15 text-primary">
+                <PaletteIcon size={18} aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <h2 className="text-lg" id="theme-settings-title">Theme</h2>
+                <p className="text-sm text-muted-foreground">
+                  Applies instantly across both windows.
+                </p>
+              </div>
+            </div>
+
+            <div
+              className="grid grid-cols-3 gap-2"
+              role="radiogroup"
+              aria-labelledby="theme-settings-title"
+            >
+              {THEME_OPTIONS.map((option) => {
+                const isActive = themePreference === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={isActive}
+                    onClick={() => setThemePreference(option.value)}
+                    className={cn(
+                      "flex flex-col items-center gap-2 rounded-xl p-3 transition-colors",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                      isActive ? "bg-primary/15" : "bg-background/40 hover:bg-card",
+                    )}
+                  >
+                    {/* Miniature window preview rather than a colour dot — it shows what
+                        the choice actually does. */}
+                    <span
+                      className={cn(
+                        "flex h-12 w-full flex-col justify-end overflow-hidden rounded-lg p-1 ring-1",
+                        option.swatch,
+                        isActive ? "ring-primary" : "ring-black/10",
+                      )}
+                      aria-hidden="true"
+                    >
+                      <span
+                        className={cn(
+                          "h-2 w-full rounded-sm",
+                          option.value === "light" ? "bg-neutral-300" : "bg-neutral-700",
+                        )}
+                      />
+                    </span>
+                    <span className="text-sm font-medium text-foreground">{option.label}</span>
+                    <span className="text-xs text-muted-foreground">{option.hint}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className={SETTINGS_CARD} aria-labelledby="motion-settings-title">
+            <div className="min-w-0">
+              <h2 className="text-lg" id="motion-settings-title">Motion &amp; performance</h2>
+              <p className="text-sm text-muted-foreground">
+                Turn these off on low-powered machines.
+              </p>
+            </div>
+
+            <label className="flex items-center justify-between gap-4 py-2">
+              <span className="flex min-w-0 flex-col gap-0.5 text-sm text-foreground">
+                <span>Reduced motion mode</span>
+                <span className="text-sm text-muted-foreground">
+                  Disables animations, blur and shadows across the app.
+                </span>
+              </span>
+              <input
+                className="size-4 shrink-0 accent-[var(--color-primary)]"
+                type="checkbox"
+                checked={paperPcMode}
+                onChange={(event) => setPaperPcMode(event.target.checked)}
+              />
+            </label>
+          </section>
+        </div>
+      )}
+
+          {/*
+            Support and feedback links live at the foot of the content column rather than as
+            a row of filled buttons above the nav. They are destinations you leave the app
+            for — quiet text links are the honest weight for that, and it stops them
+            competing with the categories for first read.
+          */}
+          <footer className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+            <button
+              className={SETTINGS_FOOTER_LINK}
+              type="button"
+              onClick={() => void openUrl(KOFI_URL)}
+            >
+              <CoffeeIcon size={16} aria-hidden="true" />
+              Buy me a coffee
+            </button>
+            <button
+              className={SETTINGS_FOOTER_LINK}
+              type="button"
+              onClick={() => void openUrl(GITHUB_REPOSITORY_URL)}
+            >
+              <StarIcon size={16} aria-hidden="true" />
+              Star on GitHub
+            </button>
+            <button
+              className={SETTINGS_FOOTER_LINK}
+              type="button"
+              onClick={() => void openUrl(GITHUB_NEW_ISSUE_URL)}
+            >
+              <BugIcon size={16} aria-hidden="true" />
+              Report an issue
+            </button>
+          </footer>
+        </div>
+      </div>
     </main>
   );
 }

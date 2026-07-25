@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
-import { IconKey, IconX } from "@tabler/icons-react";
+import { CloseIcon, KeyIcon } from "@/ui/icons";
 import { primaryModifierLabel } from "../platform";
-import styles from "./Onboarding.module.css";
 
 export type OnboardingStep =
   | "open-search"
@@ -98,12 +97,12 @@ export function Onboarding({ step, onSkip }: OnboardingProps) {
   }, [content.target]);
 
   return (
-    <div className={styles.layer} aria-live="polite">
+    <div className="fixed inset-0 z-[90]" aria-live="polite">
       {targetRect && (
         <>
-          <div className={styles.scrimTop} style={{ height: top }} />
+          <div className="absolute inset-x-0 top-0 bg-background/75 backdrop-blur-[2px]" style={{ height: top }} />
           <div
-            className={styles.scrimLeft}
+            className="absolute left-0 bg-background/75 backdrop-blur-[2px]"
             style={{
               top,
               width: left,
@@ -111,16 +110,16 @@ export function Onboarding({ step, onSkip }: OnboardingProps) {
             }}
           />
           <div
-            className={styles.scrimRight}
+            className="absolute right-0 bg-background/75 backdrop-blur-[2px]"
             style={{
               top,
               left: right,
               height: bottom - top,
             }}
           />
-          <div className={styles.scrimBottom} style={{ top: bottom }} />
+          <div className="absolute inset-x-0 bottom-0 bg-background/75 backdrop-blur-[2px]" style={{ top: bottom }} />
           <div
-            className={styles.spotlightGlow}
+            className="absolute rounded-xl shadow-[0_0_0_9999px_transparent,0_0_40px_var(--color-primary)]"
             style={{
               left,
               top,
@@ -129,7 +128,7 @@ export function Onboarding({ step, onSkip }: OnboardingProps) {
             }}
           />
           <div
-            className={styles.spotlight}
+            className="absolute rounded-xl ring-2 ring-primary"
             style={{
               left,
               top,
@@ -140,19 +139,19 @@ export function Onboarding({ step, onSkip }: OnboardingProps) {
         </>
       )}
       <button
-        className={styles.skip}
+        className="self-start text-sm text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         type="button"
         onClick={onSkip}
         aria-label="Skip onboarding"
         title="Skip onboarding"
       >
         <span>Close onboarding</span>
-        <IconX size={19} />
+        <CloseIcon size={19} />
       </button>
-      <div className={styles.prompt}>
-        {step === "open-search" && <span className={styles.step}>Quick start</span>}
-        <p>{typedText}<span className={styles.caret} /></p>
-        {content.shortcut && <kbd className={styles.shortcut}>{content.shortcut}</kbd>}
+      <div className="absolute flex max-w-xs flex-col gap-2 rounded-xl bg-popover p-4 text-sm text-foreground shadow-2xl">
+        {step === "open-search" && <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Quick start</span>}
+        <p>{typedText}<span className="absolute size-3 rotate-45 bg-popover" /></p>
+        {content.shortcut && <kbd className="rounded bg-card px-1.5 py-0.5 font-sans text-xs text-muted-foreground">{content.shortcut}</kbd>}
       </div>
     </div>
   );
@@ -160,8 +159,8 @@ export function Onboarding({ step, onSkip }: OnboardingProps) {
 
 export function OnboardingCompleteToast() {
   return (
-    <div className={styles.completeToast} role="status">
-      <span className={styles.completeLabel}>Onboarding</span>
+    <div className="fixed bottom-28 left-1/2 z-[95] flex -translate-x-1/2 items-center gap-2 rounded-full bg-popover/95 px-4 py-2 shadow-2xl backdrop-blur" role="status">
+      <span className="text-sm text-foreground">Onboarding</span>
       <strong>Complete</strong>
     </div>
   );
@@ -169,9 +168,9 @@ export function OnboardingCompleteToast() {
 
 export function OnboardingWelcome() {
   return (
-    <div className={styles.welcome} role="status" aria-label="Welcome">
-      <div className={styles.welcomeAmbient} />
-      <div className={styles.welcomeText}>
+    <div className="fixed inset-0 z-[95] grid place-items-center bg-background" role="status" aria-label="Welcome">
+      <div className="pointer-events-none absolute left-1/2 top-1/2 size-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/15 blur-[120px]" />
+      <div className="relative flex flex-col items-center gap-3 text-center">
         <strong>Welcome</strong>
       </div>
     </div>
@@ -184,11 +183,11 @@ interface KeychainNoticeProps {
 
 export function KeychainNotice({ onContinue }: KeychainNoticeProps) {
   return (
-    <div className={styles.keychainNotice} role="dialog" aria-modal="true" aria-labelledby="keychain-title">
-      <div className={styles.keychainAmbient} />
-      <div className={styles.keychainCard}>
-        <span className={styles.keychainIcon} aria-hidden="true">
-          <IconKey size={28} />
+    <div className="fixed inset-0 z-[95] grid place-items-center bg-background/80 backdrop-blur" role="dialog" aria-modal="true" aria-labelledby="keychain-title">
+      <div className="pointer-events-none absolute left-1/2 top-1/2 size-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/15 blur-[120px]" />
+      <div className="relative flex w-[min(28rem,90vw)] flex-col items-center gap-3 rounded-2xl bg-popover p-6 text-center shadow-2xl">
+        <span className="grid size-12 place-items-center rounded-full bg-primary/15 text-primary" aria-hidden="true">
+          <KeyIcon size={28} />
         </span>
         <h1 id="keychain-title">A note about macOS Keychain</h1>
         <p>

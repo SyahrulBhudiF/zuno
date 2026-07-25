@@ -1,10 +1,9 @@
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import styles from "./Layout.module.css";
+import { AnimatePresence, motion } from "motion/react";
+import { cn } from "@/lib/utils";
 import { SearchBar } from "./SearchBar";
 import { Sidebar } from "./Sidebar";
-import { StarField } from "./StarField";
 import type { Album, Playlist } from "../../datasource/types";
-import { usePaperPcMode } from "../settings/paperPcMode";
 
 interface LayoutProps {
   children: ReactNode;
@@ -12,7 +11,6 @@ interface LayoutProps {
   onSidebarWidthChange: (width: number) => void;
   onNavigateAlbum: (album: Album) => void;
   onNavigatePlaylist: (playlist: Playlist) => void;
-  onOpenSettings: () => void;
   showSearchBar: boolean;
   onOpenSearch: () => void;
   canGoBack: boolean;
@@ -36,7 +34,6 @@ export function Layout({
   onSidebarWidthChange,
   onNavigateAlbum,
   onNavigatePlaylist,
-  onOpenSettings,
   showSearchBar,
   onOpenSearch,
   canGoBack,
@@ -49,7 +46,6 @@ export function Layout({
   rightPanelWidth = 340,
   onRightPanelWidthChange,
 }: LayoutProps) {
-  const paperPcMode = usePaperPcMode();
   const pageContentRef = useRef<HTMLDivElement>(null);
   const rightPanelRef = useRef<HTMLDivElement>(null);
   const dragStartX = useRef<number | null>(null);
@@ -193,43 +189,45 @@ export function Layout({
   useEffect(() => () => clearScrollHideTimer(), [clearScrollHideTimer]);
 
   return (
-    <div className={styles.layout}>
-      {!paperPcMode && <StarField />}
-      
-      <div className={styles.mainContent}>
+    <div className="relative flex min-h-0 flex-1 overflow-hidden  ">
+     
+
+      <div className="relative flex min-h-0 min-w-0 flex-1">
         <Sidebar
           width={sidebarWidth}
           onWidthChange={onSidebarWidthChange}
           onNavigateAlbum={onNavigateAlbum}
           onNavigatePlaylist={onNavigatePlaylist}
         />
-        <div className={styles.contentArea}>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 bg-background backdrop-blur">
           {showSearchBar && (
             <SearchBar
               onOpen={onOpenSearch}
-              onOpenSettings={onOpenSettings}
               canGoBack={canGoBack}
               canGoForward={canGoForward}
               onBack={onNavigateBack}
               onForward={onNavigateForward}
             />
           )}
-           
-          <div className={styles.contentContainer}>
 
-            <div className={styles.pageScrollShell}>
+          <div className="flex min-h-0 min-w-0 flex-1 gap-3 pb-3 ">
+            <div className="relative min-h-0 min-w-0 flex-1">
               <div
                 ref={pageContentRef}
-                className={`${styles.pageContent} ${fullBleedContent ? styles.fullBleedContent : ""}`}
+                className={cn(
+                  "h-full overflow-y-auto overscroll-contain rounded-xl ",
+                  fullBleedContent ? "p-0" : "p-4",
+                )}
                 data-page-scroll-root
               >
                 {children}
               </div>
               {showTransientScrollbar && scrollbarState.canScroll && (
                 <div
-                  className={`${styles.transientScrollbarHitArea} ${
-                    scrollbarState.isVisible ? styles.transientScrollbarVisible : ""
-                  }`}
+                  className={cn(
+                    "absolute inset-y-0 right-0 z-10 w-3.5 transition-opacity duration-200",
+                    scrollbarState.isVisible ? "opacity-100" : "opacity-0",
+                  )}
                   onPointerEnter={() => {
                     isScrollbarHoveredRef.current = true;
                     revealScrollbar(true);
@@ -281,11 +279,14 @@ export function Layout({
                   }}
                   aria-hidden="true"
                 >
-                  <div className={styles.transientScrollbarTrack}>
+                  <div className="relative mx-auto h-full w-1.5 rounded-full">
                     <div
-                      className={`${styles.transientScrollbarThumb} ${
-                        isDraggingScrollbar ? styles.transientScrollbarThumbActive : ""
-                      }`}
+                      className={cn(
+                        "w-full rounded-full transition-colors",
+                        isDraggingScrollbar
+                          ? "bg-foreground/50"
+                          : "bg-foreground/25 hover:bg-foreground/40",
+                      )}
                       data-scrollbar-thumb
                       style={{
                         height: `${scrollbarState.thumbHeight}px`,
@@ -296,27 +297,36 @@ export function Layout({
                 </div>
               )}
             </div>
-            {rightPanel && (
-              <div
-                ref={rightPanelRef}
-                className={styles.rightPanel}
-                style={{ width: `${rightPanelWidth}px` }}
-              >
-                <div
-                  className={`${styles.rightPanelDragHandle} ${
-                    isDraggingRightPanel ? styles.rightPanelDragHandleActive : ""
-                  }`}
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    dragStartX.current = event.clientX;
-                    setIsDraggingRightPanel(true);
-                  }}
-                  title="Drag to resize queue"
-                />
-                {rightPanel}
-              </div>
-            )}
+
+            {/* Inline resizable panel, not an overlay drawer: the queue sits beside the
+                page on desktop and its drag-to-resize handle must keep working. */}
+            <AnimatePresence initial={false}>
+              {rightPanel && (
+                <motion.div
+                  ref={rightPanelRef}
+                  initial={{ width: 0, opacity: 0 }}
+                  animate={{ width: rightPanelWidth, opacity: 1 }}
+                  exit={{ width: 0, opacity: 0 }}
+                  transition={{ type: "spring", stiffness: 420, damping: 40 }}
+                  className="relative min-h-0 shrink-0 overflow-hidden rounded-xl bg-card/40 backdrop-blur"
+                >
+                  <div
+                    className={cn(
+                      "absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize transition-colors",
+                      isDraggingRightPanel ? "bg-primary" : "hover:bg-primary/40",
+                    )}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      dragStartX.current = event.clientX;
+                      setIsDraggingRightPanel(true);
+                    }}
+                    title="Drag to resize queue"
+                  />
+                  {rightPanel}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </div>

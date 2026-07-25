@@ -141,8 +141,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Located rather than hardcoded: the executable is named from the Cargo package
+          # (`zuno`), which Tauri may rename to `productName` during bundling. Globbing the
+          # one top-level exe survives either, and fails loudly if that assumption breaks.
+          portable_exe=$(find src-tauri/target/release -maxdepth 1 -type f -name '*.exe' | head -n 1)
+          if [ -z "$portable_exe" ]; then
+            echo "No portable executable found in src-tauri/target/release" >&2
+            exit 1
+          fi
+          echo "Uploading $portable_exe"
           gh release upload "$RELEASE_TAG" \
-            "src-tauri/target/release/just-another-music-client.exe#Just-Another-Music-Client-Windows-portable.exe" \
+            "${portable_exe}#Zuno-Windows-portable.exe" \
             --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

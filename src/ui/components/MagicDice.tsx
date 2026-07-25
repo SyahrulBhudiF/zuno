@@ -1,5 +1,5 @@
-import { IconDice } from "@tabler/icons-react";
-import styles from "./MagicDice.module.css";
+import { MagneticButton } from "@/components/motion/button";
+import { DiceActiveIcon } from "@/ui/icons";
 
 interface MagicDiceProps {
   onClick?: () => void;
@@ -7,15 +7,17 @@ interface MagicDiceProps {
 
 export function MagicDice({ onClick }: MagicDiceProps) {
   return (
-    <div className={styles.container}>
-      <button
-        className={styles.diceButton}
+    <div className="flex items-center justify-center">
+      <MagneticButton
+        variant="ghost"
+        size="icon"
         type="button"
         aria-label="Magic Dice"
         onClick={onClick}
+        className="size-16 rounded-full bg-card text-primary"
       >
-        <IconDice size={40} className={styles.diceIcon} />
-      </button>
+        <DiceActiveIcon size={40} />
+      </MagneticButton>
     </div>
   );
 }

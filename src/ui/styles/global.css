@@ -1,81 +1,229 @@
+/*
+ * Tailwind v4, full import including preflight — the CSS Modules are gone.
+ *
+ * docs/ is excluded from scanning: tauribg.txt and beUI.txt are reference dumps full of
+ * class names the app never uses, and Tailwind would emit utilities for all of them.
+ * (Excluding rather than `source(none)` + an explicit @source — the latter silently
+ * stops arbitrary variants like `[&_input]:…` from being extracted.)
+ */
+/*
+ * Inter, self-hosted via @fontsource-variable. Bundled rather than loaded from a CDN: this
+ * is an offline desktop app, and a webfont request that fails leaves the UI on a fallback
+ * face. Imported here rather than in the entry modules because main.tsx and mini.tsx both
+ * pull in this stylesheet, so one import covers both windows.
+ */
+@import "@fontsource-variable/inter";
+@import "tailwindcss";
+@source not "../../../docs";
+
+/*
+ * Design tokens consumed by the vendored beUI components.
+ * Neutral shadcn surfaces, with the app's #ff0033 kept as `primary` (accent only).
+ *
+ * The UI is borderless: surfaces are separated by background contrast, not outlines.
+ * `--color-border` / `--color-input` are kept only because beUI component internals
+ * reference them; no app component draws a border.
+ */
+@theme {
+  --color-background: oklch(0.145 0 0);
+  --color-foreground: oklch(0.985 0 0);
+
+  --color-card: oklch(0.285 0 0);
+  --color-card-foreground: oklch(0.985 0 0);
+  --color-popover: oklch(0.205 0 0);
+  --color-popover-foreground: oklch(0.985 0 0);
+
+  --color-muted: oklch(0.269 0 0);
+  --color-muted-foreground: oklch(0.708 0 0);
+
+  /* Brand accent — the one colour carried over from the old identity. */
+  --color-primary: #ff0033;
+  --color-primary-foreground: oklch(0.985 0 0);
+
+  --color-secondary: oklch(0.269 0 0);
+  --color-secondary-foreground: oklch(0.985 0 0);
+
+  --color-destructive: oklch(0.704 0.191 22.216);
+  --color-destructive-foreground: oklch(0.985 0 0);
+
+  --color-border: oklch(1 0 0 / 10%);
+  --color-input: oklch(1 0 0 / 15%);
+  --color-ring: #ff0033;
+ 
+}
+
+/*
+ * Strength of the ambient accent bloom behind the window (see StarField.tsx). It is a token
+ * rather than a fixed opacity because the same wash behaves completely differently per
+ * theme: over near-black it reads as a faint glow, over near-white as a pink stain.
+ */
 :root {
-  --bg: #000000;
-  --chrome: #000000;
-  --text: #ffffff;
+  --ambient-bloom: 1;
+
+  /*
+   * The window's own edge. This window is transparent and its OS shadow is disabled, so a
+   * hairline is the only thing separating the app from whatever is behind it — without it
+   * the rounded corners read as a cut-out rather than a pane. Same treatment as the picks
+   * cards: a light inner ring plus a specular highlight along the top edge.
+   */
+  --window-edge: oklch(1 0 0 / 14%);
+  --window-edge-highlight: oklch(1 0 0 / 22%);
+}
+
+/*
+ * Light theme. The @theme block above is the dark default; this flips the same token
+ * names, so every component follows without knowing a theme exists.
+ *
+ * `--color-primary` stays #ff0033 in both — it is the brand accent, not a surface.
+ * Contrast is tuned for white text on primary in dark and near-black text elsewhere.
+ */
+html[data-theme="light"] {
+  /*
+   * The background is deliberately *below* pure white and cards sit at white, i.e. the
+   * inverse of the dark theme where cards are lighter than the background. This app is
+   * borderless — surfaces are told apart by contrast alone — so a white-on-white pairing
+   * (the obvious first choice) makes every card, popover and hover state disappear.
+   */
+  --color-background: oklch(0.954 0 0);
+  --color-foreground: oklch(0.205 0 0);
+
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.205 0 0);
+  --color-popover: oklch(1 0 0);
+  --color-popover-foreground: oklch(0.205 0 0);
+
+  --color-muted: oklch(0.915 0 0);
+  /* 0.45 keeps secondary text at ~4.6:1 on the background — readable, still recessive. */
+  --color-muted-foreground: oklch(0.45 0 0);
+
+  --color-secondary: oklch(0.915 0 0);
+  --color-secondary-foreground: oklch(0.205 0 0);
+
+  --color-border: oklch(0 0 0 / 10%);
+  --color-input: oklch(0 0 0 / 14%);
+
+  /* The accent wash has to be far weaker here or the chrome looks tinted pink. */
+  --ambient-bloom: 0.3;
+
+  /* A white hairline vanishes on a light surface; the edge has to darken instead. */
+  --window-edge: oklch(0 0 0 / 14%);
+  --window-edge-highlight: oklch(1 0 0 / 60%);
+
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+/*
+ * Layout constants read from TSX (`h-[var(--titlebar-height)]`) rather than colours —
+ * every colour now comes from the @theme block above.
+ */
+:root {
   --titlebar-height: 44px;
-
-  /* Backgrounds */
-  --color-bg: rgb(7 7 7 / 72%);
-  --color-bg-elevated: rgb(24 24 24 / 68%);
-  --color-bg-overlay: rgb(38 38 38 / 76%);
-
-  /* Text */
-  --color-text-primary: #ffffff;
-  --color-text-secondary: #a0a0a0;
-  --color-text-muted: #5a5a5a;
-
-  /* Accent */
-  --color-accent: #ff0033;
-  --color-accent-hover: #e0002e;
-
-  /* Borders */
-  --color-border: rgb(255 255 255 / 10%);
-
-  /* Spacing */
-  --spacing-xs: 4px;
-  --spacing-sm: 8px;
-  --spacing-md: 16px;
-  --spacing-lg: 24px;
-  --spacing-xl: 40px;
-
-  /* Border radius */
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-full: 9999px;
-
-  /* Typography */
-  --font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-size-xs: 11px;
-  --font-size-sm: 13px;
-  --font-size-base: 14px;
-  --font-size-md: 16px;
-  --font-size-lg: 20px;
-  --font-size-xl: 24px;
-  --font-weight-regular: 400;
-  --font-weight-medium: 500;
-  --font-weight-semibold: 600;
-  --font-weight-bold: 700;
-
-  /* Transitions */
-  --transition-fast: 120ms ease;
-  --transition-base: 200ms ease;
-  --transition-slow: 350ms ease;
-  --easing-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
-  --easing-smooth: cubic-bezier(0.4, 0, 0.2, 1);
-
-  /* Layout */
   --sidebar-width: 220px;
+
+  /* macOS-style window rounding. The window itself is transparent; the app root paints
+     this radius, so the corners must stay unpainted all the way up the tree. */
+  --window-radius: 14px;
+  border-color: transparent;
+}
+
+/*
+ * No radius when the window fills the screen, or when the OS is drawing the frame —
+ * a rounded corner inside a squared-off native frame shows the desktop through the gap.
+ */
+html[data-window-maximized],
+html[data-native-window-controls],
+html[data-platform-linux] {
+  --window-radius: 0px;
 }
 
 html,
 body,
 #root {
   height: 100%;
-  background: var(--bg);
-  color: var(--text);
-  margin: 0;
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial,
-    "Apple Color Emoji", "Segoe UI Emoji";
+  /* Transparent so the app root's rounded corners are actually cut out.
+     The mini-player window enforces the same with `!important` in mini.html. */
+  background: transparent;
+  color: var(--color-foreground);
+  font-family: "Inter Variable", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
+    Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  /*
+   * `cv11` gives Inter the single-storey `l`/`g` that reads closer to a geometric UI face,
+   * and tabular numerals stop timers and durations from jittering as the digits change.
+   */
+  font-feature-settings: "cv11", "ss01";
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-* {
-  box-sizing: border-box;
+/* Anywhere a number counts up or down, the glyphs must not change width. */
+time,
+[data-tabular-numbers] {
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Heading defaults. Tailwind's preflight resets headings to inherit their size, and the
+ * old CSS Modules were what gave them hierarchy — without this every h1/h2/h3 in the app
+ * renders at body size. Utilities on an element still override these.
+ */
+@layer base {
+  /*
+   * Sized against a 16px body, the way Spotify's chrome is: page titles are genuinely large,
+   * section headers clearly outrank rows, and nothing in the reading column falls below
+   * 14px. The previous scale topped out at 24/16/14, which read as one flat grey mass once
+   * the body text around it was also 12-13px.
+   */
+  h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1.15;
+  }
+  h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+  }
+  h3 {
+    font-size: 1.125rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+  }
+}
+
+/*
+ * Now-playing level meter in track rows. Tailwind only emits keyframes for its own named
+ * animations, so an arbitrary `animate-[rowEq_...]` has to declare them here.
+ */
+@keyframes rowEq {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+/* Selection picks up the brand accent instead of the browser's default blue. */
+::selection {
+  background: color-mix(in oklab, var(--color-primary) 30%, transparent);
+  color: var(--color-foreground);
 }
 
 /* Native-feeling desktop defaults */
 body {
   overflow: hidden;
+}
+button{
+  cursor: pointer;
 }
 
 /* Hide browser scrollbars; we'll do custom later */
@@ -102,18 +250,39 @@ textarea,
   outline: none;
 }
 
+/*
+ * Fallback focus ring for anything without an explicit `focus-visible:ring-*`.
+ * Uses the theme ring rather than hardcoded white so it matches the accent.
+ */
 *:focus-visible {
-  outline: 2px solid #ffffff;
+  outline: 2px solid var(--color-ring);
   outline-offset: 2px;
 }
 
+/*
+ * Text fields never draw their own ring: every input in the app sits inside a
+ * composed field (search pill, settings row) whose wrapper already reacts to
+ * :focus-within. A second ring on the inner input reads as a box-in-a-box.
+ */
+input:focus,
+input:focus-visible,
+textarea:focus,
+textarea:focus-visible {
+  outline: none;
+}
+
+/*
+ * Paper-PC mode: opaque surfaces, no blur, no animation — for weak GPUs.
+ * Overrides the @theme colours with fully opaque equivalents, since the defaults
+ * are translucent and rely on backdrop-filter that this mode disables below.
+ * JS-driven beUI motion is stopped separately via <MotionConfig> in App.tsx.
+ */
 html[data-paper-pc] {
-  --color-bg: #070707;
-  --color-bg-elevated: #181818;
-  --color-bg-overlay: #262626;
-  --transition-fast: 0s;
-  --transition-base: 0s;
-  --transition-slow: 0s;
+  --color-background: #070707;
+  --color-card: #181818;
+  --color-popover: #202020;
+  --color-muted: #262626;
+  --color-border: #2c2c2c;
 }
 
 html[data-paper-pc] *,
@@ -133,4 +302,73 @@ html[data-platform-linux] *::before,
 html[data-platform-linux] *::after {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+
+.audio-loader {
+  display: flex;
+  gap: 3px;
+  height: 40px;
+  align-items: flex-end;
+}
+
+.audio-loader span {
+  width: 4px;
+  height: 20px;
+  background: linear-gradient(
+    34deg,
+    rgb(240, 81, 72) 41%,
+    rgb(245, 200, 149) 100%
+  );
+  border-radius: 4px;
+  transform-origin: bottom center;
+  animation: bounce 0.7s infinite ease-in-out;
+}
+
+.audio-loader span:nth-child(1) {
+  animation-delay: 0s;
+  height: 20px;
+}
+
+.audio-loader span:nth-child(2) {
+  animation-delay: 0.1s;
+  height: 30px;
+}
+
+.audio-loader span:nth-child(3) {
+  animation-delay: 0.2s;
+  height: 45px;
+}
+
+.audio-loader span:nth-child(4) {
+  animation-delay: 0.1s;
+  height: 18px;
+}
+
+.audio-loader span:nth-child(5) {
+  animation-delay: 0s;
+  height: 10px;
+}
+
+@keyframes bounce {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@theme {
+  --animate-spinner-steps: spinner-steps 1s steps(8) infinite;
+
+  @keyframes spinner-steps {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
 }

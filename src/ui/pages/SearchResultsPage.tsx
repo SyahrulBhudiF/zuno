@@ -1,5 +1,6 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { IconLoader2, IconPlayerPlay } from "@tabler/icons-react";
+import { Loader } from "@/components/motion/loader";
+import { PlayActiveIcon } from "@/ui/icons";
 import type {
   Album,
   Artist,
@@ -13,7 +14,6 @@ import { ArtistLinks } from "../components/ArtistLinks";
 import { TrackArtwork } from "../components/TrackArtwork";
 import { usePlaylistContextMenu } from "../components/PlaylistContextMenu";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
-import styles from "./SearchResultsPage.module.css";
 
 function normalizeSearchKey(value: string): string {
   return value
@@ -46,8 +46,8 @@ function buildFlatItems(results: SearchResults, songsFirst: boolean): Selectable
 
 function SearchLoadingSpinner() {
   return (
-    <div className={styles.loadingState} role="status" aria-live="polite" aria-label="Searching">
-      <IconLoader2 className={styles.loadingIcon} size={30} aria-hidden="true" />
+    <div className="grid place-items-center px-2 py-16 text-muted-foreground" role="status" aria-live="polite" aria-label="Searching">
+      <Loader variant="spinner" size={30} />
     </div>
   );
 }
@@ -192,13 +192,13 @@ export function SearchResultsPage({
   }, []);
 
   const selected = useCallback(
-    (index: number) => (isKeyboardNav && index === selectedIndex ? styles.selected : ""),
+    (index: number) => (isKeyboardNav && index === selectedIndex ? "bg-primary/15 text-foreground" : ""),
     [isKeyboardNav, selectedIndex],
   );
 
   const selectedAlbumCard = useCallback(
     (index: number) =>
-      isKeyboardNav && index === selectedIndex ? styles.selectedAlbumCard : "",
+      isKeyboardNav && index === selectedIndex ? "bg-primary/15 text-foreground" : "",
     [isKeyboardNav, selectedIndex],
   );
 
@@ -207,22 +207,22 @@ export function SearchResultsPage({
   } as CSSProperties), []);
 
   return (
-    <div className={styles.root}>
+    <div className="flex flex-col gap-8">
       <header>
-        <p className={styles.label}>Search results</p>
+        <p className="text-lg font-semibold text-foreground">Search results</p>
         <h1>{query}</h1>
       </header>
 
       {isLoading ? (
         <SearchLoadingSpinner />
       ) : !hasResults ? (
-        <p className={styles.empty}>No results found.</p>
+        <p className="px-2 py-10 text-center text-sm text-muted-foreground">No results found.</p>
       ) : (
-        <div className={styles.sections}>
+        <div className="flex flex-col gap-8">
           {results.artists.length > 0 && (
-            <section className={styles.section} style={{ order: songsFirst ? 1 : 0 }}>
+            <section className="flex flex-col gap-3" style={{ order: songsFirst ? 1 : 0 }}>
               <h2>Artists</h2>
-              <div className={styles.cardGrid}>
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr))]">
                 {results.artists.map((artist) => {
                   const index = flatItems.findIndex(
                     (item) => item.kind === "artist" && item.artist.id === artist.id,
@@ -232,13 +232,13 @@ export function SearchResultsPage({
                       key={artist.id}
                       type="button"
                       data-selectable-index={index}
-                      className={`${styles.artistCard} ${styles.resultEntering} ${selected(index)}`}
+                      className={`${"flex flex-col items-center gap-2 rounded-xl p-3 transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"} ${"animate-in fade-in"} ${selected(index)}`}
                       style={enterStyle(index)}
                       onClick={() => onOpenArtist(artist)}
                       onMouseEnter={() => handleMouseEnter(index)}
                     >
                       <TrackArtwork
-                        className={styles.artistArtwork}
+                        className="size-24 rounded-full object-cover"
                         artworkUrl={artist.artworkUrl}
                         iconSize={42}
                         variant="artist"
@@ -253,9 +253,9 @@ export function SearchResultsPage({
           )}
 
           {results.tracks.length > 0 && (
-            <section className={styles.section} style={{ order: songsFirst ? 0 : 1 }}>
+            <section className="flex flex-col gap-3" style={{ order: songsFirst ? 0 : 1 }}>
               <h2>Songs</h2>
-              <div className={styles.list} data-onboarding="search-results">
+              <div className="flex flex-col gap-0.5" data-onboarding="search-results">
                 {results.tracks.map((track, displayIndex) => {
                   const index = flatItems.findIndex(
                     (item) => item.kind === "track" && item.track.id === track.id,
@@ -265,23 +265,23 @@ export function SearchResultsPage({
                       key={track.id}
                       type="button"
                       data-selectable-index={index}
-                      className={`${styles.track} ${styles.resultEntering} ${selected(index)}`}
+                      className={`${"group/row flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"} ${"animate-in fade-in"} ${selected(index)}`}
                       style={enterStyle(index)}
                       onContextMenu={(event) => openTrackMenu(event, track)}
                       onClick={() => playTrack(track)}
                       onMouseEnter={() => handleMouseEnter(index)}
                     >
-                      <span className={styles.index}>{displayIndex + 1}</span>
+                      <span className="w-5 shrink-0 text-right text-xs tabular-nums text-muted-foreground">{displayIndex + 1}</span>
                       <TrackArtwork
-                        className={styles.artwork}
+                        className="size-11 shrink-0 rounded-md object-cover"
                         artworkUrl={track.artworkUrl}
                         iconSize={24}
                       />
-                      <span className={styles.text}>
+                      <span className="flex min-w-0 flex-1 flex-col [&_span]:truncate [&_span]:text-xs [&_span]:text-muted-foreground [&_strong]:truncate [&_strong]:text-sm [&_strong]:font-medium">
                         <strong>{track.title}</strong>
                         <ArtistLinks artists={track.artists} fallback={track.artist} />
                       </span>
-                      <IconPlayerPlay size={18} />
+                      <PlayActiveIcon size={18} />
                     </button>
                   );
                 })}
@@ -290,9 +290,9 @@ export function SearchResultsPage({
           )}
 
           {results.albums.length > 0 && (
-            <section className={styles.section} style={{ order: 2 }}>
+            <section className="flex flex-col gap-3" style={{ order: 2 }}>
               <h2>Albums</h2>
-              <div className={styles.cardGrid}>
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr))]">
                 {results.albums.map((album) => {
                   const index = flatItems.findIndex(
                     (item) => item.kind === "album" && item.album.id === album.id,
@@ -301,7 +301,7 @@ export function SearchResultsPage({
                     <div
                       key={album.id}
                       data-selectable-index={index}
-                      className={`${styles.resultEntering} ${selectedAlbumCard(index)}`}
+                      className={`${"animate-in fade-in"} ${selectedAlbumCard(index)}`}
                       style={enterStyle(index)}
                       onMouseEnter={() => handleMouseEnter(index)}
                     >
@@ -322,9 +322,9 @@ export function SearchResultsPage({
           )}
 
           {results.playlists.length > 0 && (
-            <section className={styles.section} style={{ order: 3 }}>
+            <section className="flex flex-col gap-3" style={{ order: 3 }}>
               <h2>Playlists</h2>
-              <div className={styles.cardGrid}>
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr))]">
                 {results.playlists.map((playlist) => {
                   const index = flatItems.findIndex(
                     (item) => item.kind === "playlist" && item.playlist.id === playlist.id,
@@ -333,7 +333,7 @@ export function SearchResultsPage({
                     <div
                       key={playlist.id}
                       data-selectable-index={index}
-                      className={`${styles.resultEntering} ${selectedAlbumCard(index)}`}
+                      className={`${"animate-in fade-in"} ${selectedAlbumCard(index)}`}
                       style={enterStyle(index)}
                       onMouseEnter={() => handleMouseEnter(index)}
                     >

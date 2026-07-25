@@ -1,20 +1,32 @@
+import { AnimatePresence, motion } from "motion/react";
+import { Loader, SpinnerSteps } from "@/components/motion/loader";
+import { cn } from "@/lib/utils";
 import {
-  IconArrowsShuffle,
-  IconLoader2,
-  IconPlayerPause,
-  IconPlayerPlay,
-  IconPlayerSkipBack,
-  IconPlayerSkipForward,
-  IconRepeat,
-  IconRepeatOff,
-} from "@tabler/icons-react";
+  PauseActiveIcon,
+  PlayActiveIcon,
+  RepeatIcon,
+  RepeatOneActiveIcon,
+  ShuffleActiveIcon,
+  SkipNextIcon,
+  SkipPreviousIcon,
+} from "@/ui/icons";
 import { usePlayerState } from "../../../player/playerStore";
 import { playerController } from "../../../player/playerStore";
-import styles from "./PlaybackControls.module.css";
 
 interface PlaybackControlsProps {
   extraControlsAlwaysVisible?: boolean;
 }
+
+const CONTROL_BUTTON =
+  "flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+/** Crossfade+scale used by the play/pause/loading glyph swap. */
+const GLYPH_MOTION = {
+  initial: { opacity: 0, scale: 0.6 },
+  animate: { opacity: 1, scale: 1 },
+  exit: { opacity: 0, scale: 0.6 },
+  transition: { type: "spring" as const, stiffness: 620, damping: 34 },
+};
 
 export function PlaybackControls({ extraControlsAlwaysVisible = true }: PlaybackControlsProps) {
   const state = usePlayerState();
@@ -38,80 +50,84 @@ export function PlaybackControls({ extraControlsAlwaysVisible = true }: Playback
     playerController.cyclePlaybackOrderMode();
   };
 
+  const orderLabel =
+    state.playbackOrderMode === "repeat-one"
+      ? "Loop current song"
+      : state.playbackOrderMode === "shuffle"
+        ? "Shuffle playback"
+        : "Play in order";
+
+  // In-order is the resting state, so it reads as Linear; the other two are Bold.
+  const isOrderActive = state.playbackOrderMode !== "in-order";
+
   return (
-    <div className={styles.playbackControls}>
+    <div className="flex items-center gap-1">
       <button
         type="button"
-        className={`${styles.controlButton} ${styles.skipButton}`}
+        className={CONTROL_BUTTON}
         onClick={handleSkipPrevious}
         disabled={!hasCurrentTrack}
         aria-label="Previous track"
       >
-        <IconPlayerSkipBack size={20} />
+        <SkipPreviousIcon size={20} />
       </button>
 
       <button
         type="button"
-        className={`${styles.controlButton} ${styles.playPauseButton}`}
+        className="flex size-11 items-center justify-center rounded-full bg-primary text-primary-foreground transition-[transform,background-color] hover:bg-primary/90 active:scale-95 disabled:pointer-events-none disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onClick={handlePlayPause}
         disabled={isBusy || !hasCurrentTrack}
         aria-label={isBusy ? "Loading song" : isPlaying ? "Pause" : "Play"}
       >
-        <span className={styles.iconStage} aria-hidden="true">
-          <span className={`${styles.playbackIcon} ${!isBusy && !isPlaying ? styles.activeIcon : ""}`}>
-            <IconPlayerPlay size={20} />
-          </span>
-          <span className={`${styles.playbackIcon} ${!isBusy && isPlaying ? styles.activeIcon : ""}`}>
-            <IconPlayerPause size={20} />
-          </span>
-          <span
-            className={`${styles.playbackIcon} ${styles.loadingIcon} ${isBusy ? styles.activeIcon : ""}`}
-          >
-            <IconLoader2 size={20} />
-          </span>
+        <span className="relative grid size-5 place-items-center" aria-hidden="true">
+          <AnimatePresence initial={false} mode="popLayout">
+            {isBusy ? (
+              <motion.span key="loading" {...GLYPH_MOTION} className="absolute">
+                <SpinnerSteps  size={20} />
+              </motion.span>
+            ) : isPlaying ? (
+              <motion.span key="pause" {...GLYPH_MOTION} className="absolute">
+                <PauseActiveIcon size={20} />
+              </motion.span>
+            ) : (
+              <motion.span key="play" {...GLYPH_MOTION} className="absolute">
+                <PlayActiveIcon size={20} />
+              </motion.span>
+            )}
+          </AnimatePresence>
         </span>
       </button>
 
       <button
         type="button"
-        className={`${styles.controlButton} ${styles.skipButton}`}
+        className={CONTROL_BUTTON}
         onClick={handleSkipNext}
         disabled={!hasCurrentTrack}
         aria-label="Next track"
       >
-        <IconPlayerSkipForward size={20} />
+        <SkipNextIcon size={20} />
       </button>
 
       <div
-        className={`${styles.extraControl} ${
-          extraControlsAlwaysVisible ? "" : styles.extraControlHoverOnly
-        }`}
+        className={cn(
+          "transition-opacity",
+          !extraControlsAlwaysVisible &&
+            "opacity-0 focus-within:opacity-100 group-hover/playerbar:opacity-100",
+        )}
       >
         <button
           type="button"
-          className={`${styles.controlButton} ${styles.skipButton}`}
+          className={cn(CONTROL_BUTTON, isOrderActive && "text-primary hover:text-primary")}
           onClick={handlePlaybackOrderCycle}
-          aria-label={
-            state.playbackOrderMode === "repeat-one"
-              ? "Loop current song"
-              : state.playbackOrderMode === "shuffle"
-                ? "Shuffle playback"
-                : "Play in order"
-          }
-          title={
-            state.playbackOrderMode === "repeat-one"
-              ? "Loop current song"
-              : state.playbackOrderMode === "shuffle"
-                ? "Shuffle"
-                : "In order"
-          }
+          aria-label={orderLabel}
+          title={orderLabel}
         >
           {state.playbackOrderMode === "repeat-one" ? (
-            <IconRepeat size={20} />
+            <RepeatOneActiveIcon size={20} />
           ) : state.playbackOrderMode === "shuffle" ? (
-            <IconArrowsShuffle size={20} />
+            <ShuffleActiveIcon size={20} />
           ) : (
-            <IconRepeatOff size={20} />
+            <RepeatIcon size={20} />
           )}
         </button>
       </div>

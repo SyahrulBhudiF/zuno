@@ -3451,7 +3451,7 @@ export class YouTubeMusicDataSource extends DataSource {
   private getLyricsRequestHeaders(): Record<string, string> {
     return {
       Accept: "application/json",
-      "User-Agent": "JustAnotherMusicClient/0.1.0",
+      "User-Agent": "Zuno/1.0",
     };
   }
 

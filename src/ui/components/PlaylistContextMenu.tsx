@@ -8,11 +8,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { IconBookmark, IconBookmarkOff, IconCheck, IconCopy, IconLoader2, IconTrash } from "@tabler/icons-react";
+import { Loader } from "@/components/motion/loader";
+import { BookmarkActiveIcon, BookmarkIcon, CheckIcon, CopyIcon, TrashIcon } from "@/ui/icons";
 import type { Album, Playlist } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
 import { deleteLocalPlaylist, isLocalPlaylist } from "../../player/localPlaylists";
-import styles from "./PlaylistContextMenu.module.css";
 
 interface PlaylistContextMenuValue {
   openPlaylistMenu: (event: ReactMouseEvent, playlist: Playlist) => void;
@@ -196,7 +196,7 @@ export function PlaylistContextMenuProvider({
       {position && (album || isLocalPlaylistMenu || canCopyPlaylistUrl) && (
         <div
           ref={menuRef}
-          className={styles.menu}
+          className="fixed z-50 flex min-w-56 flex-col gap-0.5 rounded-xl bg-popover/95 p-1.5 shadow-2xl backdrop-blur"
           style={{ left: position.x, top: position.y }}
           role="menu"
           onMouseDown={(event) => event.stopPropagation()}
@@ -205,9 +205,10 @@ export function PlaylistContextMenuProvider({
             <button
               type="button"
               role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               onClick={() => void copyAlbumUrl()}
             >
-              <IconCopy size={18} />
+              <CopyIcon size={18} />
               <span>Copy album URL</span>
             </button>
           )}
@@ -215,9 +216,10 @@ export function PlaylistContextMenuProvider({
             <button
               type="button"
               role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               onClick={() => void copyPlaylistUrl()}
             >
-              <IconCopy size={18} />
+              <CopyIcon size={18} />
               <span>Copy playlist URL</span>
             </button>
           )}
@@ -225,9 +227,10 @@ export function PlaylistContextMenuProvider({
             <button
               type="button"
               role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               onClick={deleteSelectedLocalPlaylist}
             >
-              <IconTrash size={18} />
+              <TrashIcon size={18} />
               <span>Delete local playlist</span>
             </button>
           )}
@@ -235,24 +238,21 @@ export function PlaylistContextMenuProvider({
             <button
               type="button"
               role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
               onClick={() => void toggleAlbumSaved()}
             >
-              {isSaved ? <IconBookmarkOff size={18} /> : <IconBookmark size={18} />}
+              {isSaved ? <BookmarkActiveIcon size={18} /> : <BookmarkIcon size={18} />}
               <span>{isSaved ? "Remove from library" : "Save to library"}</span>
             </button>
           )}
         </div>
       )}
       {toast && (
-        <div className={styles.toast} role="status">
+        <div className="fixed bottom-28 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-2 rounded-full bg-popover/95 px-4 py-2 text-sm text-foreground shadow-2xl backdrop-blur" role="status">
           {isSaving ? (
-            <IconLoader2
-              className={styles.toastLoadingIcon}
-              size={18}
-              aria-hidden="true"
-            />
+            <Loader variant="spinner" size={18} />
           ) : (toast.startsWith("Saved ") || toast.startsWith("Removed ") || toast === "Url copied to clipboard" || toast === "Local playlist deleted") && (
-            <IconCheck size={18} aria-hidden="true" />
+            <CheckIcon size={18} aria-hidden="true" />
           )}
           <span>{toast}</span>
         </div>

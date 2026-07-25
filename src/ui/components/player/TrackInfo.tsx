@@ -1,17 +1,14 @@
-import { type CSSProperties, useLayoutEffect, useRef, useState } from "react";
-import {
-  IconHeart,
-  IconHeartBroken,
-  IconHeartFilled,
-  IconLoader2,
-} from "@tabler/icons-react";
+import { useLayoutEffect, useRef, useState } from "react";
+import { Loader } from "@/components/motion/loader";
+import { Marquee } from "@/components/motion/marquee";
+import { cn } from "@/lib/utils";
+import { HeartActiveIcon, HeartBrokenIcon, HeartIcon } from "@/ui/icons";
 import { usePlayerState } from "../../../player/playerStore";
 import { useLibraryState } from "../../../player/playerStore";
 import { usePlayerUIState } from "../../stores/playerUIStore";
 import { TrackArtwork } from "../TrackArtwork";
 import { ArtistLinks } from "../ArtistLinks";
 import { useTrackContextMenu } from "../TrackContextMenu";
-import styles from "./TrackInfo.module.css";
 
 export function TrackInfo() {
   const state = usePlayerState();
@@ -19,17 +16,19 @@ export function TrackInfo() {
   const uiState = usePlayerUIState();
   const { openTrackMenu, toggleTrackLike } = useTrackContextMenu();
   const currentTrack = state.currentTrack;
-  const titleViewportRef = useRef<HTMLParagraphElement>(null);
+  const titleViewportRef = useRef<HTMLDivElement>(null);
   const titleTextRef = useRef<HTMLSpanElement>(null);
-  const [titleScrollDistance, setTitleScrollDistance] = useState(0);
+  const [isTitleOverflowing, setIsTitleOverflowing] = useState(false);
 
+  // Only scroll a title that actually overflows — a permanent marquee on short
+  // titles is noise. Measured rather than guessed from character count.
   useLayoutEffect(() => {
     const viewport = titleViewportRef.current;
     const text = titleTextRef.current;
     if (!viewport || !text) return;
 
     const updateOverflow = () => {
-      setTitleScrollDistance(Math.max(0, text.scrollWidth - viewport.clientWidth));
+      setIsTitleOverflowing(text.scrollWidth - viewport.clientWidth > 1);
     };
     updateOverflow();
 
@@ -54,40 +53,51 @@ export function TrackInfo() {
 
   return (
     <div
-      className={styles.trackInfo}
+      className="flex min-w-0 items-center gap-3"
       onContextMenu={(event) => openTrackMenu(event, currentTrack)}
     >
       {uiState.showAlbumArt && (
         <TrackArtwork
-          className={styles.albumArt}
+          className="size-14 shrink-0 rounded-lg object-cover"
           artworkUrl={currentTrack.artworkUrl}
           iconSize={28}
         />
       )}
-      <div className={styles.trackDetails}>
-        <p
-          ref={titleViewportRef}
-          className={`${styles.trackTitle} ${titleScrollDistance > 0 ? styles.scrollingTitle : ""}`}
-          title={currentTrack.title}
-        >
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <div ref={titleViewportRef} className="relative min-w-0 overflow-hidden">
+          {/* Hidden measuring copy — Marquee duplicates its children, so width
+              must be read from a single stable node. */}
           <span
             ref={titleTextRef}
-            style={{
-              "--title-scroll-distance": `${titleScrollDistance}px`,
-              "--title-scroll-duration": `${Math.max(7, titleScrollDistance / 24)}s`,
-            } as CSSProperties}
+            aria-hidden={isTitleOverflowing}
+            className={cn(
+              "block whitespace-nowrap text-sm font-medium text-foreground",
+              isTitleOverflowing && "invisible absolute",
+            )}
           >
             {currentTrack.title}
           </span>
-        </p>
-        <p className={styles.trackArtist}>
+          {isTitleOverflowing && (
+            <Marquee speed={22} gap="2.5rem" className="text-sm font-medium text-foreground">
+              <span className="whitespace-nowrap" title={currentTrack.title}>
+                {currentTrack.title}
+              </span>
+            </Marquee>
+          )}
+        </div>
+        <div className="truncate text-xs text-muted-foreground">
           <ArtistLinks artists={currentTrack.artists} fallback={currentTrack.artist} />
-        </p>
+        </div>
       </div>
+
       {canLikeCurrentTrack && (
         <button
           type="button"
-          className={`${styles.likeButton} ${isLiked ? styles.liked : ""}`}
+          className={cn(
+            "group/like flex size-8 shrink-0 items-center justify-center rounded-full transition-colors",
+            "disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            isLiked ? "text-primary" : "text-muted-foreground hover:text-foreground",
+          )}
           onClick={() => void toggleTrackLike(currentTrack)}
           disabled={isLikeStatusLoading || isLikePending}
           aria-label={
@@ -108,14 +118,21 @@ export function TrackInfo() {
           }
         >
           {isLikeStatusLoading || isLikePending ? (
-            <IconLoader2 className={styles.likeLoadingIcon} size={18} />
+            <Loader variant="spinner" size={18} />
           ) : isLiked ? (
-            <span className={styles.likedIconStage} aria-hidden="true">
-              <IconHeartFilled className={styles.likedHeartIcon} size={18} />
-              <IconHeartBroken className={styles.removeLikeIcon} size={18} />
+            // Hovering a liked track previews the un-like action.
+            <span className="relative grid size-[18px] place-items-center" aria-hidden="true">
+              <HeartActiveIcon
+                size={18}
+                className="absolute transition-opacity group-hover/like:opacity-0"
+              />
+              <HeartBrokenIcon
+                size={18}
+                className="absolute opacity-0 transition-opacity group-hover/like:opacity-100"
+              />
             </span>
           ) : (
-            <IconHeart size={18} />
+            <HeartIcon size={18} />
           )}
         </button>
       )}

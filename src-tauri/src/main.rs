@@ -20,5 +20,5 @@ fn main() {
     // which shows an annoying size/diagnostics label overlay in the top-left.
     // Ensure the app never inherits that overlay.
     std::env::remove_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
-    just_another_music_client_lib::run()
+    zuno_lib::run()
 }

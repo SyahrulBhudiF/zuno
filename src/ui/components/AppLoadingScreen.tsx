@@ -1,13 +1,17 @@
+import { motion } from "motion/react";
+import { cn } from "@/lib/utils";
 import appIcon from "../../../assets/img/Logo.png";
-import styles from "./AppLoadingScreen.module.css";
+import { AudioLoader } from "@/components/motion/magnetic";
 
 const LOADING_LINES = [
-  "Some magic things happening",
-  "Tuning things up",
-  "Finding the right frequency",
-  "Getting the music ready",
-  "Tuning..",
-  "Putting the beat together",
+  " Finding your rhythm...",
+  " Loading your library...",
+  " Tuning the soundstage...",
+  " Warming up the strings...",
+  " Counting in...",
+  " Preparing your session...",
+  " Syncing your music...",
+  " Building today's vibe...",
 ];
 
 interface AppLoadingScreenProps {
@@ -19,20 +23,32 @@ export function AppLoadingScreen({ isLeaving }: AppLoadingScreenProps) {
 
   return (
     <div
-      className={`${styles.screen} ${isLeaving ? styles.leaving : ""}`}
+      className={cn(
+        "fixed inset-0 z-[100] grid place-items-center rounded-3xl bg-background transition-opacity duration-200",
+        isLeaving ? "pointer-events-none opacity-0" : "opacity-100",
+      )}
       role="status"
       aria-label="Loading"
       aria-live="polite"
     >
-      <div className={styles.ambient} />
-      <div className={styles.content}>
-        <img className={styles.mark} src={appIcon} alt="" />
-        <div className={styles.wordmark}>
-          <strong>{loadingLine}</strong>
-        </div>
-        <div className={styles.progress} aria-hidden="true">
-          <span />
-        </div>
+      
+      {/* Accent bloom behind the mark. */}
+      <div className="pointer-events-none absolute left-1/2 top-1/2 size-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-orange-600/5 blur-[120px]" />
+
+      <div className="relative flex flex-col items-center gap-5">
+        <motion.img
+          initial={{ opacity: 0, scale: 0.92 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ type: "spring", stiffness: 260, damping: 24 }}
+          className="size-20 rounded-2xl"
+          src={appIcon}
+          alt=""
+        /> 
+ 
+      <div className="flex items-end gap-4">
+       {/*  <AudioLoader /> */}  <strong className="text-sm font-medium text-foreground">{loadingLine}</strong>
+      </div>
+        
       </div>
     </div>
   );

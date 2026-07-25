@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { IconPlayerPlay, IconPlaylist } from "@tabler/icons-react";
+import { AnimatePresence, motion } from "motion/react";
+import { Loader, SpinnerSteps } from "@/components/motion/loader";
+import { cn } from "@/lib/utils";
+import { PlayActiveIcon, QueuePanelIcon } from "@/ui/icons";
 import { tauriFetch } from "../../../datasource/youtube/tauriFetch";
 import { TrackInfo } from "./TrackInfo";
 import { PlaybackControls } from "./PlaybackControls";
@@ -7,7 +10,6 @@ import { SeekBar } from "./SeekBar";
 import { VolumeControl } from "./VolumeControl";
 import { LyricsButton } from "./LyricsButton";
 import { useExtraPlayerControlsAlwaysVisible } from "../../settings/playerControls";
-import styles from "./PlayerBar.module.css";
 
 interface PlayerBarProps {
   onToggleLyrics: () => void;
@@ -135,65 +137,77 @@ export function PlayerBar({ onToggleLyrics, onToggleQueue, isQueueOpen, onConnec
 
   return (
     <>
-      {!isOnline && (
-        <div className={styles.offlinePrompt} role="status" aria-live="polite">
-          <span className={styles.offlineMessage}>You don't have an internet connection</span>
-          <button
-            type="button"
-            className={styles.reconnectButton}
-            onClick={() => void reconnect()}
-            disabled={isCheckingConnection}
-            aria-label="Reconnect to the internet"
+      <AnimatePresence>
+        {!isOnline && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="flex shrink-0 items-center justify-center gap-3 overflow-hidden bg-destructive/15 px-4 py-2 text-sm text-foreground"
+            role="status"
+            aria-live="polite"
           >
-            <IconPlayerPlay
-              className={isCheckingConnection ? styles.checkingIcon : undefined}
-              size={14}
-              fill="currentColor"
-              aria-hidden="true"
-            />
-            <span>{isCheckingConnection ? "Checking" : "Reconnect"}</span>
-          </button>
-        </div>
-      )}
+            <span>You don't have an internet connection</span>
+            <button
+              type="button"
+              className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => void reconnect()}
+              disabled={isCheckingConnection}
+              aria-label="Reconnect to the internet"
+            >
+              {isCheckingConnection ? (
+                <SpinnerSteps   size={24}  />
+              ) : (
+                <PlayActiveIcon size={14} aria-hidden="true" />
+              )}
+              <span>{isCheckingConnection ? "Checking" : "Reconnect"}</span>
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
+      <div
+        className="group/playerbar flex shrink-0 flex-col gap-1 bg-background/90 px-4 pb-3 pt-2 backdrop-blur"
+        onClick={handlePlayerBarClick}
+      >
+        <SeekBar />
 
-      <div className={styles.playerBar} onClick={handlePlayerBarClick}>
-   
-        <div className={styles.seekBarContainer}>
-          <SeekBar />
-        </div>
-
-        <div className={styles.controlsRow}>
-          <div className={styles.leftSection}>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
+          <div className="min-w-0">
             <TrackInfo />
           </div>
 
-          <div className={styles.centerSection}>
+          <div className="flex justify-center">
             <PlaybackControls extraControlsAlwaysVisible={extraControlsAlwaysVisible} />
           </div>
 
-          <div className={styles.rightSection}>
+          <div className="flex min-w-0 items-center justify-end gap-1">
             <div
-              className={`${styles.volumeControlsWrapper} ${
-                extraControlsAlwaysVisible ? "" : styles.controlsHoverOnly
-              }`}
+              className={cn(
+                "flex items-center gap-1 transition-opacity",
+                !extraControlsAlwaysVisible &&
+                  "opacity-0 focus-within:opacity-100 group-hover/playerbar:opacity-100",
+              )}
             >
-              <div className={styles.expandedControls}>
-                <LyricsButton onToggle={onToggleLyrics} />
+              <LyricsButton onToggle={onToggleLyrics} />
 
-                <button
-                  type="button"
-                  className={`${styles.iconButton} ${isQueueOpen ? styles.activeControl : ""}`}
-                  onClick={onToggleQueue}
-                  aria-label={isQueueOpen ? "Close queue" : "Open queue"}
-                  title={isQueueOpen ? "Close queue" : "Open queue"}
-                >
-                  <IconPlaylist size={18} />
-                </button>
-              </div>
-
-              <VolumeControl />
+              <button
+                type="button"
+                className={cn(
+                  "flex size-8 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  isQueueOpen
+                    ? "bg-card text-primary"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                onClick={onToggleQueue}
+                aria-label={isQueueOpen ? "Close queue" : "Open queue"}
+                title={isQueueOpen ? "Close queue" : "Open queue"}
+              >
+                <QueuePanelIcon size={18} />
+              </button>
             </div>
+
+            <VolumeControl />
           </div>
         </div>
       </div>

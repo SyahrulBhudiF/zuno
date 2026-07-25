@@ -1,15 +1,16 @@
-import {  IconPlaylist, IconTrash, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
+import { cn } from "@/lib/utils";
+import { CloseIcon, PlaylistIcon, TrashIcon } from "@/ui/icons";
 import { usePlayerSession, playerController } from "../../../player/playerStore";
-import styles from "./QueuePanel.module.css";
 import { ArtistLinks } from "../ArtistLinks";
 
 interface QueuePanelProps {
-  isOpen: boolean;
+  /** Open/close animation now lives in Layout's AnimatePresence wrapper. */
+  isOpen?: boolean;
   onClose: () => void;
 }
 
-export function QueuePanel({ isOpen, onClose }: QueuePanelProps) {
+export function QueuePanel({ onClose }: QueuePanelProps) {
   const panelRef = useRef<HTMLElement>(null);
   const draggedElementRef = useRef<HTMLElement | null>(null);
   const captureElementRef = useRef<HTMLElement | null>(null);
@@ -186,43 +187,47 @@ export function QueuePanel({ isOpen, onClose }: QueuePanelProps) {
     trackItem.style.willChange = "transform";
   };
 
-  const getTrackItemClassName = (absoluteIndex: number) => [
-    styles.trackItem,
-    draggedIndex !== null && styles.dragActive,
-    draggedIndex === absoluteIndex && styles.dragging,
-    dropTarget?.index === absoluteIndex
-      && (dropTarget.insertAfter ? styles.dropAfter : styles.dropBefore),
-  ].filter(Boolean).join(" ");
+  const getTrackItemClassName = (absoluteIndex: number) => cn(
+    "group/queue-item relative flex items-center gap-1 rounded-lg transition-colors hover:bg-card",
+    // handlePointerMove writes --drag-translation; this is what renders the lift.
+    "[transform:translateY(var(--drag-translation,0px))]",
+    draggedIndex !== null && "select-none",
+    draggedIndex === absoluteIndex && "opacity-40",
+    dropTarget?.index === absoluteIndex && !dropTarget.insertAfter &&
+      "before:absolute before:inset-x-2 before:-top-px before:h-0.5 before:rounded-full before:bg-primary",
+    dropTarget?.index === absoluteIndex && dropTarget.insertAfter &&
+      "after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-primary",
+  );
 
   return (
     <aside
       ref={panelRef}
-      className={`${styles.queuePanel} ${isOpen ? styles.open : styles.closing}`}
+      className="flex h-full flex-col overflow-y-auto overscroll-contain"
       aria-label="Queue panel"
     >
-      <div className={styles.header}>
-        <h2 className={styles.title}>QUEUE</h2>
+      <div className="sticky top-0 z-10 flex items-center justify-between bg-card/80 px-3 py-2.5 backdrop-blur">
+        <h2 className="text-xs font-semibold tracking-[0.14em] text-muted-foreground">QUEUE</h2>
         <button
           type="button"
-          className={styles.closeButton}
+          className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={onClose}
           aria-label="Close queue panel"
         >
-          <IconX size={18} />
+          <CloseIcon size={18} />
         </button>
       </div>
 
       {upcoming.length === 0 ? (
-        <p className={styles.emptyMessage}>No queued songs.</p>
+        <p className="px-3 py-8 text-center text-sm text-muted-foreground">No queued songs.</p>
       ) : (
         <>
           {manualQueue.length > 0 && (
-            <div className={styles.section}>
-              <div className={styles.sectionHeader}>
-                <IconPlaylist size={16} />
+            <div className="px-2 py-2">
+              <div className="flex items-center gap-1.5 px-1 pb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                <PlaylistIcon size={16} />
                 <span>Manually added</span>
               </div>
-              <div className={styles.trackList}>
+              <div className="flex flex-col gap-0.5">
                 {manualQueue.map((track, index) => (
                   <div
                     key={`${track.id}:${upcomingStartIndex + index}`}
@@ -232,7 +237,7 @@ export function QueuePanel({ isOpen, onClose }: QueuePanelProps) {
                   >
                     <button
                       type="button"
-                      className={styles.trackMain}
+                      className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       onPointerDown={(event) =>
                         handleTrackPointerDown(
                           event,
@@ -242,11 +247,11 @@ export function QueuePanel({ isOpen, onClose }: QueuePanelProps) {
                       }
                       onClick={() => handlePlay(index)}
                     >
-                      <span className={styles.trackIndex}>{index + 1}</span>
-                      <span className={styles.trackDetails}>
-                        <span className={styles.trackTitle}>{track.title}</span>
+                      <span className="w-5 shrink-0 text-right text-xs tabular-nums text-muted-foreground">{index + 1}</span>
+                      <span className="flex min-w-0 flex-col">
+                        <span className="truncate text-sm text-foreground">{track.title}</span>
                         <ArtistLinks
-                          className={styles.trackArtist}
+                          className="truncate text-xs text-muted-foreground"
                           artists={track.artists}
                           fallback={track.artist}
                         />
@@ -255,11 +260,11 @@ export function QueuePanel({ isOpen, onClose }: QueuePanelProps) {
                     </button>
                     <button
                       type="button"
-                      className={styles.removeButton}
+                      className="mr-1 flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity hover:text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/queue-item:opacity-100"
                       onClick={() => handleRemove(index)}
                       aria-label={`Remove ${track.title} from queue`}
                     >
-                      <IconTrash size={16} aria-hidden="true" />
+                      <TrashIcon size={16} aria-hidden="true" />
                     </button>
                   </div>
                 ))}
@@ -268,14 +273,14 @@ export function QueuePanel({ isOpen, onClose }: QueuePanelProps) {
           )}
 
           {autoQueue.length > 0 && (
-            <div className={styles.section}>
+            <div className="px-2 py-2">
               {manualQueue.length > 0 && (
-                <div className={styles.sectionHeader}>
-                  <IconPlaylist size={16} />
+                <div className="flex items-center gap-1.5 px-1 pb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                  <PlaylistIcon size={16} />
                   <span>Auto queue</span>
                 </div>
               )}
-              <div className={styles.trackList}>
+              <div className="flex flex-col gap-0.5">
                 {autoQueue.map((track, index) => (
                   <div
                     key={`${track.id}:${upcomingStartIndex + manualQueueLength + index}`}
@@ -287,7 +292,7 @@ export function QueuePanel({ isOpen, onClose }: QueuePanelProps) {
                   >
                     <button
                       type="button"
-                      className={styles.trackMain}
+                      className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       onPointerDown={(event) =>
                         handleTrackPointerDown(
                           event,
@@ -297,13 +302,13 @@ export function QueuePanel({ isOpen, onClose }: QueuePanelProps) {
                       }
                       onClick={() => handlePlay(manualQueueLength + index)}
                     >
-                      <span className={styles.trackIndex}>
+                      <span className="w-5 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
                         {manualQueueLength + index + 1}
                       </span>
-                      <span className={styles.trackDetails}>
-                        <span className={styles.trackTitle}>{track.title}</span>
+                      <span className="flex min-w-0 flex-col">
+                        <span className="truncate text-sm text-foreground">{track.title}</span>
                         <ArtistLinks
-                          className={styles.trackArtist}
+                          className="truncate text-xs text-muted-foreground"
                           artists={track.artists}
                           fallback={track.artist}
                         />
@@ -312,11 +317,11 @@ export function QueuePanel({ isOpen, onClose }: QueuePanelProps) {
                     </button>
                     <button
                       type="button"
-                      className={styles.removeButton}
+                      className="mr-1 flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity hover:text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/queue-item:opacity-100"
                       onClick={() => handleRemove(manualQueueLength + index)}
                       aria-label={`Remove ${track.title} from queue`}
                     >
-                      <IconTrash size={16} aria-hidden="true" />
+                      <TrashIcon size={16} aria-hidden="true" />
                     </button>
                   </div>
                 ))}

@@ -2,7 +2,35 @@ import { useEffect, useRef, useState } from "react";
 import { usePlayerState } from "../../../player/playerStore";
 import { playerController } from "../../../player/playerStore";
 import { playerUIStore, usePlayerUIState } from "../../stores/playerUIStore";
-import styles from "./SeekBar.module.css";
+
+/*
+ * Deliberately NOT beUI's RangeSlider: that component snaps to discrete steps, while
+ * seeking is continuous and commits asynchronously on release (see handleSeekEnd's
+ * pending-seek reconciliation). The native input keeps that behaviour; only the skin changed.
+ */
+const SEEK_SLIDER = [
+  "h-1 w-full cursor-pointer appearance-none rounded-full bg-transparent",
+  "disabled:cursor-default disabled:opacity-50",
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+  // Track: filled to --slider-progress, muted beyond it.
+  "[&::-webkit-slider-runnable-track]:h-1 [&::-webkit-slider-runnable-track]:rounded-full",
+  "[&::-webkit-slider-runnable-track]:bg-[linear-gradient(to_right,var(--color-primary)_var(--slider-progress),var(--color-muted)_var(--slider-progress))]",
+  "[&::-moz-range-track]:h-1 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-muted",
+  "[&::-moz-range-progress]:h-1 [&::-moz-range-progress]:rounded-full [&::-moz-range-progress]:bg-primary",
+  // Thumb: hidden until hover/drag, matching the old bar's minimal resting state.
+  "[&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full",
+  "[&::-webkit-slider-thumb]:-mt-1 [&::-webkit-slider-thumb]:bg-foreground [&::-webkit-slider-thumb]:opacity-0",
+  "[&::-webkit-slider-thumb]:transition-opacity hover:[&::-webkit-slider-thumb]:opacity-100",
+  "focus-visible:[&::-webkit-slider-thumb]:opacity-100",
+  "[&::-moz-range-thumb]:size-3 [&::-moz-range-thumb]: [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-foreground",
+].join(" ");
+
+/**
+ * Smallest time delta worth a re-render. The readout is whole seconds and the bar advances
+ * about one pixel per quarter-second at typical widths, so anything finer is invisible.
+ * 0.2s caps the player bar at ~5 renders/second instead of 60.
+ */
+const TIME_COMMIT_THRESHOLD_S = 0.2;
 
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || !isFinite(seconds)) return "0:00";
@@ -22,6 +50,7 @@ export function SeekBar() {
   const seekAnimationPromiseRef = useRef<Promise<void> | null>(null);
   const pendingSeekRef = useRef<{ target: number; startedAt: number } | null>(null);
   const displayedTimeRef = useRef(0);
+  const durationRef = useRef(0);
   const pointerStartRef = useRef({ x: 0, y: 0 });
   const isPointerDownRef = useRef(false);
   const isDraggingRef = useRef(false);
@@ -71,6 +100,16 @@ export function SeekBar() {
 
   useEffect(() => () => cancelSeekAnimation(), []);
 
+  /*
+   * Poll the engine on a frame loop, but only commit to state when the value moved enough to
+   * be visible. This used to setState on every frame, re-rendering the whole player bar 60
+   * times a second for a readout that shows whole seconds and a bar where one pixel is
+   * roughly a quarter of a second — about 55 of those 60 renders painted an identical frame.
+   *
+   * The loop itself stays at rAF so a seek still lands on the very next frame; it is the
+   * commit that is gated. Seeks and drags bypass this entirely — they call setDisplayedTime
+   * directly, so they remain frame-accurate.
+   */
   useEffect(() => {
     let animationFrameId = 0;
     const update = () => {
@@ -85,9 +124,17 @@ export function SeekBar() {
           setDisplayedTime(pendingSeek.target);
         } else {
           pendingSeekRef.current = null;
-          setDisplayedTime(engineTime);
+          if (Math.abs(engineTime - displayedTimeRef.current) >= TIME_COMMIT_THRESHOLD_S) {
+            setDisplayedTime(engineTime);
+          }
         }
-        setDuration(playerController.getDuration());
+
+        // Duration changes once per track, not once per frame.
+        const engineDuration = playerController.getDuration();
+        if (engineDuration !== durationRef.current) {
+          durationRef.current = engineDuration;
+          setDuration(engineDuration);
+        }
       }
       animationFrameId = requestAnimationFrame(update);
     };
@@ -170,8 +217,10 @@ export function SeekBar() {
   const isDisabled = !state.currentTrack || state.status === "loading";
 
   return (
-    <div className={styles.seekBar}>
-      <span className={styles.timeDisplay}>{formatTime(currentTime)}</span>
+    <div className="group/seek flex w-full items-center gap-2.5">
+      <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+        {formatTime(currentTime)}
+      </span>
       <input
         type="range"
         min="0"
@@ -185,13 +234,15 @@ export function SeekBar() {
         onPointerUp={(event) => void handleSeekEnd(event)}
         onPointerCancel={handleSeekCancel}
         disabled={isDisabled}
-        className={styles.seekSlider}
+        className={SEEK_SLIDER}
         style={{
           "--slider-progress": `${duration > 0 ? (currentTime / duration) * 100 : 0}%`,
         } as React.CSSProperties}
         aria-label="Seek"
       />
-      <span className={styles.timeDisplay}>{formatTime(duration)}</span>
+      <span className="w-10 shrink-0 text-xs tabular-nums text-muted-foreground">
+        {formatTime(duration)}
+      </span>
     </div>
   );
 }

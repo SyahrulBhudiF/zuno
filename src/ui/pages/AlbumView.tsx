@@ -1,5 +1,7 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import { IconArrowsShuffle, IconLoader2, IconPlayerPlay, IconSearch, IconX } from "@tabler/icons-react";
+import { cn } from "@/lib/utils";
+import { Loader } from "@/components/motion/loader";
+import { CloseIcon, PlayActiveIcon, SearchIcon, ShuffleActiveIcon } from "@/ui/icons";
 import type { Album, Track } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
 import type { PlayerControllerActions } from "../../player/playerStore";
@@ -7,9 +9,20 @@ import { shuffleTracks } from "../../player/shuffleTracks";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
 import { ArtistLinks } from "../components/ArtistLinks";
 import { TrackArtwork } from "../components/TrackArtwork";
-import styles from "./AlbumView.module.css";
 import { useKeyboardShortcuts } from "../settings/keyboardShortcuts";
 import { shouldStartPageSearch } from "./pageSearchKeyboard";
+
+/*
+ * Collapsed search affordance that widens on hover/focus or while it holds a query —
+ * the behaviour the original .playlistSearch width transition provided.
+ */
+const SEARCH_FIELD =
+  "group/search flex min-h-8 items-center gap-1.5 overflow-hidden rounded-full bg-white/[0.04] px-2.5 " +
+  "text-muted-foreground transition-[width,background-color] duration-200 cursor-text " +
+  "hover:bg-white/[0.08] focus-within:bg-white/[0.08] focus-within:text-foreground " +
+  "[&_input]:min-w-0 [&_input]:flex-1 [&_input]:bg-transparent [&_input]:text-sm " +
+  "[&_input]:text-foreground [&_input]:outline-none [&_input]:placeholder:text-muted-foreground";
+const SEARCH_FIELD_COLLAPSED = "w-9 hover:w-56 focus-within:w-56";
 
 interface AlbumViewProps {
   album?: Album;
@@ -27,8 +40,8 @@ function getTrackRenderKey(track: Track, index: number): string {
 
 function AlbumLoadingSpinner({ label }: { label: string }) {
   return (
-    <div className={styles.loadingState} role="status" aria-live="polite" aria-label={label}>
-      <IconLoader2 className={styles.loadingIcon} size={30} aria-hidden="true" />
+    <div className="grid place-items-center px-2 py-16 text-muted-foreground" role="status" aria-live="polite" aria-label={label}>
+      <Loader variant="spinner" size={18} />
     </div>
   );
 }
@@ -127,50 +140,48 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
   };
 
   return (
-    <div className={styles.root}>
-      <header className={styles.header}>
+    <div className="flex flex-col gap-8">
+      <header className="flex items-end gap-5">
         <TrackArtwork
-          className={styles.cover}
+          className="size-44 shrink-0 rounded-xl object-cover shadow-2xl"
           artworkUrl={album.artworkUrl}
           iconSize={80}
           loading="eager"
           variant="album"
         />
-        <div className={styles.headerText}>
-          <span className={styles.eyebrow}>Album</span>
-          <h1 className={styles.title}>{album.title}</h1>
-          <p className={styles.artist}>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <span className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Album</span>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">{album.title}</h1>
+          <p className="text-sm text-muted-foreground">
             <ArtistLinks artists={album.artists} fallback={album.artist} />
           </p>
         </div>
         <button
-          className={styles.shuffleButton}
+          className="flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           type="button"
           disabled={isLoading || Boolean(error) || tracks.length === 0}
           onClick={playShuffled}
         >
-          <IconArrowsShuffle size={18} aria-hidden="true" />
+          <ShuffleActiveIcon size={18} aria-hidden="true" />
           <span>Shuffle</span>
         </button>
       </header>
       {isLoading && <AlbumLoadingSpinner label="Loading songs" />}
-      {error && <p className={styles.message}>{error}</p>}
+      {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}
       {!isLoading && !error && tracks.length > 0 && (
         <>
           <div
-            className={styles.sortOptions}
+            className="flex flex-wrap items-center gap-1.5 self-start [&>button]:flex [&>button]:min-h-8 [&>button]:min-w-0 [&>button]:items-center [&>button]:justify-center [&>button]:gap-1.5 [&>button]:rounded-full [&>button]:bg-white/[0.04] [&>button]:px-3 [&>button]:text-sm [&>button]:font-medium [&>button]:text-muted-foreground [&>button]:transition-colors hover:[&>button]:bg-white/[0.08] hover:[&>button]:text-foreground focus-visible:[&>button]:outline-none focus-visible:[&>button]:ring-2 focus-visible:[&>button]:ring-ring"
             role="group"
             aria-label="Album song tools"
           >
             <div
-              className={`${styles.playlistSearch} ${
-                albumSearchQuery ? styles.playlistSearchActive : ""
-              }`}
+              className={cn(SEARCH_FIELD, albumSearchQuery ? "w-56" : SEARCH_FIELD_COLLAPSED)}
               role="search"
               onClick={() => albumSearchInputRef.current?.focus()}
             >
-              <span className={styles.playlistSearchIcon}>
-                <IconSearch size={16} aria-hidden="true" />
+              <span className="shrink-0">
+                <SearchIcon size={16} aria-hidden="true" />
               </span>
               <input
                 ref={albumSearchInputRef}
@@ -183,27 +194,27 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
               />
               {albumSearchQuery && (
                 <button
-                  className={styles.playlistSearchClear}
+                  className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   type="button"
                   aria-label="Clear album search"
                   onClick={() => setAlbumSearchQuery("")}
                 >
-                  <IconX size={14} aria-hidden="true" />
+                  <CloseIcon size={14} aria-hidden="true" />
                 </button>
               )}
             </div>
           </div>
           {visibleTracks.length === 0 && albumSearchQuery.trim() ? (
-            <p className={styles.message}>No songs match this search.</p>
+            <p className="px-2 py-10 text-center text-sm text-muted-foreground">No songs match this search.</p>
           ) : (
-            <div className={styles.trackList}>
+            <div className="flex flex-col gap-0.5">
               {visibleTracks.map((track, index) => {
                 const trackKey = getTrackKey(track);
                 return (
                   <button
                     key={getTrackRenderKey(track, index)}
-                    className={`${styles.track} ${
-                      enteringTrackDelayIndexes.has(trackKey) ? styles.trackEntering : ""
+                    className={`${"group/row flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"} ${
+                      enteringTrackDelayIndexes.has(trackKey) ? "" : ""
                     }`}
                     style={{
                       "--track-enter-delay": `${Math.min(
@@ -214,16 +225,16 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
                     onContextMenu={(event) => openTrackMenu(event, track)}
                     onClick={() => void playerController.playTrackById(track.id, visibleTracks)}
                   >
-                    <span className={styles.trackIndex}>{index + 1}</span>
-                    <span className={styles.trackText}>
-                      <span className={styles.trackTitle}>{track.title}</span>
+                    <span className="w-6 shrink-0 text-right text-xs tabular-nums text-muted-foreground">{index + 1}</span>
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate text-sm font-medium text-foreground">{track.title}</span>
                       <ArtistLinks
-                        className={styles.trackArtist}
+                        className="truncate text-xs text-muted-foreground"
                         artists={track.artists}
                         fallback={track.artist}
                       />
                     </span>
-                    <IconPlayerPlay size={18} />
+                    <PlayActiveIcon size={18} />
                   </button>
                 );
               })}

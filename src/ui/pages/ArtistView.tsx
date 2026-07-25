@@ -1,14 +1,7 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import {
-  IconArrowsShuffle,
-  IconCheck,
-  IconCopy,
-  IconLoader2,
-  IconPlayerPlay,
-  IconUser,
-  IconUserPlus,
-} from "@tabler/icons-react";
+import { Loader } from "@/components/motion/loader";
+import { CheckIcon, CopyIcon, PlayActiveIcon, ShuffleActiveIcon, UserIcon, UserPlusIcon } from "@/ui/icons";
 import type { Album, Artist, ArtistPage, Playlist, Track } from "../../datasource/types";
 import { getArtworkUrlCandidates } from "../../datasource/youtube/artwork";
 import type { LibraryController } from "../../player/LibraryController";
@@ -19,7 +12,6 @@ import { ArtistLinks } from "../components/ArtistLinks";
 import { TrackArtwork } from "../components/TrackArtwork";
 import { usePlaylistContextMenu } from "../components/PlaylistContextMenu";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
-import styles from "./ArtistView.module.css";
 
 type ReleaseFilter = "all" | "album" | "single" | "ep";
 
@@ -168,9 +160,9 @@ export function ArtistView({
   };
 
   return (
-    <div className={styles.root}>
-      <header className={styles.header}>
-        <div className={styles.portrait}>
+    <div className="flex flex-col gap-8">
+      <header className="flex items-end gap-5">
+        <div className="size-44 shrink-0 rounded-full object-cover shadow-2xl">
           {currentArtistArtworkUrl ? (
             <img
               key={currentArtistArtworkUrl}
@@ -186,39 +178,39 @@ export function ArtistView({
               }}
             />
           ) : (
-            <IconUser size={84} stroke={1.4} />
+            <UserIcon size={84} strokeWidth={1.4} />
           )}
         </div>
-        <div className={styles.headerText}>
-          <span className={styles.eyebrow}>Artist</span>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <span className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Artist</span>
           <h1>
             <button
               type="button"
-              className={styles.artistTitleButton}
+              className="group/title flex items-center gap-2 text-left text-3xl font-bold tracking-tight text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => void copyArtistUrl()}
               aria-label={`Copy ${displayedArtist.name} URL`}
             >
               <span>{displayedArtist.name}</span>
-              <IconCopy className={styles.artistTitleCopyIcon} size={24} aria-hidden="true" />
+              <CopyIcon className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/title:opacity-100" size={24} aria-hidden="true" />
             </button>
           </h1>
           {displayedArtist.subscriberCount && (
             <p>{displayedArtist.subscriberCount}</p>
           )}
         </div>
-        <div className={styles.headerActions}>
+        <div className="flex flex-wrap items-center gap-2">
           <button
-            className={styles.subscribeButton}
+            className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             type="button"
             disabled={isLoading || Boolean(error) || isSubscribing}
             onClick={() => void toggleArtistSubscription()}
           >
             {isSubscribing ? (
-              <IconLoader2 className={styles.buttonLoadingIcon} size={18} />
+              <Loader variant="spinner" size={18} />
             ) : isSubscribed ? (
-              <IconCheck size={18} />
+              <CheckIcon size={18} />
             ) : (
-              <IconUserPlus size={18} />
+              <UserPlusIcon size={18} />
             )}
             <span>
               {isSubscribing
@@ -227,49 +219,49 @@ export function ArtistView({
             </span>
           </button>
           <button
-            className={styles.shuffleButton}
+            className="flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             type="button"
             disabled={isLoading || Boolean(error) || !page?.allSongs.length}
             onClick={playShuffled}
           >
-            <IconArrowsShuffle size={18} />
+            <ShuffleActiveIcon size={18} />
             <span>Shuffle</span>
           </button>
         </div>
       </header>
 
-      {isLoading && <p className={styles.message}>Loading artist...</p>}
-      {error && <p className={styles.message}>{error}</p>}
+      {isLoading && <p className="px-2 py-10 text-center text-sm text-muted-foreground">Loading artist...</p>}
+      {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}
 
       {!isLoading && !error && page && (
         <>
           {popularSongs.length > 0 && (
-            <section className={styles.section}>
+            <section className="flex flex-col gap-3">
               <h2>Popular</h2>
-              <div className={styles.trackList}>
+              <div className="flex flex-col gap-0.5">
                 {popularSongs.map((track, index) => (
                   <button
                     key={track.id}
                     type="button"
-                    className={styles.track}
+                    className="group/row flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     onContextMenu={(event) => openTrackMenu(event, track)}
                     onClick={() => void playerController.playTrackById(
                       track.id,
                       page.allSongs,
                     )}
                   >
-                    <span className={styles.index}>{index + 1}</span>
+                    <span className="w-6 shrink-0 text-right text-xs tabular-nums text-muted-foreground">{index + 1}</span>
                     <TrackArtwork
-                      className={styles.trackArtwork}
+                      className="size-10 shrink-0 rounded-md object-cover"
                       artworkUrl={track.artworkUrl}
                       iconSize={22}
                     />
-                    <span className={styles.trackText}>
+                    <span className="flex min-w-0 flex-1 flex-col">
                       <strong>{track.title}</strong>
                       <ArtistLinks artists={track.artists} fallback={track.artist} suppressArtistId={displayedArtist.id} />
                     </span>
-                    <span className={styles.views}>{compactViews(track)}</span>
-                    <IconPlayerPlay size={18} />
+                    <span className="text-lg font-semibold text-foreground">{compactViews(track)}</span>
+                    <PlayActiveIcon size={18} />
                   </button>
                 ))}
               </div>
@@ -277,11 +269,11 @@ export function ArtistView({
           )}
 
           {page.releases.length > 0 && (
-            <section className={styles.section}>
-              <div className={styles.sectionHeading}>
+            <section className="flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-3">
                 <h2>Releases</h2>
                 <div
-                  className={styles.filters}
+                  className="flex flex-wrap items-center gap-1.5 self-start [&>button]:flex [&>button]:min-h-8 [&>button]:min-w-0 [&>button]:items-center [&>button]:justify-center [&>button]:gap-1.5 [&>button]:rounded-full [&>button]:bg-white/[0.04] [&>button]:px-3 [&>button]:text-sm [&>button]:font-medium [&>button]:text-muted-foreground [&>button]:transition-colors hover:[&>button]:bg-white/[0.08] hover:[&>button]:text-foreground focus-visible:[&>button]:outline-none focus-visible:[&>button]:ring-2 focus-visible:[&>button]:ring-ring"
                   role="group"
                   aria-label="Release type"
                   style={{
@@ -294,7 +286,7 @@ export function ArtistView({
                       <button
                         key={type}
                         type="button"
-                        className={filter === type ? styles.activeFilter : ""}
+                        className={filter === type ? "bg-primary/15 text-foreground" : ""}
                         aria-pressed={filter === type}
                         onClick={() => setFilter(type)}
                       >
@@ -307,11 +299,11 @@ export function ArtistView({
                     ))}
                 </div>
               </div>
-              <div key={filter} className={`${styles.cardGrid} ${styles.releaseGrid}`}>
+              <div key={filter} className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr))] grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr))]">
                 {visibleReleases.map((release) => {
                   const hasLinkedArtists = Boolean(release.artists?.length);
                   return (
-                    <div key={release.id} className={styles.releaseCard}>
+                    <div key={release.id} className="">
                       <AlbumCard
                         artworkUrl={release.artworkUrl}
                         title={release.title}
@@ -336,9 +328,9 @@ export function ArtistView({
           )}
 
           {page.playlists.length > 0 && (
-            <section className={styles.section}>
+            <section className="flex flex-col gap-3">
               <h2>Playlists</h2>
-              <div className={styles.cardGrid}>
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr))]">
                 {page.playlists.map((playlist) => (
                   <AlbumCard
                     key={playlist.id}
@@ -355,9 +347,9 @@ export function ArtistView({
         </>
       )}
       {toast && createPortal(
-        <div className={styles.toast} role="status">
+        <div className="fixed bottom-28 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-2 rounded-full bg-popover/95 px-4 py-2 text-sm text-foreground shadow-2xl backdrop-blur" role="status">
           {toast === "Url copied to clipboard" && (
-            <IconCheck size={18} aria-hidden="true" />
+            <CheckIcon size={18} aria-hidden="true" />
           )}
           <span>{toast}</span>
         </div>,

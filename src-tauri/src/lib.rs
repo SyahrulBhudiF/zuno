@@ -2278,7 +2278,9 @@ pub fn run() {
                     thread::spawn(move || {
                         thread::sleep(Duration::from_millis(100));
 
-                        if let Some(main) = app.get_webview_window("main") {
+                        let main = app.get_webview_window("main");
+
+                        if let Some(main) = &main {
                             if let Ok(true) = main.is_focused() {
                                 return;
                             }
@@ -2288,6 +2290,18 @@ pub fn run() {
                             if let Ok(true) = mini.is_focused() {
                                 return;
                             }
+                        }
+
+                        // Minimising is an unambiguous "put this away" — the frontend shows the
+                        // mini player for it even while a recent window drag is suppressing the
+                        // ordinary blur signal.
+                        let minimized = main
+                            .as_ref()
+                            .and_then(|main| main.is_minimized().ok())
+                            .unwrap_or(false);
+                        if minimized {
+                            let _ = app.emit("main-window-minimized", ());
+                            return;
                         }
 
                         let _ = app.emit("main-window-backgrounded", ());

@@ -4,6 +4,7 @@ import App from "./ui/App";
 import "./ui/styles/global.css";
 import { logInternalError, logInternalInfo } from "./internal/logging";
 import { applyPaperPcMode, hydratePaperPcMode } from "./ui/settings/paperPcMode";
+import { applyTheme, hydrateTheme, watchSystemTheme } from "./ui/settings/theme";
 import {
   applyNativeWindowControls,
   hydrateWindowControlSettings,
@@ -22,6 +23,9 @@ import { hydratePlaybackSettings } from "./player/playbackSettings";
 
 logInternalInfo("main.bootstrap start");
 applyPlatformAttributes();
+// Before React mounts: a late theme apply shows a flash of the wrong palette.
+applyTheme();
+watchSystemTheme();
 applyPaperPcMode();
 void applyNativeWindowControls();
 void hydrateMainWindowGeometry().then(restoreMainWindowGeometry).catch((error) => {
@@ -29,6 +33,7 @@ void hydrateMainWindowGeometry().then(restoreMainWindowGeometry).catch((error) =
 });
 void Promise.all([
   hydratePaperPcMode(),
+  hydrateTheme(),
   hydrateWindowControlSettings(),
   hydrateMiniPlayerSettings(),
   hydratePlayerControlSettings(),

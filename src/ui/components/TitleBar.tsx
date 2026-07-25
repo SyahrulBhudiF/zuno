@@ -1,8 +1,11 @@
-import { IconLayoutDashboard } from "@tabler/icons-react";
-import { useMemo, useRef } from "react";
-import styles from "./TitleBar.module.css";
+import { useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { cn } from "@/lib/utils";
+import { Tooltip } from "@/components/motion/tooltip";
+import { GitHubIcon, SettingsIcon } from "@/ui/icons";
+import { GITHUB_REPOSITORY_URL } from "../links";
 import { logInternalError, logInternalInfo, logInternalWarn } from "../../internal/logging";
 import { MusicTabs } from "./MusicTabs";
 import type { Tab } from "../types/tab";
@@ -10,6 +13,9 @@ import {
   useNativeWindowControls,
   useWindowsStyleWindowControls,
 } from "../settings/windowControls";
+import { Button } from "@/components/motion/button";
+import { motion } from "motion/react";
+import appIcon from "../../../assets/img/Logo.png";
 
 interface TitleBarProps {
   tabs: Tab[];
@@ -22,8 +28,13 @@ interface TitleBarProps {
   onCloseTab: (tabId: string) => void;
   onSwitchTab: (tabId: string) => void;
   onReorderTab: (draggedTabId: string, targetTabId: string, insertAfter: boolean) => void;
+  onOpenSettings: () => void;
   onboardingFirstTabId?: string;
 }
+
+/** macOS-style traffic lights vs Windows-style square controls. */
+const WINDOW_BUTTON_BASE =
+  "flex items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 export function TitleBar({
   tabs,
@@ -36,6 +47,7 @@ export function TitleBar({
   onCloseTab,
   onSwitchTab,
   onReorderTab,
+  onOpenSettings,
   onboardingFirstTabId,
 }: TitleBarProps) {
   const appWindow = getCurrentWindow();
@@ -48,17 +60,6 @@ export function TitleBar({
   } | null>(null);
   const suppressHomeClickRef = useRef(false);
   const hideHomeText = sidebarWidth <= 120;
-
-  const homeButtonClasses = useMemo(() => [
-    styles.homeButton,
-    isHomeActive ? styles.homeButtonActive : "",
-    hideHomeText ? styles.homeButtonIconOnly : "",
-  ].filter(Boolean).join(" "), [isHomeActive, hideHomeText]);
-
-  const windowControlsClasses = [
-    styles.windowControls,
-    windowsStyleWindowControls ? styles.windowControlsWindows : "",
-  ].filter(Boolean).join(" ");
 
   const startWindowDrag = async () => {
     try {
@@ -100,11 +101,15 @@ export function TitleBar({
   };
 
   return (
-    <div className={styles.root}>
+    <div className="relative z-30 flex h-[var(--titlebar-height)] shrink-0 items-stretch bg-background/90 backdrop-blur ">
       <button
         type="button"
-        className={homeButtonClasses}
         style={{ width: `${sidebarWidth}px` }}
+        className={cn(
+          "flex shrink-0 items-center gap-1 px-4 text-sm font-bold  transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
+          isHomeActive ? "text-primary" : "text-muted-foreground hover:text-foreground",
+          hideHomeText && "justify-center gap-0 px-0",
+        )}
         onClick={() => {
           if (suppressHomeClickRef.current) {
             suppressHomeClickRef.current = false;
@@ -147,8 +152,15 @@ export function TitleBar({
         aria-label="Home"
         aria-current={isHomeActive ? "page" : undefined}
       >
-        <IconLayoutDashboard size={18} aria-hidden="true" />
-        {!hideHomeText && <span>Home</span>}
+         <motion.img
+          initial={{ opacity: 0, scale: 0.92 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ type: "spring", stiffness: 260, damping: 24 }}
+          className="size-6 "
+          src={appIcon}
+          alt=""
+        /> 
+        {!hideHomeText && <h3 >zuno_</h3>}
       </button>
 
       <MusicTabs
@@ -163,7 +175,7 @@ export function TitleBar({
       />
 
       <div
-        className={styles.dragArea}
+        className="min-w-6 flex-1"
         aria-label="Drag window"
         onPointerDown={(event) => {
           if (event.button !== 0) return;
@@ -172,32 +184,83 @@ export function TitleBar({
         onDoubleClick={() => void handleToggleMaximize()}
       />
 
+      {/*
+        App actions sit immediately left of the window controls, separated by a hairline so
+        "things that act on the app" and "things that act on the window" stay legible as two
+        groups. They render regardless of the native-controls setting, since on Linux/native
+        chrome the window buttons disappear but these still belong here.
+      */}
+      <div className="flex shrink-0 items-center gap-1 pl-2 pr-1" aria-label="App actions">
+        <Tooltip content="Source on GitHub">
+          <Button
+            variant='ghost'
+          size='icon'
+            onClick={() => void openUrl(GITHUB_REPOSITORY_URL)}
+            aria-label="Open the project on GitHub"
+          >
+            <GitHubIcon size={16} aria-hidden="true"  />
+          </Button>
+        </Tooltip>
+        <Tooltip content="Settings">
+        <Button
+            variant='ghost'
+          size='icon'
+            
+            onClick={onOpenSettings}
+            aria-label="Open settings"
+          >
+            <SettingsIcon size={17} aria-hidden="true" />
+          </Button>
+        </Tooltip>
+      </div>
+
       {!nativeWindowControls && (
-        <div className={windowControlsClasses} aria-label="Window controls">
+        <span className="my-3 w-px shrink-0 bg-border" aria-hidden="true" />
+      )}
+
+      {!nativeWindowControls && (
+        <div
+          className={cn(
+            "flex shrink-0 items-center",
+            windowsStyleWindowControls ? "gap-0" : "gap-1.5 px-3",
+          )}
+          aria-label="Window controls"
+        >
           <button
             type="button"
             aria-label="Minimize"
-            className={`${styles.windowButton} ${styles.windowButtonMinimize}`}
+            className={cn(
+              WINDOW_BUTTON_BASE,
+              windowsStyleWindowControls
+                ? "h-full w-12 hover:bg-card"
+                : "size-3 rounded-full bg-muted-foreground/40 hover:bg-muted-foreground",
+            )}
             onClick={() => void handleMinimize()}
           >
-            <span aria-hidden="true" className={styles.windowIcon}>
-              &#8211;
-            </span>
+            {windowsStyleWindowControls && <span aria-hidden="true">&#8211;</span>}
           </button>
           <button
             type="button"
             aria-label="Maximize"
-            className={`${styles.windowButton} ${styles.windowButtonMaximize}`}
+            className={cn(
+              WINDOW_BUTTON_BASE,
+              windowsStyleWindowControls
+                ? "h-full w-12 hover:bg-card"
+                : "size-3 rounded-full bg-muted-foreground/40 hover:bg-muted-foreground",
+            )}
             onClick={() => void handleToggleMaximize()}
           >
-            <span aria-hidden="true" className={styles.windowIcon}>
-              □
-            </span>
+            {windowsStyleWindowControls && <span aria-hidden="true">□</span>}
           </button>
           <button
             type="button"
             aria-label="Close"
-            className={`${styles.windowButton} ${styles.windowButtonClose}`}
+            className={cn(
+              WINDOW_BUTTON_BASE,
+              windowsStyleWindowControls
+                ? "h-full w-12 hover:bg-destructive hover:text-destructive-foreground"
+                : "size-3 rounded-full bg-muted-foreground/40 hover:bg-primary",
+            )}
             onClick={() => {
               logInternalInfo("TitleBar.close clicked");
               void invoke("quit_app")
@@ -211,9 +274,7 @@ export function TitleBar({
                 });
             }}
           >
-            <span aria-hidden="true" className={styles.windowIcon}>
-              &#10005;
-            </span>
+            {windowsStyleWindowControls && <span aria-hidden="true">&#10005;</span>}
           </button>
         </div>
       )}

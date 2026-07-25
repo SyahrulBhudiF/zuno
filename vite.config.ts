@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 // @ts-expect-error node builtin types are not included for the Vite config
 import { fileURLToPath } from "node:url";
 
@@ -9,7 +10,12 @@ const resolveEntry = (path: string) => fileURLToPath(new URL(path, import.meta.u
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      "@": resolveEntry("./src"),
+    },
+  },
   build: {
     rollupOptions: {
       input: {

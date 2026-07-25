@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { IconDisc, IconMusic, IconPlaylist, IconUser } from "@tabler/icons-react";
+import { cn } from "@/lib/utils";
+import { AlbumIcon, MusicNoteIcon, PlaylistIcon, UserIcon } from "@/ui/icons";
 import { getArtworkUrlCandidates } from "../../datasource/youtube/artwork";
+import {
+  getResolvedArtworkUrl,
+  rememberResolvedArtworkUrl,
+} from "../../internal/artworkCache";
 import { tauriFetch } from "../../datasource/youtube/tauriFetch";
-import styles from "./TrackArtwork.module.css";
 
 const ARTWORK_RETRY_DELAYS_MS = [500, 1500];
 
@@ -33,10 +37,16 @@ export function TrackArtwork({
   retryOnError = false,
   variant = "track",
 }: TrackArtworkProps) {
-  const artworkCandidates = useMemo(
-    () => getArtworkUrlCandidates(artworkUrl),
-    [artworkUrl],
-  );
+  /*
+   * A previously resolved URL short-circuits the whole candidate walk: it is the only
+   * candidate, so a remount paints from cache instead of re-requesting the ones that failed
+   * last time. Falls back to the normal ladder when nothing is cached yet.
+   */
+  const artworkCandidates = useMemo(() => {
+    if (!artworkUrl?.trim()) return [];
+    const cached = getResolvedArtworkUrl(artworkUrl);
+    return cached ? [cached] : getArtworkUrlCandidates(artworkUrl);
+  }, [artworkUrl]);
   const [artworkIndex, setArtworkIndex] = useState(0);
   const [retryCount, setRetryCount] = useState(0);
   const [proxiedArtworkUrl, setProxiedArtworkUrl] = useState<string | null>(null);
@@ -49,12 +59,12 @@ export function TrackArtwork({
   const isArtworkLoaded = loadedArtworkUrl === currentArtworkUrl;
   const FallbackIcon =
     variant === "artist"
-      ? IconUser
+      ? UserIcon
       : variant === "album"
-        ? IconMusic
+        ? MusicNoteIcon
         : variant === "playlist"
-          ? IconPlaylist
-          : IconDisc;
+          ? PlaylistIcon
+          : AlbumIcon;
 
   useEffect(() => {
     setArtworkIndex(0);
@@ -91,8 +101,14 @@ export function TrackArtwork({
       })
       .then((blob) => {
         objectUrl = URL.createObjectURL(blob);
-        if (active) setProxiedArtworkUrl(objectUrl);
-        else URL.revokeObjectURL(objectUrl);
+        if (!active) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+        // Handed to the cache, which now owns revoking it — see the unmount note below.
+        rememberResolvedArtworkUrl(artworkUrl, objectUrl, { ownsObjectUrl: true });
+        objectUrl = null;
+        setProxiedArtworkUrl(getResolvedArtworkUrl(artworkUrl) ?? null);
       })
       .catch(() => {
         if (active) setProxiedArtworkUrl(null);
@@ -100,24 +116,53 @@ export function TrackArtwork({
 
     return () => {
       active = false;
+      // Only revokes a blob the cache never took ownership of; a cached one stays alive so
+      // the next mount reuses it instead of re-downloading.
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [artworkCandidates.length, artworkIndex, artworkUrl, proxiedArtworkUrl]);
 
   return (
-    <span className={`${styles.root} ${className ?? ""}`}>
+    <span
+      className={cn(
+        "relative flex shrink-0 items-center justify-center overflow-hidden text-muted-foreground",
+        className,
+      )}
+    >
       <FallbackIcon
-        className={`${styles.fallbackIcon} ${isArtworkLoaded ? styles.fallbackIconHidden : ""}`}
+        className={cn(
+          "transition-opacity duration-200",
+          isArtworkLoaded ? "opacity-0" : "opacity-65",
+        )}
         size={iconSize}
         aria-hidden="true"
       />
       {currentArtworkUrl && (
         <img
-          className={isArtworkLoaded ? styles.imageLoaded : ""}
+          /*
+           * Sized inline rather than with h-full/w-full utilities: the artwork sits inside
+           * aspect-ratio and 3D-transformed (TiltCard) parents where a percentage height can
+           * resolve against an indefinite container. Explicit inset + 100% is unambiguous.
+           */
+          style={{ width: "100%", height: "100%" }}
+          className={cn(
+            "absolute inset-0 object-cover transition-opacity duration-200",
+            isArtworkLoaded ? "opacity-100" : "opacity-0",
+          )}
           src={currentArtworkUrl}
           alt=""
           loading={loading}
-          onLoad={() => setLoadedArtworkUrl(currentArtworkUrl)}
+          onLoad={() => {
+            setLoadedArtworkUrl(currentArtworkUrl);
+            /*
+             * Record the candidate that actually rendered, keyed by the source URL. The
+             * retry suffix is stripped: it exists only to bust a failed request, and caching
+             * it would make every future mount replay that cache-buster.
+             */
+            if (artworkUrl && baseArtworkUrl && !baseArtworkUrl.startsWith("blob:")) {
+              rememberResolvedArtworkUrl(artworkUrl, baseArtworkUrl);
+            }
+          }}
           onError={() => {
             setLoadedArtworkUrl(null);
             if (retryOnError && retryCount < ARTWORK_RETRY_DELAYS_MS.length) {

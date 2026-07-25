@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, useMemo, useSyncExternalStore } from "react";
+import { motion } from "motion/react";
+import { cn } from "@/lib/utils";
 import {
-  IconDisc,
-  IconFolder,
-  IconHeart,
-  IconPlaylist,
-  IconRefresh,
-} from "@tabler/icons-react";
+  AlbumIcon,
+  FolderIcon,
+  HeartActiveIcon,
+  PlaylistIcon,
+  RefreshIcon,
+} from "@/ui/icons";
 import type { Album, Playlist } from "../../datasource/types";
 import { libraryController, useLibraryState } from "../../player/playerStore";
 import {
@@ -17,7 +19,6 @@ import {
   subscribeToLocalPlaylists,
 } from "../../player/localPlaylists";
 import { getAppSetting, setAppSetting } from "../../internal/appSettings";
-import styles from "./Sidebar.module.css";
 import { ArtistLinks } from "./ArtistLinks";
 import { TrackArtwork } from "./TrackArtwork";
 import { usePlaylistContextMenu } from "./PlaylistContextMenu";
@@ -100,24 +101,34 @@ interface SidebarProps {
   onNavigatePlaylist: (playlist: Playlist) => void;
 }
 
-const MIN_WIDTH = 85;
+const MIN_WIDTH = 65;
 const MAX_WIDTH = 300;
-const COLLAPSED_WIDTH = 150;
+const COLLAPSED_WIDTH = 100;
 const TEXT_HIDE_THRESHOLD = 120;
 
 type LibraryView = "albums" | "playlists";
+const EMPTY_STATE =
+  "flex flex-col items-center gap-2 px-3 py-8 text-center text-sm text-muted-foreground";
+const RETRY_BUTTON =
+  "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+/** Square 40px artwork tile shared by both sidebar lists. */
+const ARTWORK_TILE = "size-10 shrink-0 rounded-md object-cover";
+const ARTWORK_FALLBACK =
+  "flex size-10 shrink-0 items-center justify-center rounded-md bg-card text-muted-foreground";
+
 function SidebarAlbumArtwork({ album }: { album: Album }) {
   if (album.id === "LM") {
     return (
-      <div className={`${styles.albumPreview} ${styles.albumPreviewFallback} ${styles.likedSongsPreview}`}>
-        <IconHeart size={24} stroke={1.8} aria-hidden="true" />
+      <div className={cn(ARTWORK_FALLBACK, "bg-primary/15 text-primary")}>
+        <HeartActiveIcon size={22} aria-hidden="true" />
       </div>
     );
   }
 
   return (
     <TrackArtwork
-      className={styles.albumPreview}
+      className={ARTWORK_TILE}
       artworkUrl={album.artworkUrl}
       iconSize={24}
       variant="album"
@@ -129,23 +140,23 @@ function SidebarAlbumArtwork({ album }: { album: Album }) {
 function SidebarPlaylistArtwork({ playlist }: { playlist: Playlist }) {
   if (playlist.kind === "liked-songs" || playlist.id === "LM") {
     return (
-      <div className={`${styles.albumPreview} ${styles.albumPreviewFallback} ${styles.likedSongsPreview}`}>
-        <IconHeart size={24} stroke={1.8} aria-hidden="true" />
+      <div className={cn(ARTWORK_FALLBACK, "bg-primary/15 text-primary")}>
+        <HeartActiveIcon size={22} aria-hidden="true" />
       </div>
     );
   }
 
   if (playlist.kind === "local") {
     return (
-      <div className={`${styles.albumPreview} ${styles.albumPreviewFallback}`}>
-        <IconFolder size={24} stroke={1.8} aria-hidden="true" />
+      <div className={ARTWORK_FALLBACK}>
+        <FolderIcon size={22} aria-hidden="true" />
       </div>
     );
   }
 
   return (
     <TrackArtwork
-      className={styles.albumPreview}
+      className={ARTWORK_TILE}
       artworkUrl={playlist.artworkUrl}
       iconSize={24}
       retryOnError
@@ -645,7 +656,12 @@ export function Sidebar({
 
   const isDragActive = Boolean(draggedItem);
 
-  const listClasses = `${styles.albumList} ${isDragActive ? styles.dragActive : ""}`;
+  const listClasses = cn(
+    "flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain pb-3",
+    // Narrow sidebar tightens spacing before it drops labels entirely.
+    isCollapsed ? "gap-0 px-1" : "gap-0.5 px-2",
+    isDragActive && "select-none",
+  );
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -673,38 +689,83 @@ export function Sidebar({
     };
   }, [onWidthChange]);
 
+  /** Row styling shared by album and playlist entries, including drop indicators. */
+  const itemClasses = (
+    id: string,
+    type: "albums" | "playlists",
+  ) => cn(
+    "group relative flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors",
+    "hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+    shouldHideText && "justify-center px-0",
+    draggedItem?.id === id && draggedItem.type === type && "opacity-40",
+    dropTarget?.id === id && dropTarget.type === type && !dropTarget.insertAfter &&
+      "before:absolute before:inset-x-2 before:-top-px before:h-0.5 before:rounded-full before:bg-primary",
+    dropTarget?.id === id && dropTarget.type === type && dropTarget.insertAfter &&
+      "after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-primary",
+  );
+
+  const toggleButtonClasses = (isActive: boolean) => cn(
+    "relative flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors",
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+    isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+  );
+
   return (
-    <div 
+    <div
       ref={sidebarRef}
-      className={`${styles.sidebar} ${isCollapsed ? styles.collapsed : ""}`}
+      className="relative flex min-h-0 shrink-0 flex-col   bg-background/60 backdrop-blur"
       style={{ width: `${width}px` }}
     >
-      <div 
-        className={`${styles.dragHandle} ${isDragging ? styles.dragHandleActive : ""}`}
+      <div
+        className={cn(
+          "absolute inset-y-0 right-0 z-10 w-1 cursor-col-resize transition-colors",
+          isDragging ? "bg-primary" : "hover:bg-primary/40",
+        )}
         onMouseDown={handleMouseDown}
         title="Drag to resize sidebar"
       />
 
-      <div className={styles.albumsSection}>
-        <div className={`${styles.libraryToggle} ${shouldHideText ? styles.compactToggle : ""}`} role="group" aria-label="Library view">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div
+          className={cn(
+            "m-2 flex shrink-0 items-center gap-1 rounded-lg bg-card/50 p-1",
+            shouldHideText && "flex-col",
+          )}
+          role="group"
+          aria-label="Library view"
+        >
           <button
             type="button"
-            className={`${styles.toggleButton} ${libraryView === "playlists" ? styles.activeToggle : ""}`}
+            className={toggleButtonClasses(libraryView === "playlists")}
             aria-pressed={libraryView === "playlists"}
             title="User playlists"
             onClick={() => setLibraryView("playlists")}
           >
-            <IconPlaylist size={17} aria-hidden="true" />
+            {libraryView === "playlists" && (
+              <motion.span
+                layoutId="sidebar-library-view"
+                transition={{ type: "spring", stiffness: 520, damping: 42 }}
+                className="absolute inset-0 -z-10 rounded-md bg-card"
+              />
+            )}
+            <PlaylistIcon size={17} aria-hidden="true" />
             {!shouldHideText && <span>Playlists</span>}
           </button>
           <button
             type="button"
-            className={`${styles.toggleButton} ${libraryView === "albums" ? styles.activeToggle : ""}`}
+            className={toggleButtonClasses(libraryView === "albums")}
             aria-pressed={libraryView === "albums"}
             title="Albums"
             onClick={() => setLibraryView("albums")}
           >
-            <IconDisc size={17} aria-hidden="true" />
+            {libraryView === "albums" && (
+              <motion.span
+                layoutId="sidebar-library-view"
+                transition={{ type: "spring", stiffness: 520, damping: 42 }}
+                className="absolute inset-0 -z-10 rounded-md bg-card"
+              />
+            )}
+            <AlbumIcon size={17} aria-hidden="true" />
             {!shouldHideText && <span>Albums</span>}
           </button>
         </div>
@@ -716,7 +777,7 @@ export function Sidebar({
                 key={album.id}
                 data-sidebar-item-id={album.id}
                 data-sidebar-item-type="albums"
-                className={`${styles.albumItem} ${shouldHideText ? styles.centered : ""} ${draggedItem?.id === album.id && draggedItem.type === "albums" ? styles.dragging : ""} ${dropTarget?.id === album.id && dropTarget?.type === "albums" && !dropTarget.insertAfter ? styles.dropBefore : ""} ${dropTarget?.id === album.id && dropTarget?.type === "albums" && dropTarget.insertAfter ? styles.dropAfter : ""}`}
+                className={itemClasses(album.id, "albums")}
                 onPointerDown={(event) => handleSidebarItemPointerDown(event, album.id, "albums")}
                 onClick={() => handleSidebarItemClick(() => {
                   if (album.id === "LM" && libraryState.library?.likedSongsPlaylist) {
@@ -736,10 +797,10 @@ export function Sidebar({
               >
                 <SidebarAlbumArtwork album={album} />
                 {!shouldHideText && (
-                  <div className={styles.albumText}>
-                    <span className={styles.albumTitle}>{album.title}</span>
+                  <div className="flex min-w-0 flex-col">
+                    <span className="truncate text-sm text-foreground">{album.title}</span>
                     <ArtistLinks
-                      className={styles.albumArtist}
+                      className="truncate text-xs text-muted-foreground"
                       artists={album.artists}
                       fallback={album.artist}
                     />
@@ -756,7 +817,7 @@ export function Sidebar({
                     key={playlist.id}
                     data-sidebar-item-id={playlist.id}
                     data-sidebar-item-type="playlists"
-                    className={`${styles.albumItem} ${shouldHideText ? styles.centered : ""} ${draggedItem?.id === playlist.id && draggedItem.type === "playlists" ? styles.dragging : ""} ${dropTarget?.id === playlist.id && dropTarget?.type === "playlists" && !dropTarget.insertAfter ? styles.dropBefore : ""} ${dropTarget?.id === playlist.id && dropTarget?.type === "playlists" && dropTarget.insertAfter ? styles.dropAfter : ""}`}
+                    className={itemClasses(playlist.id, "playlists")}
                     onPointerDown={(event) => handleSidebarItemPointerDown(event, playlist.id, "playlists")}
                     onClick={() => handleSidebarItemClick(() => onNavigatePlaylist(playlist))}
                     onContextMenu={(event) => openPlaylistMenu(event, playlist)}
@@ -764,28 +825,28 @@ export function Sidebar({
                   >
                     <SidebarPlaylistArtwork playlist={playlist} />
                     {!shouldHideText && (
-                      <div className={styles.albumText}>
-                        <span className={styles.albumTitle}>{playlist.title}</span>
-                        <span className={styles.albumArtist}>{playlist.owner}</span>
+                      <div className="flex min-w-0 flex-col">
+                        <span className="truncate text-sm text-foreground">{playlist.title}</span>
+                        <span className="truncate text-xs text-muted-foreground">{playlist.owner}</span>
                       </div>
                     )}
                   </button>
                 ))}
                 {showPlaylistRetry && (
-                  <div className={styles.emptyLibraryView}>
-                    <IconPlaylist size={28} aria-hidden="true" />
+                  <div className={EMPTY_STATE}>
+                    <PlaylistIcon size={28} aria-hidden="true" />
                     {!shouldHideText && (
                       <span>No user-created playlists were found.</span>
                     )}
                     <button
                       type="button"
-                      className={styles.libraryRetryButton}
+                      className={RETRY_BUTTON}
                       onClick={handlePlaylistRetry}
                       disabled={isRetryingPlaylists}
                       title="Retry playlist sync"
                       aria-label="Retry playlist sync"
                     >
-                      <IconRefresh size={15} aria-hidden="true" />
+                      <RefreshIcon size={15} aria-hidden="true" />
                       {!shouldHideText && (
                         <span>{isRetryingPlaylists ? "Retrying..." : "Retry"}</span>
                       )}
@@ -794,8 +855,8 @@ export function Sidebar({
                 )}
               </>
             ) : (
-              <div className={styles.emptyLibraryView}>
-                <IconPlaylist size={28} aria-hidden="true" />
+              <div className={EMPTY_STATE}>
+                <PlaylistIcon size={28} aria-hidden="true" />
                 {!shouldHideText && (
                   <span>
                     {libraryState.status === "signed-out"
@@ -806,7 +867,7 @@ export function Sidebar({
                 {libraryState.status === "signed-out" && (
                   <button
                     type="button"
-                    className={styles.librarySignInButton}
+                    className="rounded-full bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={() => void libraryController.signIn()}
                     title="Sign in to YouTube Music"
                   >
@@ -816,13 +877,13 @@ export function Sidebar({
                 {showPlaylistRetry && (
                   <button
                     type="button"
-                    className={styles.libraryRetryButton}
+                    className={RETRY_BUTTON}
                     onClick={handlePlaylistRetry}
                     disabled={isRetryingPlaylists}
                     title="Retry playlist sync"
                     aria-label="Retry playlist sync"
                   >
-                    <IconRefresh size={15} aria-hidden="true" />
+                    <RefreshIcon size={15} aria-hidden="true" />
                     {!shouldHideText && (
                       <span>{isRetryingPlaylists ? "Retrying..." : "Retry"}</span>
                     )}

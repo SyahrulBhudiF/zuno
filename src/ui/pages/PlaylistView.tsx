@@ -1,27 +1,31 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  IconArrowDown,
-  IconArrowUp,
-  IconArrowsShuffle,
-  IconHeart,
-  IconLoader2,
-  IconPlayerPlay,
-  IconSearch,
-  IconX,
-} from "@tabler/icons-react";
+import { cn } from "@/lib/utils";
+import { Loader } from "@/components/motion/loader";
+import { ArrowDownIcon, ArrowUpIcon, CloseIcon, HeartIcon, PlayActiveIcon, SearchIcon, ShuffleActiveIcon } from "@/ui/icons";
 import type { Playlist, Track } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
-import type { PlayerControllerActions } from "../../player/playerStore";
+import { usePlayerState, type PlayerControllerActions } from "../../player/playerStore";
 import { markPlaylistPlayed } from "../../player/recentPlaylists";
 import { shuffleTracks } from "../../player/shuffleTracks";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
 import { isLocalPlaylist, reorderLocalPlaylistTracks } from "../../player/localPlaylists";
-import styles from "./AlbumView.module.css";
 import { ArtistLinks } from "../components/ArtistLinks";
 import { usePlaylistContextMenu } from "../components/PlaylistContextMenu";
 import { TrackArtwork } from "../components/TrackArtwork";
 import { useKeyboardShortcuts } from "../settings/keyboardShortcuts";
 import { shouldStartPageSearch } from "./pageSearchKeyboard";
+
+/*
+ * Collapsed search affordance that widens on hover/focus or while it holds a query —
+ * the behaviour the original .playlistSearch width transition provided.
+ */
+const SEARCH_FIELD =
+  "group/search flex min-h-8 items-center gap-1.5 overflow-hidden rounded-full bg-white/[0.04] px-2.5 " +
+  "text-muted-foreground transition-[width,background-color] duration-200 cursor-text " +
+  "hover:bg-white/[0.08] focus-within:bg-white/[0.08] focus-within:text-foreground " +
+  "[&_input]:min-w-0 [&_input]:flex-1 [&_input]:bg-transparent [&_input]:text-sm " +
+  "[&_input]:text-foreground [&_input]:outline-none [&_input]:placeholder:text-muted-foreground";
+const SEARCH_FIELD_COLLAPSED = "w-9 hover:w-56 focus-within:w-56";
 
 interface PlaylistViewProps {
   playlist?: Playlist;
@@ -52,8 +56,8 @@ function getDirectionLabel(sort: PlaylistSort, direction: SortDirection): string
 
 function SortDirectionIcon({ direction }: { direction: SortDirection }) {
   return direction === "asc"
-    ? <IconArrowUp size={13} stroke={2.2} aria-hidden="true" />
-    : <IconArrowDown size={13} stroke={2.2} aria-hidden="true" />;
+    ? <ArrowUpIcon size={13} strokeWidth={2.2} aria-hidden="true" />
+    : <ArrowDownIcon size={13} strokeWidth={2.2} aria-hidden="true" />;
 }
 
 function getTrackKey(track: Track): string {
@@ -75,8 +79,8 @@ function getUniqueNewTracks(current: Track[], next: Track[]): Track[] {
 
 function PlaylistLoadingSpinner({ label }: { label: string }) {
   return (
-    <div className={styles.loadingState} role="status" aria-live="polite" aria-label={label}>
-      <IconLoader2 className={styles.loadingIcon} size={30} aria-hidden="true" />
+    <div className="grid place-items-center px-2 py-16 text-muted-foreground" role="status" aria-live="polite" aria-label={label}>
+      <Loader variant="spinner" size={18} />
     </div>
   );
 }
@@ -85,6 +89,15 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   const { openTrackMenu } = useTrackContextMenu();
   const { openPlaylistMenu } = usePlaylistContextMenu();
   const keyboardShortcuts = useKeyboardShortcuts();
+  /*
+   * Only the identity of the current track and the transport status are needed here, and
+   * both change at most once per track. Playback *position* deliberately never enters this
+   * component — it lives in SeekBar's local state, so a long playlist is not re-rendered on
+   * every tick.
+   */
+  const playerState = usePlayerState();
+  const currentTrackId = playerState.currentTrack?.id ?? null;
+  const playerStatus = playerState.status;
   const [tracks, setTracks] = useState<Track[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -404,48 +417,48 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   };
 
   return (
-    <div className={styles.root}>
+    <div className="flex flex-col gap-8">
       <header
-        className={styles.header}
+        className="flex items-end gap-5"
         onContextMenu={(event) => openPlaylistMenu(event, playlist)}
       >
         {playlist.kind === "liked-songs" || playlist.id === "LM" ? (
-          <div className={`${styles.cover} ${styles.coverFrame}`}>
-            <IconHeart size={80} stroke={1.6} aria-hidden="true" />
+          <div className="size-44 shrink-0 rounded-xl object-cover shadow-2xl relative shrink-0">
+            <HeartIcon size={80} strokeWidth={1.6} aria-hidden="true" />
           </div>
         ) : (
           <TrackArtwork
-            className={`${styles.cover} ${styles.coverFrame}`}
+            className="size-44 shrink-0 rounded-xl object-cover shadow-2xl relative shrink-0"
             artworkUrl={playlist.artworkUrl}
             iconSize={80}
             loading="eager"
             variant="playlist"
           />
         )}
-        <div className={styles.headerText}>
-          <span className={styles.eyebrow}>Playlist</span>
-          <h1 className={styles.title}>{playlist.title}</h1>
-          <p className={styles.artist}>{playlist.owner}</p>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <span className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Playlist</span>
+          <h1 className="text-3xl font-bold tracking-tight text-foreground">{playlist.title}</h1>
+          <p className="text-sm text-muted-foreground">{playlist.owner}</p>
         </div>
         <button
-          className={styles.shuffleButton}
+          className="flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           type="button"
           disabled={isLoading || Boolean(error) || tracks.length === 0}
           onClick={() => void playShuffled()}
         >
-          <IconArrowsShuffle size={18} aria-hidden="true" />
+          <ShuffleActiveIcon size={18} aria-hidden="true" />
           <span>Shuffle</span>
         </button>
       </header>
       {isLoading && <PlaylistLoadingSpinner label="Loading songs" />}
-      {error && <p className={styles.message}>{error}</p>}
+      {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}
       {!isLoading && !error && !hasMoreTracks && tracks.length === 0 && (
-        <p className={styles.message}>This playlist is empty.</p>
+        <p className="px-2 py-10 text-center text-sm text-muted-foreground">This playlist is empty.</p>
       )}
       {!isLoading && !error && (tracks.length > 0 || hasMoreTracks) && (
         <>
           <div
-            className={styles.sortOptions}
+            className="flex flex-wrap items-center gap-1.5 self-start [&>button]:flex [&>button]:min-h-8 [&>button]:min-w-0 [&>button]:items-center [&>button]:justify-center [&>button]:gap-1.5 [&>button]:rounded-full [&>button]:bg-white/[0.04] [&>button]:px-3 [&>button]:text-sm [&>button]:font-medium [&>button]:text-muted-foreground [&>button]:transition-colors hover:[&>button]:bg-white/[0.08] hover:[&>button]:text-foreground focus-visible:[&>button]:outline-none focus-visible:[&>button]:ring-2 focus-visible:[&>button]:ring-ring"
             role="group"
             aria-label="Playlist song tools"
           >
@@ -453,7 +466,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
               <button
                 key={item.value}
                 type="button"
-                className={sort === item.value ? styles.activeSortOption : ""}
+                className={sort === item.value ? "bg-primary/15 text-foreground" : ""}
                 aria-pressed={sort === item.value}
                 aria-label={`Sort by ${item.label} ${
                   sort === item.value ? getDirectionLabel(item.value, sortDirection) : ""
@@ -463,16 +476,16 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
                 <span>{item.label}</span>
                 {sort === item.value && (
                   <span
-                    className={`${styles.sortDirection} ${
-                      item.value === "dateAdded" ? styles.dateSortDirection : ""
+                    className={`${"flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"} ${
+                      item.value === "dateAdded" ? "flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" : ""
                     }`}
                     aria-hidden="true"
                   >
-                    <span className={styles.sortArrow}>
+                    <span className="shrink-0">
                       <SortDirectionIcon direction={sortDirection} />
                     </span>
                     {item.value === "dateAdded" && (
-                      <span className={styles.sortHoverLabel}>
+                      <span className="sr-only">
                         {getDirectionLabel(item.value, sortDirection)}
                       </span>
                     )}
@@ -481,14 +494,12 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
               </button>
             ))}
             <div
-              className={`${styles.playlistSearch} ${
-                playlistSearchQuery ? styles.playlistSearchActive : ""
-              }`}
+              className={cn(SEARCH_FIELD, playlistSearchQuery ? "w-56" : SEARCH_FIELD_COLLAPSED)}
               role="search"
               onClick={() => playlistSearchInputRef.current?.focus()}
             >
-              <span className={styles.playlistSearchIcon}>
-                <IconSearch size={16} aria-hidden="true" />
+              <span className="shrink-0">
+                <SearchIcon size={16} aria-hidden="true" />
               </span>
               <input
                 ref={playlistSearchInputRef}
@@ -501,23 +512,30 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
               />
               {playlistSearchQuery && (
                 <button
-                  className={styles.playlistSearchClear}
+                  className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   type="button"
                   aria-label="Clear playlist search"
                   onClick={() => setPlaylistSearchQuery("")}
                 >
-                  <IconX size={14} aria-hidden="true" />
+                  <CloseIcon size={14} aria-hidden="true" />
                 </button>
               )}
             </div>
           </div>
           {visibleTracks.length === 0 && playlistSearchQuery.trim() ? (
-            <p className={styles.message}>No songs match this search.</p>
+            <p className="px-2 py-10 text-center text-sm text-muted-foreground">No songs match this search.</p>
           ) : (
-          <div className={styles.trackList}>
+          <div className="flex flex-col gap-0.5">
             {visibleTracks.map((track, index) => {
               const trackKey = getTrackKey(track);
               const trackPath = track.localPath ?? track.id;
+              /*
+               * Match on the *player's* current track rather than a row index: the same
+               * track can appear more than once, and the queue can be reordered or shuffled
+               * out from under this list.
+               */
+              const isCurrent = currentTrackId !== null && track.id === currentTrackId;
+              const isCurrentPlaying = isCurrent && playerStatus === "playing";
               const isDragged = pointerDragRef.current?.localPath === trackPath && pointerDragRef.current.isDragging;
               const isDropBefore = dropTargetIndex
                 && dropTargetIndex.localPath === trackPath
@@ -529,8 +547,8 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
                 <button
                   key={getTrackRenderKey(track, index)}
                   data-playlist-track-path={trackPath}
-                  className={`${styles.track} ${
-                    enteringTrackDelayIndexes.has(trackKey) ? styles.trackEntering : ""
+                  className={`${"group/row flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"} ${
+                    enteringTrackDelayIndexes.has(trackKey) ? "" : ""
                   }`}
                   style={{
                     "--track-enter-delay": `${Math.min(
@@ -561,7 +579,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
                         left: 0,
                         right: 0,
                         height: "2px",
-                        background: "var(--color-accent)",
+                        background: "var(--color-primary)",
                         pointerEvents: "none",
                       }}
                     />
@@ -574,27 +592,70 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
                         left: 0,
                         right: 0,
                         height: "2px",
-                        background: "var(--color-accent)",
+                        background: "var(--color-primary)",
                         pointerEvents: "none",
                       }}
                     />
                   )}
-                  <span className={styles.trackIndex}>{index + 1}</span>
-                  <span className={styles.trackText}>
-                    <span className={styles.trackTitle}>{track.title}</span>
+                  {/* The index gives way to a play affordance on hover — the row number is
+                      only useful until you have decided to act on the row. */}
+                  <span className="relative w-6 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                    <span className={cn("transition-opacity", isCurrent ? "opacity-0" : "group-hover/row:opacity-0")}>
+                      {index + 1}
+                    </span>
+                    {!isCurrent && (
+                      <PlayActiveIcon
+                        size={14}
+                        className="absolute inset-0 m-auto opacity-0 transition-opacity group-hover/row:opacity-100"
+                        aria-hidden="true"
+                      />
+                    )}
+                    {isCurrent && (
+                      /* Equaliser bars when this row is the track that is playing; a static
+                         glyph when it is the current track but paused. */
+                      <span className="absolute inset-0 flex items-center justify-end gap-[2px]" aria-hidden="true">
+                        {isCurrentPlaying ? (
+                          [0, 1, 2].map((bar) => (
+                            <span
+                              key={bar}
+                              className="h-3 w-[2px] origin-bottom rounded-full bg-primary motion-safe:animate-[rowEq_900ms_ease-in-out_infinite]"
+                              style={{ animationDelay: `${bar * 140}ms` }}
+                            />
+                          ))
+                        ) : (
+                          <PlayActiveIcon size={14} className="text-primary" />
+                        )}
+                      </span>
+                    )}
+                  </span>
+
+                  <TrackArtwork
+                    className="size-10 shrink-0 rounded-md"
+                    artworkUrl={track.artworkUrl}
+                    iconSize={18}
+                  />
+
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className={cn(
+                      "truncate text-sm font-medium",
+                      isCurrent ? "text-primary" : "text-foreground",
+                    )}>
+                      {track.title}
+                    </span>
                     <ArtistLinks
-                      className={styles.trackArtist}
+                      className="truncate text-xs text-muted-foreground"
                       artists={track.artists}
                       fallback={track.artist}
                     />
                   </span>
-                  <IconPlayerPlay size={18} />
+
+                  <span className="sr-only">{isCurrentPlaying ? "Now playing" : ""}</span>
                 </button>
               );
             })}
           </div>
           )}
-          <div ref={loadMoreRef} className={styles.loadMoreStatus} aria-live="polite">
+          <div ref={loadMoreRef} className="px-2 py-4 text-center text-sm text-muted-foreground" aria-live="polite">
             {isLoadingMore ? (
               <PlaylistLoadingSpinner label="Loading more songs" />
             ) : loadMoreError ? (

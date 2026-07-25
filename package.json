@@ -1,5 +1,5 @@
 {
-  "name": "just-another-music-client",
+  "name": "zuno",
   "private": true,
   "version": "1.2.81",
   "type": "module",
@@ -10,24 +10,28 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tabler/icons-react": "^3.44.0",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@solar-icons/react": "^2.0.0-beta.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
-    "discord-rpc": "^4.0.1",
+    "clsx": "^2.1.1",
+    "motion": "^12.42.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "tailwind-merge": "^3.6.0",
     "youtubei.js": "^17.0.1"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2",
-    "@types/discord-rpc": "^4.0.10",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "~5.8.3",
     "vite": "^7.0.4"
   }

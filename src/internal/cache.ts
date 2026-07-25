@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { clearArtworkCache } from "./artworkCache";
 import { logInternalWarn } from "./logging";
 
 export const DEFAULT_CACHE_SIZE_GB = 4;
@@ -51,5 +52,8 @@ export function setCacheMaxBytes(maxBytes: number): Promise<CacheStats> {
 }
 
 export function clearCache(): Promise<CacheStats> {
+  // The in-memory artwork map holds object URLs; clearing the on-disk cache without it
+  // would leave the UI serving blobs the user just asked to delete.
+  clearArtworkCache();
   return invoke<CacheStats>("cache_clear");
 }

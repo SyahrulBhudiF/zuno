@@ -1,15 +1,10 @@
-import {
-  IconArrowLeft,
-  IconArrowRight,
-  IconSearch,
-  IconSettings,
-} from "@tabler/icons-react";
+import { Button } from "@/components/motion/button";
+import { Tooltip } from "@/components/motion/tooltip";
+import { ArrowLeftIcon, ArrowRightIcon, SearchIcon } from "@/ui/icons";
 import { primaryModifierLabel } from "../platform";
-import styles from "./SearchBar.module.css";
 
 interface SearchBarProps {
   onOpen: () => void;
-  onOpenSettings: () => void;
   canGoBack: boolean;
   canGoForward: boolean;
   onBack: () => void;
@@ -18,7 +13,6 @@ interface SearchBarProps {
 
 export function SearchBar({
   onOpen,
-  onOpenSettings,
   canGoBack,
   canGoForward,
   onBack,
@@ -27,43 +21,46 @@ export function SearchBar({
   const showBackButton = canGoBack || canGoForward;
 
   return (
-    <div className={styles.row}>
+    <div className="flex items-center gap-2 max-w-3xl mx-auto">
       {showBackButton && (
-        <button
-          className={styles.navigationButton}
-          type="button"
-          onClick={onBack}
-          disabled={!canGoBack}
-          aria-label="Go back"
-          title="Back"
-        >
-          <IconArrowLeft size={18} aria-hidden="true" />
-        </button>
+        <Tooltip content="Back">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onBack}
+            disabled={!canGoBack}
+            aria-label="Go back"
+            className="shrink-0 rounded-full"
+          >
+            <ArrowLeftIcon size={18} aria-hidden="true" />
+          </Button>
+        </Tooltip>
       )}
       {canGoForward && (
-        <button
-          className={styles.navigationButton}
-          type="button"
-          onClick={onForward}
-          aria-label="Go forward"
-          title="Forward"
-        >
-          <IconArrowRight size={18} aria-hidden="true" />
-        </button>
+        <Tooltip content="Forward">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onForward}
+            aria-label="Go forward"
+            className="shrink-0 rounded-full"
+          >
+            <ArrowRightIcon size={18} aria-hidden="true" />
+          </Button>
+        </Tooltip>
       )}
-      <button className={styles.bar} type="button" onClick={onOpen} data-onboarding="search">
-        <IconSearch size={17} />
-        <span>Search artists, songs, playlists, and albums</span>
-        <kbd>{primaryModifierLabel} Space</kbd>
-      </button>
+
       <button
-        className={styles.settingsButton}
         type="button"
-        onClick={onOpenSettings}
-        aria-label="Open settings"
-        title="Settings"
+        onClick={onOpen}
+        data-onboarding="search"
+        className="group flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-full bg-card/60 px-3.5 text-left text-sm text-muted-foreground backdrop-blur transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <IconSettings size={18} aria-hidden="true" />
+        <SearchIcon size={17} className="shrink-0" />
+        <span className="truncate">Search artists, songs, playlists, and albums</span>
+        <kbd className="ml-auto shrink-0 rounded bg-background/60 px-1.5 py-0.5 font-sans text-xs text-muted-foreground">
+          {primaryModifierLabel} Space
+        </kbd>
       </button>
     </div>
   );

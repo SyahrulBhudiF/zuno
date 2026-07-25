@@ -6,8 +6,8 @@ import {
   useContext,
 } from "react";
 import type { Artist, ArtistReference } from "../../datasource/types";
+import { cn } from "@/lib/utils";
 import { isMacOS } from "../platform";
-import styles from "./ArtistLinks.module.css";
 
 type NavigateArtist = (artist: Artist, openInNewTab: boolean) => void;
 
@@ -74,14 +74,14 @@ export function ArtistLinks({
     const suppressed = isSuppressed(artist);
     const isDisabled = !interactive || suppressed;
     return (
-      <span className={`${styles.artistItem}${isDisabled ? ` ${styles.disabledItem}` : ""}`}>
+      <span className={cn("min-w-0", isDisabled && "pointer-events-none")}>
         {isDisabled ? (
-          <span className={styles.disabledLink}>
+          <span className="text-inherit">
             {artist.name}
           </span>
         ) : (
           <span
-            className={styles.link}
+            className="cursor-pointer rounded-sm text-inherit underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             role="link"
             tabIndex={0}
             onPointerDown={(event) => event.stopPropagation()}

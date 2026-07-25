@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { IconClock, IconSearch, IconX } from "@tabler/icons-react";
+import { cn } from "@/lib/utils";
+import { ClockIcon, CloseIcon, SearchIcon } from "@/ui/icons";
 import type { Album, Artist, Playlist, SearchResults, Track } from "../../datasource/types";
 import type { SearchController } from "../../player/SearchController";
 import { TrackArtwork } from "./TrackArtwork";
 import { useTrackContextMenu } from "./TrackContextMenu";
 import { isMacOS, primaryModifierLabel } from "../platform";
-import styles from "./SearchOverlay.module.css";
 import { usePlaylistContextMenu } from "./PlaylistContextMenu";
 
 const RECENT_SEARCHES_KEY = "yt-music-dock:recent-searches";
@@ -326,17 +326,17 @@ export function SearchOverlay({
   };
 
   return (
-    <div className={styles.backdrop} onMouseDown={onDismiss ?? onClose}>
+    <div className="fixed inset-0 z-[70] flex justify-center bg-background/70 pt-[12vh] backdrop-blur-sm" onMouseDown={onDismiss ?? onClose}>
       <section
-        className={styles.panel}
+        className="flex max-h-[70vh] w-[min(40rem,92vw)] flex-col overflow-hidden rounded-2xl bg-popover shadow-2xl"
         data-onboarding="search-panel"
         role="dialog"
         aria-modal="true"
         aria-label="Search artists, songs, playlists, and albums"
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className={`${styles.inputRow} ${selectedIndex === 0 ? styles.selected : ""}`}>
-          <IconSearch size={21} />
+        <div className={cn("flex items-center gap-2.5 px-4 py-3 text-muted-foreground [&_input]:min-w-0 [&_input]:flex-1 [&_input]:bg-transparent [&_input]:text-base [&_input]:text-foreground [&_input]:outline-none", selectedIndex === 0 && "bg-primary/15 text-foreground")}>
+          <SearchIcon size={21} />
           <input
             ref={inputRef}
             value={query}
@@ -349,13 +349,13 @@ export function SearchOverlay({
             placeholder="Search artists, songs, playlists, and albums"
             aria-label="Search artists, songs, playlists, and albums"
           />
-          {isLoading && <span className={styles.loading}>Searching</span>}
+          {isLoading && <span className="px-4 py-6 text-center text-sm text-muted-foreground">Searching</span>}
         </div>
 
         {preview && (
           <button
             type="button"
-            className={`${styles.result} ${selectedIndex === 1 ? styles.selected : ""}`}
+            className={cn("flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring", selectedIndex === 1 && "bg-primary/15 text-foreground")}
             onMouseEnter={() => setSelectedIndex(1)}
             onContextMenu={preview.type === "track"
               ? (event) => openTrackMenu(event, preview.value)
@@ -367,13 +367,13 @@ export function SearchOverlay({
             onClick={openPreview}
           >
             <TrackArtwork
-              className={styles.artwork}
+              className="size-9 shrink-0 rounded-md object-cover"
               artworkUrl={preview.value.artworkUrl}
               iconSize={26}
               loading="eager"
               variant={preview.type === "artist" ? "artist" : "track"}
             />
-            <span className={styles.trackText}>
+            <span className="flex min-w-0 flex-1 flex-col text-left [&_small]:truncate [&_small]:text-xs [&_small]:text-muted-foreground [&_strong]:truncate [&_strong]:text-sm [&_strong]:font-medium">
               <strong>
                 {preview.type === "artist" ? preview.value.name : preview.value.title}
               </strong>
@@ -387,27 +387,27 @@ export function SearchOverlay({
                     : preview.value.artist}
               </span>
             </span>
-            <span className={styles.hint}>
+            <span className="flex items-center gap-1 [&_kbd]:rounded [&_kbd]:bg-card [&_kbd]:px-1.5 [&_kbd]:py-0.5 [&_kbd]:font-sans">
               {preview.type === "track" ? "Play" : "Open"}
             </span>
           </button>
         )}
 
         {suggestions.length > 0 && (
-          <div className={styles.suggestions}>
+          <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1.5">
             {suggestions.map((suggestion, index) => {
               const itemIndex = 1 + previewOffset + index;
               return (
                 <button
                   key={suggestion}
                   type="button"
-                  className={`${styles.suggestion} ${
-                    selectedIndex === itemIndex ? styles.selected : ""
+                  className={`${"flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"} ${
+                    selectedIndex === itemIndex ? "bg-primary/15 text-foreground" : ""
                   }`}
                   onMouseEnter={() => setSelectedIndex(itemIndex)}
                   onClick={() => submitQuery(suggestion, false)}
                 >
-                  <IconSearch size={16} />
+                  <SearchIcon size={16} />
                   <span>{suggestion}</span>
                 </button>
               );
@@ -416,33 +416,33 @@ export function SearchOverlay({
         )}
 
         {visibleRecentSearches.length > 0 && (
-          <div className={styles.recents}>
+          <div className="flex flex-col gap-0.5 p-1.5">
             <p>Recent searches</p>
             {visibleRecentSearches.map((recentSearch, index) => {
               const itemIndex = 1 + previewOffset + suggestions.length + index;
               return (
               <div
                 key={recentSearch}
-                className={`${styles.recent} ${
-                  selectedIndex === itemIndex ? styles.selected : ""
+                className={`${"px-2.5 py-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground"} ${
+                  selectedIndex === itemIndex ? "bg-primary/15 text-foreground" : ""
                 }`}
                 onMouseEnter={() => setSelectedIndex(itemIndex)}
               >
                 <button
                   type="button"
-                  className={styles.recentSearchButton}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   onClick={() => submitQuery(recentSearch, false)}
                 >
-                  <IconClock size={17} />
+                  <ClockIcon size={17} />
                   <span>{recentSearch}</span>
                 </button>
                 <button
                   type="button"
-                  className={styles.removeRecentButton}
+                  className="ml-auto flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   onClick={() => removeRecentSearch(recentSearch)}
                   aria-label={`Remove ${recentSearch} from recent searches`}
                 >
-                  <IconX size={15} />
+                  <CloseIcon size={15} />
                 </button>
               </div>
               );
@@ -450,7 +450,7 @@ export function SearchOverlay({
           </div>
         )}
 
-        <footer className={styles.footer}>
+        <footer className="flex items-center gap-3 px-4 py-2 text-xs text-muted-foreground">
           <span>Enter search</span>
           <span>Shift or {primaryModifierLabel} + Enter new tab</span>
           <span>Esc close</span>
