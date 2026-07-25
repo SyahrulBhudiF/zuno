@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useState, useRef, useEffect, useMemo, useSyncExternalStore, type ReactElement } from "react";
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
+import { Tooltip } from "@/components/motion/tooltip";
 import {
   AlbumIcon,
   FolderIcon,
@@ -96,13 +97,52 @@ function mergeVisibleOrderWithStoredOrder(storedOrder: string[], visibleOrder: s
 
 interface SidebarProps {
   width: number;
+  /** Retained for the callers' benefit; the rail no longer resizes, so it is unused. */
   onWidthChange: (width: number) => void;
   onNavigateAlbum: (album: Album) => void;
   onNavigatePlaylist: (playlist: Playlist) => void;
 }
 
-const MIN_WIDTH = 65;
-const MAX_WIDTH = 300;
+/**
+ * Hover label for a collapsed sidebar row.
+ *
+ * The rail shows artwork only, so the name has to come from somewhere; a native `title`
+ * attribute was doing that job, but it is slow to appear, unstyled, and cannot show the
+ * owner on a second line. Renders its child untouched when the rail is wide enough to
+ * display the text itself, so the wrapper costs nothing in that case.
+ */
+function SidebarItemTooltip({
+  enabled,
+  title,
+  subtitle,
+  children,
+}: {
+  enabled: boolean;
+  title: string;
+  subtitle?: string;
+  children: ReactElement;
+}) {
+  if (!enabled) return children;
+
+  return (
+    <Tooltip
+      side="right"
+      delay={80}
+      wrapperClassName="block"
+      content={
+        <span className="flex max-w-56 flex-col gap-0.5 text-left">
+          <span className="truncate font-medium text-foreground">{title}</span>
+          {subtitle ? (
+            <span className="truncate text-xs text-muted-foreground">{subtitle}</span>
+          ) : null}
+        </span>
+      }
+    >
+      {children}
+    </Tooltip>
+  );
+}
+
 const COLLAPSED_WIDTH = 100;
 const TEXT_HIDE_THRESHOLD = 120;
 
@@ -167,7 +207,6 @@ function SidebarPlaylistArtwork({ playlist }: { playlist: Playlist }) {
 
 export function Sidebar({
   width,
-  onWidthChange,
   onNavigateAlbum,
   onNavigatePlaylist,
 }: SidebarProps) {
@@ -175,7 +214,6 @@ export function Sidebar({
   const { openPlaylistMenu, openAlbumMenu } = usePlaylistContextMenu();
   const [libraryView, setLibraryView] = useState<LibraryView>("playlists");
   const [recentPlaylistsRevision, setRecentPlaylistsRevision] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
   const [playlistOrder, setPlaylistOrder] = useState<string[]>(() =>
     loadOrderFromStorage(PLAYLIST_ORDER_KEY, PLAYLIST_LIKED_ORDER_MIGRATION_KEY)
   );
@@ -203,15 +241,6 @@ export function Sidebar({
   } | null>(null);
   const suppressClickRef = useRef(false);
 
-  const dragStartX = useRef<number | null>(null);
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    dragStartX.current = e.clientX;
-    setIsDragging(true);
-  };
 
   const isCollapsed = width <= COLLAPSED_WIDTH;
   const shouldHideText = width <= TEXT_HIDE_THRESHOLD;
@@ -663,32 +692,6 @@ export function Sidebar({
     isDragActive && "select-none",
   );
 
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (dragStartX.current === null || !sidebarRef.current) return;
-
-      const moved = Math.abs(e.clientX - dragStartX.current);
-      if (moved < 4) return;
-
-      const rect = sidebarRef.current.getBoundingClientRect();
-      const newWidth = e.clientX - rect.left;
-      onWidthChange(Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, newWidth)));
-    };
-
-    const handleMouseUp = () => {
-      dragStartX.current = null;
-      setIsDragging(false);
-    };
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-
-    return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [onWidthChange]);
-
   /** Row styling shared by album and playlist entries, including drop indicators. */
   const itemClasses = (
     id: string,
@@ -716,14 +719,11 @@ export function Sidebar({
       className="relative flex min-h-0 shrink-0 flex-col   bg-background/60 backdrop-blur"
       style={{ width: `${width}px` }}
     >
-      <div
-        className={cn(
-          "absolute inset-y-0 right-0 z-10 w-1 cursor-col-resize transition-colors",
-          isDragging ? "bg-primary" : "hover:bg-primary/40",
-        )}
-        onMouseDown={handleMouseDown}
-        title="Drag to resize sidebar"
-      />
+      {/*
+        The resize grip is deliberately not rendered: the rail is a fixed icon strip and
+        hovering an item explains it, so there is nothing to widen it for. `handleMouseDown`
+        and the width plumbing are left intact so restoring it is a one-line change.
+      */}
 
       <div className="flex min-h-0 flex-1 flex-col">
         <div
@@ -738,7 +738,7 @@ export function Sidebar({
             type="button"
             className={toggleButtonClasses(libraryView === "playlists")}
             aria-pressed={libraryView === "playlists"}
-            title="User playlists"
+            aria-label="User playlists"
             onClick={() => setLibraryView("playlists")}
           >
             {libraryView === "playlists" && (
@@ -755,7 +755,7 @@ export function Sidebar({
             type="button"
             className={toggleButtonClasses(libraryView === "albums")}
             aria-pressed={libraryView === "albums"}
-            title="Albums"
+            aria-label="Albums"
             onClick={() => setLibraryView("albums")}
           >
             {libraryView === "albums" && (
@@ -772,9 +772,14 @@ export function Sidebar({
         <div ref={listRef} className={listClasses}>
           {libraryView === "albums" ? (
             albums.map((album) => (
+              <SidebarItemTooltip
+                key={album.id}
+                enabled={shouldHideText}
+                title={album.title}
+                subtitle={album.artist}
+              >
               <button
                 type="button"
-                key={album.id}
                 data-sidebar-item-id={album.id}
                 data-sidebar-item-type="albums"
                 className={itemClasses(album.id, "albums")}
@@ -793,7 +798,6 @@ export function Sidebar({
                   }
                   openAlbumMenu(event, album);
                 }}
-                title={shouldHideText ? `${album.title} by ${album.artist}` : undefined}
               >
                 <SidebarAlbumArtwork album={album} />
                 {!shouldHideText && (
@@ -807,21 +811,26 @@ export function Sidebar({
                   </div>
                 )}
               </button>
+              </SidebarItemTooltip>
             ))
           ) : (
             playlists.length ? (
               <>
                 {playlists.map((playlist) => (
+                  <SidebarItemTooltip
+                    key={playlist.id}
+                    enabled={shouldHideText}
+                    title={playlist.title}
+                    subtitle={playlist.owner}
+                  >
                   <button
                     type="button"
-                    key={playlist.id}
                     data-sidebar-item-id={playlist.id}
                     data-sidebar-item-type="playlists"
                     className={itemClasses(playlist.id, "playlists")}
                     onPointerDown={(event) => handleSidebarItemPointerDown(event, playlist.id, "playlists")}
                     onClick={() => handleSidebarItemClick(() => onNavigatePlaylist(playlist))}
                     onContextMenu={(event) => openPlaylistMenu(event, playlist)}
-                    title={shouldHideText ? `${playlist.title} by ${playlist.owner}` : undefined}
                   >
                     <SidebarPlaylistArtwork playlist={playlist} />
                     {!shouldHideText && (
@@ -831,6 +840,7 @@ export function Sidebar({
                       </div>
                     )}
                   </button>
+                  </SidebarItemTooltip>
                 ))}
                 {showPlaylistRetry && (
                   <div className={EMPTY_STATE}>

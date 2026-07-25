@@ -286,7 +286,12 @@ export default function App() {
     () => restoredSession?.nextTabId ?? 2,
   );
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(240);
+  /*
+   * The sidebar is a fixed icon rail. 72px sits below the Sidebar's own text-hide threshold,
+   * so every row renders as artwork only and explains itself through a tooltip on hover.
+   * Still state rather than a constant because TitleBar aligns its home button to this width.
+   */
+  const [sidebarWidth, setSidebarWidth] = useState(72);
   const [queuePanelWidth, setQueuePanelWidth] = useState(340);
   const [loadingScreenState, setLoadingScreenState] = useState<"visible" | "leaving" | "hidden">("visible");
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(() =>
