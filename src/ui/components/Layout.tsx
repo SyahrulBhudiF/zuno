@@ -214,10 +214,10 @@ export function Layout({
           {ambientArtwork ? (
             <span
               key={ambientArtwork}
-              className="pointer-events-none absolute inset-x-0 top-0 h-[22rem] overflow-hidden [mask-image:linear-gradient(to_bottom,black_35%,transparent)]"
+              className="pointer-events-none absolute inset-x-0 top-0 h-[22rem] overflow-hidden [mask-image:linear-gradient(to_bottom,background_25%,transparent)]"
               aria-hidden="true"
             >
-              <span className="absolute -inset-x-1/4 -top-1/2 bottom-0 scale-125 opacity-70 blur-[64px] saturate-[2.2]">
+              <span className="absolute -inset-x-1/4 -top-1/2 bottom-0 scale-125 opacity-40 blur-[64px] saturate-[2]">
                 <TrackArtwork className="size-full" artworkUrl={ambientArtwork} iconSize={0} />
               </span>
             </span>

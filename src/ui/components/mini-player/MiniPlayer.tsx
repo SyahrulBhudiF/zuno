@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { emit, listen } from "@tauri-apps/api/event";
 import { cursorPosition, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { Loader } from "@/components/motion/loader";
+import { SpinnerSteps } from "@/components/motion/loader";
 import {
   ArrowUpIcon,
   CloseIcon,
@@ -1029,7 +1029,7 @@ export default function MiniPlayer() {
                   <PauseActiveIcon size={15} />
                 </span>
                 <span className={cn("absolute transition-opacity duration-150", isLoading ? "opacity-100" : "opacity-0")}>
-                  <Loader variant="spinner" size={13} />
+                  <SpinnerSteps size={13} color="currentColor" />
                 </span>
               </span>
             </button>

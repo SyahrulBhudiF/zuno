@@ -92,7 +92,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
    * component — it lives in SeekBar's local state, so a long playlist is not re-rendered on
    * every tick.
    */
-  const { currentTrackId, isPlaying } = useNowPlaying();
+  const { currentTrackId, isPlaying, isLoading: isPlayerLoading } = useNowPlaying();
   const [tracks, setTracks] = useState<Track[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -359,6 +359,25 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   );
   const isLikedSongs = playlist.kind === "liked-songs" || playlist.id === "LM";
 
+  /*
+   * O(1) membership test instead of scanning the track array on every render — these lists
+   * run to several hundred rows.
+   */
+  const trackIds = useMemo(() => new Set(tracks.map((track) => track.id)), [tracks]);
+  const isCurrentCollection = currentTrackId !== null && trackIds.has(currentTrackId);
+
+  /*
+   * Resumes rather than restarts when this collection is already loaded: pressing Play on
+   * the playlist you just paused should pick up where it left off, not jump to track one.
+   */
+  const togglePlayCollection = async () => {
+    if (isCurrentCollection) {
+      playerController.togglePlayPause();
+      return;
+    }
+    await playInOrder();
+  };
+
   const playInOrder = async () => {
     const firstTrack = tracks[0];
     if (!firstTrack) return;
@@ -427,7 +446,9 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
             </div>
           ) : undefined}
           actionsDisabled={isLoading || Boolean(error) || tracks.length === 0}
-          onPlay={() => void playInOrder()}
+          isPlaying={isCurrentCollection && isPlaying}
+          isLoading={isCurrentCollection && isPlayerLoading}
+          onPlay={() => void togglePlayCollection()}
           onShuffle={() => void playShuffled()}
         />
       </div>

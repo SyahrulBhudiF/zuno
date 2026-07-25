@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import { PlayActiveIcon, ShuffleActiveIcon } from "@/ui/icons";
+import { PauseActiveIcon, PlayActiveIcon, ShuffleActiveIcon } from "@/ui/icons";
+import { SpinnerSteps } from "@/components/motion/loader";
 import { TrackArtwork } from "./TrackArtwork";
 import { setAmbientArtwork } from "../stores/ambientArtworkStore";
 
@@ -35,7 +36,12 @@ interface MediaHeaderProps {
   artworkSlot?: ReactNode;
   /** Artists read as people, so their image is circular. */
   circularArtwork?: boolean;
+  /** Called for both play and pause — the page decides which, from `isPlaying`. */
   onPlay?: () => void;
+  /** True while a track from *this* collection is playing, so the button reads "Pause". */
+  isPlaying?: boolean;
+  /** This collection is starting playback; the button holds its width and shows a spinner. */
+  isLoading?: boolean;
   onShuffle?: () => void;
   actionsDisabled?: boolean;
   /** Extra controls beside play/shuffle, e.g. Subscribe. */
@@ -66,6 +72,8 @@ export function MediaHeader({
   artworkSlot,
   circularArtwork = false,
   onPlay,
+  isPlaying = false,
+  isLoading = false,
   onShuffle,
   actionsDisabled = false,
   actions,
@@ -108,14 +116,34 @@ export function MediaHeader({
 
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {onPlay ? (
+            /*
+             * Reflects this collection's own state, not the player's: it only becomes a
+             * Pause control while the track being played belongs here. Playing something
+             * else leaves this reading "Play", which is what the button would then do.
+             */
             <button
               type="button"
               disabled={actionsDisabled}
               onClick={onPlay}
-              className="flex items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-transform hover:scale-[1.03] active:scale-95 disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              aria-label={isPlaying ? "Pause" : "Play"}
+              className="flex min-w-[7.5rem] items-center justify-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-transform hover:scale-[1.03] active:scale-95 disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
-              <PlayActiveIcon size={18} aria-hidden="true" />
-              Play
+              {isLoading ? (
+                <>
+                  <SpinnerSteps size={18} color="currentColor" />
+                  Loading
+                </>
+              ) : isPlaying ? (
+                <>
+                  <PauseActiveIcon size={18} aria-hidden="true" />
+                  Pause
+                </>
+              ) : (
+                <>
+                  <PlayActiveIcon size={18} aria-hidden="true" />
+                  Play
+                </>
+              )}
             </button>
           ) : null}
 

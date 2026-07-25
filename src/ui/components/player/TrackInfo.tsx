@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { Loader } from "@/components/motion/loader";
+import { SpinnerSteps } from "@/components/motion/loader";
 import { Marquee } from "@/components/motion/marquee";
 import { cn } from "@/lib/utils";
 import { HeartActiveIcon, HeartBrokenIcon, HeartIcon } from "@/ui/icons";
@@ -118,7 +118,7 @@ export function TrackInfo() {
           }
         >
           {isLikeStatusLoading || isLikePending ? (
-            <Loader variant="spinner" size={18} />
+            <SpinnerSteps size={18} color="currentColor" />
           ) : isLiked ? (
             // Hovering a liked track previews the un-like action.
             <span className="relative grid size-[18px] place-items-center" aria-hidden="true">

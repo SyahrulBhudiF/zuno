@@ -5,6 +5,8 @@ export interface NowPlaying {
   currentTrackId: string | null;
   /** Whether that track is actually advancing, as opposed to paused. */
   isPlaying: boolean;
+  /** A track is being resolved and buffered; nothing is audible yet. */
+  isLoading: boolean;
 }
 
 /**
@@ -22,5 +24,6 @@ export function useNowPlaying(): NowPlaying {
   return {
     currentTrackId: state.currentTrack?.id ?? null,
     isPlaying: state.status === "playing",
+    isLoading: state.status === "loading",
   };
 }

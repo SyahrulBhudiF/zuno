@@ -1,6 +1,6 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Loader } from "@/components/motion/loader";
+import { SpinnerSteps } from "@/components/motion/loader";
 import { CheckIcon, CopyIcon, UserIcon, UserPlusIcon } from "@/ui/icons";
 import type { Album, Artist, ArtistPage, Playlist, Track } from "../../datasource/types";
 import { getArtworkUrlCandidates } from "../../datasource/youtube/artwork";
@@ -54,7 +54,7 @@ export function ArtistView({
 }) {
   const { openTrackMenu } = useTrackContextMenu();
   const { openPlaylistMenu, openAlbumMenu } = usePlaylistContextMenu();
-  const { currentTrackId, isPlaying } = useNowPlaying();
+  const { currentTrackId, isPlaying, isLoading: isPlayerLoading } = useNowPlaying();
   const [page, setPage] = useState<ArtistPage | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +126,20 @@ export function ArtistView({
     setToast(message);
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), 3000);
+  };
+
+  const trackIds = useMemo(
+    () => new Set((page?.allSongs ?? []).map((track) => track.id)),
+    [page],
+  );
+  const isCurrentCollection = currentTrackId !== null && trackIds.has(currentTrackId);
+
+  const togglePlayCollection = () => {
+    if (isCurrentCollection) {
+      playerController.togglePlayPause();
+      return;
+    }
+    playInOrder();
   };
 
   const playInOrder = () => {
@@ -213,7 +227,9 @@ export function ArtistView({
           </div>
         }
         actionsDisabled={isLoading || Boolean(error) || !page?.allSongs.length}
-        onPlay={playInOrder}
+        isPlaying={isCurrentCollection && isPlaying}
+        isLoading={isCurrentCollection && isPlayerLoading}
+        onPlay={togglePlayCollection}
         onShuffle={playShuffled}
         actions={
           <button
@@ -223,7 +239,7 @@ export function ArtistView({
             onClick={() => void toggleArtistSubscription()}
           >
             {isSubscribing ? (
-              <Loader variant="spinner" size={18} />
+              <SpinnerSteps size={18} color="currentColor" />
             ) : isSubscribed ? (
               <CheckIcon size={18} />
             ) : (

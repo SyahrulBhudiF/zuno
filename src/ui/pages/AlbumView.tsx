@@ -47,7 +47,7 @@ function AlbumLoadingSpinner({ label }: { label: string }) {
 export function AlbumView({ album, playerController, libraryController }: AlbumViewProps) {
   const { openTrackMenu } = useTrackContextMenu();
   const keyboardShortcuts = useKeyboardShortcuts();
-  const { currentTrackId, isPlaying } = useNowPlaying();
+  const { currentTrackId, isPlaying, isLoading: isPlayerLoading } = useNowPlaying();
   const [tracks, setTracks] = useState<Track[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -116,6 +116,17 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
     [tracks],
   );
 
+  const trackIds = useMemo(() => new Set(tracks.map((track) => track.id)), [tracks]);
+  const isCurrentCollection = currentTrackId !== null && trackIds.has(currentTrackId);
+
+  const togglePlayCollection = () => {
+    if (isCurrentCollection) {
+      playerController.togglePlayPause();
+      return;
+    }
+    playInOrder();
+  };
+
   const playInOrder = () => {
     const firstTrack = tracks[0];
     if (firstTrack) void playerController.playTrackById(firstTrack.id, tracks);
@@ -143,7 +154,9 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
         artworkUrl={album.artworkUrl}
         artworkVariant="album"
         actionsDisabled={isLoading || Boolean(error) || tracks.length === 0}
-        onPlay={playInOrder}
+        isPlaying={isCurrentCollection && isPlaying}
+        isLoading={isCurrentCollection && isPlayerLoading}
+        onPlay={togglePlayCollection}
         onShuffle={playShuffled}
       />
       {isLoading && <AlbumLoadingSpinner label="Loading songs" />}
