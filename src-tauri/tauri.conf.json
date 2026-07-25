@@ -55,7 +55,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhFMjJGQ0RFMUEyQTc3NzYKUldSMmR5b2EzdndpanIyUFVWWnlyajQ1VGpjRFI0czJFVnVSUG5kZ1VvVTRYMFlLK1BxN1lGSHoK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMyMDQ0MjEzQjkxMThGQ0MKUldUTWp4RzVFMElFTXZGMmxnOC84VXlUTkZyaStyQzFkcXd6UVczeGNBNkVuWWU3MjdIM2JLVkgK",
       "endpoints": [
         "https://github.com/noFAYZ/zuno/releases/latest/download/latest.json",
         "https://raw.githubusercontent.com/noFAYZ/zuno/updater-channel/latest.json"

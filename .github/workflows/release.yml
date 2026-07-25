@@ -30,12 +30,12 @@ jobs:
           - name: macOS Apple Silicon
             os: macos-latest
             rust_target: aarch64-apple-darwin
-            build_args: --target aarch64-apple-darwin --bundles dmg
+            build_args: --target aarch64-apple-darwin --bundles app,dmg
             apple_signing_identity: "-"
           - name: macOS Intel
             os: macos-15-intel
             rust_target: x86_64-apple-darwin
-            build_args: --target x86_64-apple-darwin --bundles dmg
+            build_args: --target x86_64-apple-darwin --bundles app,dmg
             apple_signing_identity: "-"
           - name: Linux
             os: ubuntu-latest
