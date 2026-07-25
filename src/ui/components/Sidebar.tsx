@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo, useSyncExternalStore, type ReactE
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/motion/popover";
+import { RailPopover } from "./RailPopover";
 import { isLikedSongsId, likedSongsCover } from "../likedSongsArtwork";
 import {
   AlbumIcon,
@@ -204,65 +204,61 @@ function CreatePlaylistButton({
   };
 
   return (
-    <Popover
+    <RailPopover
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
         if (!next) setError(null);
       }}
-      side="right"
-      align="start"
-      /* z-30 lifts the whole isolated popover above the scrolling list that follows it in
-         the rail, so the panel is never painted over as it opens across the content. */
-      className="mx-2 mb-1 flex z-30"
-    >
-      <PopoverTrigger>
+      className="w-64"
+      trigger={
         <button
           type="button"
           aria-label="New playlist"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
           className={cn(
-            "flex w-full shrink-0 items-center justify-center gap-1.5 rounded-lg bg-card/50 py-2",
+            "mx-2 mb-1 flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-card/50 py-2",
             "text-sm text-muted-foreground transition-colors hover:bg-card hover:text-foreground",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            open && "bg-card text-foreground",
           )}
         >
           <PlusIcon size={18} aria-hidden="true" />
           {!collapsed && <span>New playlist</span>}
         </button>
-      </PopoverTrigger>
-
-      <PopoverContent className="w-64 p-3">
-        <div className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-foreground">New local playlist</span>
-          <span className="text-xs text-muted-foreground">
-            Build a playlist from folders on this computer.
-          </span>
-          <input
-            ref={inputRef}
-            className="mt-1 w-full min-w-0 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-inset focus:ring-ring/60"
-            value={name}
-            placeholder="Playlist name"
-            aria-label="Playlist name"
-            onChange={(event) => {
-              setName(event.target.value);
-              if (error) setError(null);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") submit();
-              if (event.key === "Escape") setOpen(false);
-            }}
-          />
-          {error ? <span className="text-xs text-destructive">{error}</span> : null}
-          <button
-            type="button"
-            className="mt-1 rounded-full bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-transform hover:scale-[1.02] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={submit}
-          >
-            Create playlist
-          </button>
-        </div>
-      </PopoverContent>
-    </Popover>
+      }
+    >
+      <div className="flex flex-col gap-2">
+        <span className="text-sm font-medium text-foreground">New local playlist</span>
+        <span className="text-xs text-muted-foreground">
+          Build a playlist from folders on this computer.
+        </span>
+        <input
+          ref={inputRef}
+          className="mt-1 w-full min-w-0 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-inset focus:ring-ring/60"
+          value={name}
+          placeholder="Playlist name"
+          aria-label="Playlist name"
+          onChange={(event) => {
+            setName(event.target.value);
+            if (error) setError(null);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") submit();
+            if (event.key === "Escape") setOpen(false);
+          }}
+        />
+        {error ? <span className="text-xs text-destructive">{error}</span> : null}
+        <button
+          type="button"
+          className="mt-1 rounded-full bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-transform hover:scale-[1.02] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={submit}
+        >
+          Create playlist
+        </button>
+      </div>
+    </RailPopover>
   );
 }
 
