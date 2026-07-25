@@ -101,7 +101,7 @@ export function TitleBar({
   };
 
   return (
-    <div className="relative z-30 flex h-[var(--titlebar-height)] shrink-0 items-stretch bg-background/90 backdrop-blur ">
+    <div className="relative z-30 flex h-[var(--titlebar-height)] shrink-0 items-stretch bg-background backdrop-blur ">
       <button
         type="button"
         style={{ width: `${sidebarWidth}px` }}

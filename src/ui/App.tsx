@@ -93,7 +93,6 @@ import {
 import { useLastFmScrobblingEnabled } from "./settings/lastfm";
 import { persistMainWindowGeometry } from "./settings/mainWindowGeometry";
 import { hydratePlaybackSettings } from "../player/playbackSettings";
-import { StarField } from "./components/StarField";
 const restoredSession = loadAppSession();
 const LOADING_SCREEN_FADE_MS = 80;
 const LOADING_SCREEN_MAX_MS = 4000;
@@ -291,7 +290,7 @@ export default function App() {
    * so every row renders as artwork only and explains itself through a tooltip on hover.
    * Still state rather than a constant because TitleBar aligns its home button to this width.
    */
-  const [sidebarWidth, setSidebarWidth] = useState(72);
+  const [sidebarWidth, setSidebarWidth] = useState(62);
   const [queuePanelWidth, setQueuePanelWidth] = useState(340);
   const [loadingScreenState, setLoadingScreenState] = useState<"visible" | "leaving" | "hidden">("visible");
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(() =>
@@ -1640,12 +1639,12 @@ useEffect(() => {
       the picks cards and the mini player use, which is what makes the whole app read as one
       material rather than three separately-styled surfaces.
     */}
-    <div className="relative flex h-screen flex-col overflow-hidden rounded-[var(--window-radius)] ring-1 ring-inset ring-[var(--window-edge)]">
-   
+    <div className="relative flex h-screen flex-col overflow-hidden rounded-[var(--window-radius)] border border-border ring-1 ring-inset ring-[var(--window-edge)]">
+ {/*    {!paperPcMode && <StarField />}
     <span
       className="pointer-events-none absolute inset-x-0 top-0 z-50 h-px bg-linear-to-r from-transparent via-[var(--window-edge-highlight)] to-transparent"
       aria-hidden="true"
-    />
+    /> */}
       <TitleBar
         tabs={tabs}
         activeTabId={activeTabId}

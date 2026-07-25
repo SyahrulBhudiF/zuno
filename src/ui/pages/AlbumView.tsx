@@ -111,10 +111,6 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
 
   if (!album) return null;
 
-  const totalDurationSec = useMemo(
-    () => tracks.reduce((total, track) => total + (track.durationSec ?? 0), 0),
-    [tracks],
-  );
 
   const trackIds = useMemo(() => new Set(tracks.map((track) => track.id)), [tracks]);
   const isCurrentCollection = currentTrackId !== null && trackIds.has(currentTrackId);
@@ -150,7 +146,7 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
         eyebrow="Album"
         title={album.title}
         subtitle={<ArtistLinks artists={album.artists} fallback={album.artist} />}
-        meta={formatCollectionMeta(tracks.length, totalDurationSec)}
+        meta={formatCollectionMeta(tracks)}
         artworkUrl={album.artworkUrl}
         artworkVariant="album"
         actionsDisabled={isLoading || Boolean(error) || tracks.length === 0}

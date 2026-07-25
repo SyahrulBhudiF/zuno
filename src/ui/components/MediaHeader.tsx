@@ -5,14 +5,27 @@ import { SpinnerSteps } from "@/components/motion/loader";
 import { TrackArtwork } from "./TrackArtwork";
 import { setAmbientArtwork } from "../stores/ambientArtworkStore";
 
-/** "24 songs · 1 hr 32 min" — omits the duration when the source did not supply one. */
+/**
+ * "24 songs · 1 hr 32 min".
+ *
+ * The duration is dropped unless every counted track reported one and the list is fully
+ * loaded. YouTube omits `durationSec` on most playlist entries, so summing what happens to
+ * be present produced badly wrong totals — a 98-track playlist read "98 songs · 3 min".
+ * A missing total is honest; a wrong one is not.
+ */
 export function formatCollectionMeta(
-  trackCount: number,
-  totalDurationSec: number,
+  tracks: readonly { durationSec?: number }[],
   hasMore = false,
 ): string {
+  const trackCount = tracks.length;
   const countLabel = `${trackCount}${hasMore ? "+" : ""} ${trackCount === 1 ? "song" : "songs"}`;
-  if (totalDurationSec <= 0) return countLabel;
+  if (hasMore || trackCount === 0) return countLabel;
+
+  let totalDurationSec = 0;
+  for (const track of tracks) {
+    if (!track.durationSec) return countLabel;
+    totalDurationSec += track.durationSec;
+  }
 
   const totalMinutes = Math.round(totalDurationSec / 60);
   const hours = Math.floor(totalMinutes / 60);

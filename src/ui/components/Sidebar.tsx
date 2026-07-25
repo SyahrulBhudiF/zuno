@@ -2,11 +2,13 @@ import { useState, useRef, useEffect, useMemo, useSyncExternalStore, type ReactE
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/motion/popover";
 import { isLikedSongsId, likedSongsCover } from "../likedSongsArtwork";
 import {
   AlbumIcon,
   FolderIcon,
   PlaylistIcon,
+  PlusIcon,
   RefreshIcon,
 } from "@/ui/icons";
 import type { Album, Playlist } from "../../datasource/types";
@@ -16,7 +18,9 @@ import {
   subscribeToRecentPlaylists,
 } from "../../player/recentPlaylists";
 import {
+  createLocalPlaylist,
   getLocalPlaylistItems,
+  localPlaylistToPlaylist,
   subscribeToLocalPlaylists,
 } from "../../player/localPlaylists";
 import { getAppSetting, setAppSetting } from "../../internal/appSettings";
@@ -154,6 +158,114 @@ const RETRY_BUTTON =
   "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 /** Square 40px artwork tile shared by both sidebar lists. */
+/**
+ * Creates a local playlist from the sidebar rail.
+ *
+ * Local playlists could previously only be made from Settings, which is a strange place to
+ * look for "new playlist" — this puts it where the playlists are. Opens to the right because
+ * the rail is 72px wide and a panel below would be clipped by the window edge.
+ */
+function CreatePlaylistButton({
+  collapsed,
+  onCreated,
+}: {
+  collapsed: boolean;
+  onCreated: (playlist: Playlist) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Focus the field once the panel has finished unfolding, not while it animates.
+  useEffect(() => {
+    if (!open) return;
+    const timer = window.setTimeout(() => inputRef.current?.focus(), 160);
+    return () => window.clearTimeout(timer);
+  }, [open]);
+
+  const submit = () => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError("Give the playlist a name.");
+      inputRef.current?.focus();
+      return;
+    }
+
+    try {
+      const created = createLocalPlaylist(trimmed);
+      setName("");
+      setError(null);
+      setOpen(false);
+      onCreated(localPlaylistToPlaylist(created));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not create the playlist.");
+    }
+  };
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setError(null);
+      }}
+      side="right"
+      align="start"
+      /* z-30 lifts the whole isolated popover above the scrolling list that follows it in
+         the rail, so the panel is never painted over as it opens across the content. */
+      className="mx-2 mb-1 flex z-30"
+    >
+      <PopoverTrigger>
+        <button
+          type="button"
+          aria-label="New playlist"
+          className={cn(
+            "flex w-full shrink-0 items-center justify-center gap-1.5 rounded-lg bg-card/50 py-2",
+            "text-sm text-muted-foreground transition-colors hover:bg-card hover:text-foreground",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          )}
+        >
+          <PlusIcon size={18} aria-hidden="true" />
+          {!collapsed && <span>New playlist</span>}
+        </button>
+      </PopoverTrigger>
+
+      <PopoverContent className="w-64 p-3">
+        <div className="flex flex-col gap-2">
+          <span className="text-sm font-medium text-foreground">New local playlist</span>
+          <span className="text-xs text-muted-foreground">
+            Build a playlist from folders on this computer.
+          </span>
+          <input
+            ref={inputRef}
+            className="mt-1 w-full min-w-0 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-inset focus:ring-ring/60"
+            value={name}
+            placeholder="Playlist name"
+            aria-label="Playlist name"
+            onChange={(event) => {
+              setName(event.target.value);
+              if (error) setError(null);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") submit();
+              if (event.key === "Escape") setOpen(false);
+            }}
+          />
+          {error ? <span className="text-xs text-destructive">{error}</span> : null}
+          <button
+            type="button"
+            className="mt-1 rounded-full bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-transform hover:scale-[1.02] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={submit}
+          >
+            Create playlist
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 const ARTWORK_TILE = "size-10 shrink-0 rounded-md object-cover";
 const ARTWORK_FALLBACK =
   "flex size-10 shrink-0 items-center justify-center rounded-md bg-card text-muted-foreground";
@@ -709,7 +821,7 @@ export function Sidebar({
   return (
     <div
       ref={sidebarRef}
-      className="relative flex min-h-0 shrink-0 flex-col   bg-background/60 backdrop-blur"
+      className="relative flex min-h-0 shrink-0 flex-col   bg-background backdrop-blur"
       style={{ width: `${width}px` }}
     >
       {/*
@@ -721,12 +833,13 @@ export function Sidebar({
       <div className="flex min-h-0 flex-1 flex-col">
         <div
           className={cn(
-            "m-2 flex shrink-0 items-center gap-1 rounded-lg bg-card/50 p-1",
+            "m-2 flex shrink-0 items-center gap-1 rounded-lg bg-card/20   p-2",
             shouldHideText && "flex-col",
           )}
           role="group"
           aria-label="Library view"
         >
+          <SidebarItemTooltip enabled={shouldHideText} title="Playlists" subtitle="Your playlists">
           <button
             type="button"
             className={toggleButtonClasses(libraryView === "playlists")}
@@ -744,6 +857,8 @@ export function Sidebar({
             <PlaylistIcon size={17} aria-hidden="true" />
             {!shouldHideText && <span>Playlists</span>}
           </button>
+          </SidebarItemTooltip>
+          <SidebarItemTooltip enabled={shouldHideText} title="Albums" subtitle="Saved albums">
           <button
             type="button"
             className={toggleButtonClasses(libraryView === "albums")}
@@ -761,7 +876,16 @@ export function Sidebar({
             <AlbumIcon size={17} aria-hidden="true" />
             {!shouldHideText && <span>Albums</span>}
           </button>
+          </SidebarItemTooltip>
         </div>
+
+        <CreatePlaylistButton
+          collapsed={shouldHideText}
+          onCreated={(playlist) => {
+            setLibraryView("playlists");
+            onNavigatePlaylist(playlist);
+          }}
+        />
         <div ref={listRef} className={listClasses}>
           {libraryView === "albums" ? (
             albums.map((album) => (

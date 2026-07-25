@@ -26,7 +26,7 @@ import {
 } from "react";
 import { cn } from "@/lib/utils";
 
-type Side = "top" | "bottom";
+type Side = "top" | "bottom" | "left" | "right";
 type Align = "start" | "center" | "end";
 type TriggerMode = "click" | "hover";
 
@@ -74,8 +74,18 @@ function buildGeo(
   gap: number,
   panelRadius: number,
 ): Geo {
-  const py = side === "bottom" ? tH + gap : -(gap + cH);
-  const px = align === "start" ? 0 : align === "end" ? tW - cW : (tW - cW) / 2;
+  /*
+   * Horizontal sides mirror the vertical ones: the side picks the offset axis and `align`
+   * positions the panel along the trigger's other edge. The goo layer below is just two
+   * rounded rects in a shared box, so it stretches in whichever direction this produces.
+   */
+  const horizontal = side === "left" || side === "right";
+  const py = horizontal
+    ? (align === "start" ? 0 : align === "end" ? tH - cH : (tH - cH) / 2)
+    : side === "bottom" ? tH + gap : -(gap + cH);
+  const px = horizontal
+    ? (side === "right" ? tW + gap : -(gap + cW))
+    : align === "start" ? 0 : align === "end" ? tW - cW : (tW - cW) / 2;
 
   const left = Math.min(0, px);
   const top = Math.min(0, py);
@@ -580,7 +590,9 @@ export function PopoverContent({ children, className }: PopoverContentProps) {
               position: "absolute",
               left: geo.panel.x,
               top: geo.panel.y,
-              transformOrigin: `${ALIGN_ORIGIN[align]} ${side === "bottom" ? "top" : "bottom"}`,
+              transformOrigin: side === "left" || side === "right"
+                ? `${side === "right" ? "left" : "right"} ${ALIGN_ORIGIN[align] === "left" ? "top" : ALIGN_ORIGIN[align] === "right" ? "bottom" : "center"}`
+                : `${ALIGN_ORIGIN[align]} ${side === "bottom" ? "top" : "bottom"}`,
             }}
             className={cn(
               "w-max max-w-[min(92vw,20rem)] p-4 text-popover-foreground outline-none",

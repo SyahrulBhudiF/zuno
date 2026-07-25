@@ -353,11 +353,6 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     if (started) markPlaylistPlayed(playlist.id);
   };
 
-  /* Sums only what is loaded; paginated playlists show a "120+ songs" style count. */
-  const totalDurationSec = useMemo(
-    () => tracks.reduce((total, track) => total + (track.durationSec ?? 0), 0),
-    [tracks],
-  );
   const isLikedSongs = isLikedSongsId(playlist.id, playlist.kind);
 
   /*
@@ -438,7 +433,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
           eyebrow="Playlist"
           title={playlist.title}
           subtitle={playlist.owner}
-          meta={formatCollectionMeta(tracks.length, totalDurationSec, hasMoreTracks)}
+          meta={formatCollectionMeta(tracks, hasMoreTracks)}
           artworkUrl={playlist.artworkUrl}
           artworkVariant="playlist"
           artworkSlot={isLikedSongs ? (
