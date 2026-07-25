@@ -6,7 +6,7 @@ fn set_windows_app_identity() {
     use windows::{core::w, Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID};
 
     if let Err(error) =
-        unsafe { SetCurrentProcessExplicitAppUserModelID(w!("com.justanothermusicclient.desktop")) }
+        unsafe { SetCurrentProcessExplicitAppUserModelID(w!("com.zuno.desktop")) }
     {
         eprintln!("[internal][tauri][warn] unable to set Windows AppUserModelID: {error}");
     }

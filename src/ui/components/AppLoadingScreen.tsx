@@ -1,7 +1,7 @@
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
-import appIcon from "../../../assets/img/Logo.png";
-import introVideo from "../../../assets/img/zuno.mp4";
+/* import appIcon from "../../../assets/img/Logo.png";
+ */import introVideo from "../../../assets/img/zuno.mp4";
 
 const LOADING_LINES = [
   " Finding your rhythm...",
@@ -36,20 +36,22 @@ export function AppLoadingScreen({ isLeaving }: AppLoadingScreenProps) {
       <div className="pointer-events-none absolute left-1/2 top-1/2 size-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-orange-600/5 blur-[120px]" />
 
       <div className="relative flex flex-col items-center gap-5">
-        <motion.img
+{/*         <motion.img
           initial={{ opacity: 0, scale: 0.92 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ type: "spring", stiffness: 260, damping: 24 }}
           className="size-20 rounded-2xl"
           src={appIcon}
           alt=""
-        /> 
+        />  */}
 
 <motion.video
   initial={{ opacity: 0, scale: 0.92 }}
   animate={{ opacity: 1, scale: 1 }}
   transition={{ type: "spring", stiffness: 260, damping: 24 }}
-  className="size-20 rounded-2xl object-cover"
+  className="size-18 drop-shadow-2xl backdrop-blur rounded-full object-cover
+             [mask-image:radial-gradient(circle_at_center,black_58%,transparent_100%)]
+             [-webkit-mask-image:radial-gradient(circle_at_center,black_58%,transparent_100%)]"
   autoPlay
   muted
   loop

@@ -6,7 +6,7 @@ and direct Tauri IPC. The UI is built on Tailwind v4 plus animated components ve
 [beUI](https://beui.dev) registry, with [Solar](https://solar-icons.vercel.app) icons.
 
 - Version: `1.2.81` (`package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` are kept in lockstep)
-- Bundle id: `com.justanothermusicclient.desktop`
+- Bundle id: `com.zuno.desktop`
 - Platforms: Windows, macOS, Linux
 - Companion docs: [frontend.md](./frontend.md) (UI), [backend.md](./backend.md) (Rust/IPC)
 

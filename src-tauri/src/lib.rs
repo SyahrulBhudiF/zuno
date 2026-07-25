@@ -46,6 +46,69 @@ mod lastfm;
 
 // Keep the legacy service name so existing sign-in credentials survive the product rename.
 const KEYRING_SERVICE: &str = "com.ytmusicdock.app";
+
+/// Durable settings store. Also the marker the app-data migration checks for.
+const APP_SETTINGS_FILE_NAME: &str = "settings-v1.json";
+
+/// Copies the pre-rename app-data directory into the current one, once.
+///
+/// Runs on every start but does nothing after the first: the presence of a settings file in
+/// the new location is the "already migrated" marker. Deliberately a copy rather than a
+/// move, so a half-finished run cannot destroy the only copy of the user's settings — the
+/// old directory is left untouched for them to delete when they are satisfied.
+///
+/// Only the roaming data directory is migrated. Caches, logs and the webview profile live in
+/// the local data directory and all regenerate on their own; copying them would mean moving
+/// hundreds of megabytes to no benefit.
+fn migrate_legacy_app_data(app: &tauri::AppHandle) {
+    let Ok(new_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    // Marker: anything already written here means this ran before, or the user is new.
+    if new_dir.join(APP_SETTINGS_FILE_NAME).exists() {
+        return;
+    }
+    let Some(base) = new_dir.parent() else {
+        return;
+    };
+    let legacy_dir = base.join(LEGACY_BUNDLE_IDENTIFIER);
+    if !legacy_dir.is_dir() || legacy_dir == new_dir {
+        return;
+    }
+
+    if let Err(error) = copy_dir_contents(&legacy_dir, &new_dir) {
+        eprintln!("[internal][tauri][warn] legacy app data migration failed: {error}");
+        return;
+    }
+    eprintln!(
+        "[internal][tauri][info] migrated app data from {}",
+        legacy_dir.display()
+    );
+}
+
+fn copy_dir_contents(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_contents(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Bundle identifier used before the rename to Zuno.
+///
+/// Tauri derives the app-data directory from the identifier, so changing it points the app
+/// at an empty folder and strands every stored preference — including user-created local
+/// playlists. `migrate_legacy_app_data` copies the old directory across once.
+///
+/// Sign-in credentials are unaffected: they live in the OS keyring under `KEYRING_SERVICE`,
+/// which is deliberately decoupled from the identifier.
+const LEGACY_BUNDLE_IDENTIFIER: &str = "com.justanothermusicclient.desktop";
 const KEYRING_USER: &str = "youtube-oauth";
 const YOUTUBE_COOKIE_KEYRING_USER: &str = "youtube-music-cookie";
 #[cfg(target_os = "macos")]
@@ -295,7 +358,7 @@ fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<(), CommandEr
 fn app_settings_path(app: &tauri::AppHandle) -> Result<PathBuf, CommandError> {
     app.path()
         .app_data_dir()
-        .map(|path| path.join("settings-v1.json"))
+        .map(|path| path.join(APP_SETTINGS_FILE_NAME))
         .map_err(|error| CommandError {
             message: format!("application settings directory unavailable: {error}"),
         })
@@ -2256,6 +2319,9 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            // Before the log is initialised, so a first run after the rename still logs to
+            // the directory the user's settings were just restored into.
+            migrate_legacy_app_data(app.handle());
             if let Err(error) = initialize_app_log(app.handle()) {
                 std::eprintln!("[internal][tauri][warn] {}", error.message);
             }
