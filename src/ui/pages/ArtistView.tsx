@@ -1,7 +1,7 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Loader } from "@/components/motion/loader";
-import { CheckIcon, CopyIcon, ShuffleActiveIcon, UserIcon, UserPlusIcon } from "@/ui/icons";
+import { CheckIcon, CopyIcon, UserIcon, UserPlusIcon } from "@/ui/icons";
 import type { Album, Artist, ArtistPage, Playlist, Track } from "../../datasource/types";
 import { getArtworkUrlCandidates } from "../../datasource/youtube/artwork";
 import type { LibraryController } from "../../player/LibraryController";
@@ -9,6 +9,7 @@ import type { PlayerControllerActions } from "../../player/playerStore";
 import { shuffleTracks } from "../../player/shuffleTracks";
 import { AlbumCard } from "../components/AlbumCard";
 import { ArtistLinks } from "../components/ArtistLinks";
+import { MediaHeader } from "../components/MediaHeader";
 import { TrackRow } from "../components/TrackRow";
 import { useNowPlaying } from "../hooks/useNowPlaying";
 import { usePlaylistContextMenu } from "../components/PlaylistContextMenu";
@@ -127,6 +128,11 @@ export function ArtistView({
     toastTimerRef.current = window.setTimeout(() => setToast(null), 3000);
   };
 
+  const playInOrder = () => {
+    const songs = page?.allSongs ?? [];
+    if (songs[0]) void playerController.playTrackById(songs[0].id, songs);
+  };
+
   const playShuffled = () => {
     const shuffled = shuffleTracks(page?.allSongs ?? []);
     if (shuffled[0]) {
@@ -163,46 +169,55 @@ export function ArtistView({
 
   return (
     <div className="flex flex-col gap-8">
-      <header className="flex items-end gap-5">
-        <div className="size-44 shrink-0 rounded-full object-cover shadow-2xl">
-          {currentArtistArtworkUrl ? (
-            <img
-              key={currentArtistArtworkUrl}
-              src={currentArtistArtworkUrl}
-              alt=""
-              onError={() => {
-                setArtistArtworkIndex((prev) => prev + 1);
-                // If all candidates failed, try the raw URL one final time
-                // (the raw URL may work without size parameters).
-                if (artistArtworkIndex >= artistArtworkCandidates.length - 1) {
-                  setArtistArtworkIndex(0);
-                }
-              }}
-            />
-          ) : (
-            <UserIcon size={84} strokeWidth={1.4} />
-          )}
-        </div>
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <span className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Artist</span>
-          <h1>
-            <button
-              type="button"
-              className="group/title flex items-center gap-2 text-left text-3xl font-bold tracking-tight text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              onClick={() => void copyArtistUrl()}
-              aria-label={`Copy ${displayedArtist.name} URL`}
-            >
-              <span>{displayedArtist.name}</span>
-              <CopyIcon className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/title:opacity-100" size={24} aria-hidden="true" />
-            </button>
-          </h1>
-          {displayedArtist.subscriberCount && (
-            <p>{displayedArtist.subscriberCount}</p>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+      <MediaHeader
+        eyebrow="Artist"
+        title={
           <button
-            className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            type="button"
+            className="group/title flex items-center gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => void copyArtistUrl()}
+            aria-label={`Copy ${displayedArtist.name} URL`}
+          >
+            <span>{displayedArtist.name}</span>
+            <CopyIcon
+              className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/title:opacity-100"
+              size={22}
+              aria-hidden="true"
+            />
+          </button>
+        }
+        meta={displayedArtist.subscriberCount}
+        circularArtwork
+        artworkSlot={
+          <div className="size-44 shrink-0 overflow-hidden rounded-full bg-card shadow-2xl ring-1 ring-white/10">
+            {currentArtistArtworkUrl ? (
+              <img
+                key={currentArtistArtworkUrl}
+                className="size-full object-cover"
+                src={currentArtistArtworkUrl}
+                alt=""
+                onError={() => {
+                  setArtistArtworkIndex((prev) => prev + 1);
+                  // If every candidate failed, fall back to the raw URL once more — it can
+                  // work without the size parameters appended to the variants.
+                  if (artistArtworkIndex >= artistArtworkCandidates.length - 1) {
+                    setArtistArtworkIndex(0);
+                  }
+                }}
+              />
+            ) : (
+              <span className="grid size-full place-items-center text-muted-foreground">
+                <UserIcon size={72} strokeWidth={1.4} />
+              </span>
+            )}
+          </div>
+        }
+        actionsDisabled={isLoading || Boolean(error) || !page?.allSongs.length}
+        onPlay={playInOrder}
+        onShuffle={playShuffled}
+        actions={
+          <button
+            className="flex items-center gap-2 rounded-full bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             type="button"
             disabled={isLoading || Boolean(error) || isSubscribing}
             onClick={() => void toggleArtistSubscription()}
@@ -220,17 +235,8 @@ export function ArtistView({
                 : isSubscribed ? "Subscribed" : "Subscribe"}
             </span>
           </button>
-          <button
-            className="flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            type="button"
-            disabled={isLoading || Boolean(error) || !page?.allSongs.length}
-            onClick={playShuffled}
-          >
-            <ShuffleActiveIcon size={18} />
-            <span>Shuffle</span>
-          </button>
-        </div>
-      </header>
+        }
+      />
 
       {isLoading && <p className="px-2 py-10 text-center text-sm text-muted-foreground">Loading artist...</p>}
       {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}

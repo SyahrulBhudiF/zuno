@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Loader } from "@/components/motion/loader";
-import { ArrowDownIcon, ArrowUpIcon, CloseIcon, HeartIcon, SearchIcon, ShuffleActiveIcon } from "@/ui/icons";
+import { ArrowDownIcon, ArrowUpIcon, CloseIcon, HeartIcon, SearchIcon } from "@/ui/icons";
 import type { Playlist, Track } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
 import type { PlayerControllerActions } from "../../player/playerStore";
@@ -10,7 +10,7 @@ import { shuffleTracks } from "../../player/shuffleTracks";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
 import { isLocalPlaylist, reorderLocalPlaylistTracks } from "../../player/localPlaylists";
 import { usePlaylistContextMenu } from "../components/PlaylistContextMenu";
-import { TrackArtwork } from "../components/TrackArtwork";
+import { formatCollectionMeta, MediaHeader } from "../components/MediaHeader";
 import { TrackRow } from "../components/TrackRow";
 import { useNowPlaying } from "../hooks/useNowPlaying";
 import { useKeyboardShortcuts } from "../settings/keyboardShortcuts";
@@ -352,6 +352,21 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     if (started) markPlaylistPlayed(playlist.id);
   };
 
+  /* Sums only what is loaded; paginated playlists show a "120+ songs" style count. */
+  const totalDurationSec = useMemo(
+    () => tracks.reduce((total, track) => total + (track.durationSec ?? 0), 0),
+    [tracks],
+  );
+  const isLikedSongs = playlist.kind === "liked-songs" || playlist.id === "LM";
+
+  const playInOrder = async () => {
+    const firstTrack = tracks[0];
+    if (!firstTrack) return;
+
+    const started = await playerController.playTrackById(firstTrack.id, tracks);
+    if (started) markPlaylistPlayed(playlist.id);
+  };
+
   const playShuffled = async () => {
     const shuffledTracks = shuffleTracks(tracks);
     const firstTrack = shuffledTracks[0];
@@ -398,38 +413,24 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
 
   return (
     <div className="flex flex-col gap-8">
-      <header
-        className="flex items-end gap-5"
-        onContextMenu={(event) => openPlaylistMenu(event, playlist)}
-      >
-        {playlist.kind === "liked-songs" || playlist.id === "LM" ? (
-          <div className="size-44 shrink-0 rounded-xl object-cover shadow-2xl relative shrink-0">
-            <HeartIcon size={80} strokeWidth={1.6} aria-hidden="true" />
-          </div>
-        ) : (
-          <TrackArtwork
-            className="size-44 shrink-0 rounded-xl object-cover shadow-2xl relative shrink-0"
-            artworkUrl={playlist.artworkUrl}
-            iconSize={80}
-            loading="eager"
-            variant="playlist"
-          />
-        )}
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <span className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Playlist</span>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">{playlist.title}</h1>
-          <p className="text-sm text-muted-foreground">{playlist.owner}</p>
-        </div>
-        <button
-          className="flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          type="button"
-          disabled={isLoading || Boolean(error) || tracks.length === 0}
-          onClick={() => void playShuffled()}
-        >
-          <ShuffleActiveIcon size={18} aria-hidden="true" />
-          <span>Shuffle</span>
-        </button>
-      </header>
+      <div onContextMenu={(event) => openPlaylistMenu(event, playlist)}>
+        <MediaHeader
+          eyebrow="Playlist"
+          title={playlist.title}
+          subtitle={playlist.owner}
+          meta={formatCollectionMeta(tracks.length, totalDurationSec, hasMoreTracks)}
+          artworkUrl={playlist.artworkUrl}
+          artworkVariant="playlist"
+          artworkSlot={isLikedSongs ? (
+            <div className="grid size-44 shrink-0 place-items-center rounded-2xl bg-primary/15 text-primary shadow-2xl ring-1 ring-white/10">
+              <HeartIcon size={72} strokeWidth={1.6} aria-hidden="true" />
+            </div>
+          ) : undefined}
+          actionsDisabled={isLoading || Boolean(error) || tracks.length === 0}
+          onPlay={() => void playInOrder()}
+          onShuffle={() => void playShuffled()}
+        />
+      </div>
       {isLoading && <PlaylistLoadingSpinner label="Loading songs" />}
       {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}
       {!isLoading && !error && !hasMoreTracks && tracks.length === 0 && (

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Loader } from "@/components/motion/loader";
-import { CloseIcon, SearchIcon, ShuffleActiveIcon } from "@/ui/icons";
+import { CloseIcon, SearchIcon } from "@/ui/icons";
 import { TrackRow } from "../components/TrackRow";
 import { useNowPlaying } from "../hooks/useNowPlaying";
 import type { Album, Track } from "../../datasource/types";
@@ -10,7 +10,7 @@ import type { PlayerControllerActions } from "../../player/playerStore";
 import { shuffleTracks } from "../../player/shuffleTracks";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
 import { ArtistLinks } from "../components/ArtistLinks";
-import { TrackArtwork } from "../components/TrackArtwork";
+import { formatCollectionMeta, MediaHeader } from "../components/MediaHeader";
 import { useKeyboardShortcuts } from "../settings/keyboardShortcuts";
 import { shouldStartPageSearch } from "./pageSearchKeyboard";
 
@@ -111,6 +111,16 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
 
   if (!album) return null;
 
+  const totalDurationSec = useMemo(
+    () => tracks.reduce((total, track) => total + (track.durationSec ?? 0), 0),
+    [tracks],
+  );
+
+  const playInOrder = () => {
+    const firstTrack = tracks[0];
+    if (firstTrack) void playerController.playTrackById(firstTrack.id, tracks);
+  };
+
   const playShuffled = () => {
     const shuffledTracks = shuffleTracks(tracks);
     const firstTrack = shuffledTracks[0];
@@ -125,31 +135,17 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
 
   return (
     <div className="flex flex-col gap-8">
-      <header className="flex items-end gap-5">
-        <TrackArtwork
-          className="size-44 shrink-0 rounded-xl object-cover shadow-2xl"
-          artworkUrl={album.artworkUrl}
-          iconSize={80}
-          loading="eager"
-          variant="album"
-        />
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <span className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">Album</span>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">{album.title}</h1>
-          <p className="text-sm text-muted-foreground">
-            <ArtistLinks artists={album.artists} fallback={album.artist} />
-          </p>
-        </div>
-        <button
-          className="flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          type="button"
-          disabled={isLoading || Boolean(error) || tracks.length === 0}
-          onClick={playShuffled}
-        >
-          <ShuffleActiveIcon size={18} aria-hidden="true" />
-          <span>Shuffle</span>
-        </button>
-      </header>
+      <MediaHeader
+        eyebrow="Album"
+        title={album.title}
+        subtitle={<ArtistLinks artists={album.artists} fallback={album.artist} />}
+        meta={formatCollectionMeta(tracks.length, totalDurationSec)}
+        artworkUrl={album.artworkUrl}
+        artworkVariant="album"
+        actionsDisabled={isLoading || Boolean(error) || tracks.length === 0}
+        onPlay={playInOrder}
+        onShuffle={playShuffled}
+      />
       {isLoading && <AlbumLoadingSpinner label="Loading songs" />}
       {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}
       {!isLoading && !error && tracks.length > 0 && (
