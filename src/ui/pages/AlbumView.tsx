@@ -201,9 +201,6 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
                     index={index}
                     isCurrent={isCurrent}
                     isPlaying={isCurrent && isPlaying}
-                    /* Every row would show the same cover as the header — noise, not
-                       information. The position number carries the identity here. */
-                    showArtwork={false}
                     onSelect={() => void playerController.playTrackById(track.id, visibleTracks)}
                     onContextMenu={(event) => openTrackMenu(event, track)}
                   />

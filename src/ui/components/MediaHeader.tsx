@@ -1,7 +1,8 @@
-import { type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { PlayActiveIcon, ShuffleActiveIcon } from "@/ui/icons";
 import { TrackArtwork } from "./TrackArtwork";
+import { setAmbientArtwork } from "../stores/ambientArtworkStore";
 
 /** "24 songs · 1 hr 32 min" — omits the duration when the source did not supply one. */
 export function formatCollectionMeta(
@@ -69,19 +70,18 @@ export function MediaHeader({
   actionsDisabled = false,
   actions,
 }: MediaHeaderProps) {
-  return (
-    <header className="relative isolate flex flex-wrap items-end gap-6 overflow-hidden rounded-3xl px-5 pb-6 pt-5">
-      {/* Ambient wash from the artwork itself. -z-10 keeps it behind the content; the
-          gradient mask fades it out before it reaches the text. */}
-      {artworkUrl ? (
-        <span
-          className="pointer-events-none absolute inset-0 -z-10 opacity-25 blur-3xl saturate-150 [mask-image:linear-gradient(to_bottom,black,transparent)]"
-          aria-hidden="true"
-        >
-          <TrackArtwork className="size-full" artworkUrl={artworkUrl} iconSize={0} />
-        </span>
-      ) : null}
+  /*
+   * The wash is painted by Layout, which sits above the scroll container this header lives
+   * in — it has to start behind the search bar, and anything drawn here would be clipped at
+   * the scroller's top edge. Cleared on unmount so the tint leaves with the page.
+   */
+  useEffect(() => {
+    setAmbientArtwork(artworkUrl ?? null);
+    return () => setAmbientArtwork(null);
+  }, [artworkUrl]);
 
+  return (
+    <header className="relative flex flex-wrap items-end gap-6 px-1 pb-6 pt-2">
       {artworkSlot ?? (
         <TrackArtwork
           className={cn(

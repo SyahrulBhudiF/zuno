@@ -2,6 +2,8 @@ import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { SearchBar } from "./SearchBar";
+import { TrackArtwork } from "./TrackArtwork";
+import { useAmbientArtwork } from "../stores/ambientArtworkStore";
 import { Sidebar } from "./Sidebar";
 import type { Album, Playlist } from "../../datasource/types";
 
@@ -46,6 +48,7 @@ export function Layout({
   rightPanelWidth = 340,
   onRightPanelWidthChange,
 }: LayoutProps) {
+  const ambientArtwork = useAmbientArtwork();
   const pageContentRef = useRef<HTMLDivElement>(null);
   const rightPanelRef = useRef<HTMLDivElement>(null);
   const dragStartX = useRef<number | null>(null);
@@ -199,18 +202,40 @@ export function Layout({
           onNavigateAlbum={onNavigateAlbum}
           onNavigatePlaylist={onNavigatePlaylist}
         />
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 bg-background backdrop-blur">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 bg-background backdrop-blur">
+          {/*
+            Ambient wash for the page beneath. Rendered here rather than inside the page so
+            it can start at the very top of the column — behind the search bar — instead of
+            being clipped at the scroll container's edge.
+
+            Everything after this is positioned, so DOM order alone puts the chrome above it;
+            no z-index juggling, and no stacking context that would trap the blur.
+          */}
+          {ambientArtwork ? (
+            <span
+              key={ambientArtwork}
+              className="pointer-events-none absolute inset-x-0 top-0 h-[22rem] overflow-hidden [mask-image:linear-gradient(to_bottom,black_35%,transparent)]"
+              aria-hidden="true"
+            >
+              <span className="absolute -inset-x-1/4 -top-1/2 bottom-0 scale-125 opacity-70 blur-[64px] saturate-[2.2]">
+                <TrackArtwork className="size-full" artworkUrl={ambientArtwork} iconSize={0} />
+              </span>
+            </span>
+          ) : null}
+
           {showSearchBar && (
-            <SearchBar
-              onOpen={onOpenSearch}
-              canGoBack={canGoBack}
-              canGoForward={canGoForward}
-              onBack={onNavigateBack}
-              onForward={onNavigateForward}
-            />
+            <div className="relative">
+              <SearchBar
+                onOpen={onOpenSearch}
+                canGoBack={canGoBack}
+                canGoForward={canGoForward}
+                onBack={onNavigateBack}
+                onForward={onNavigateForward}
+              />
+            </div>
           )}
 
-          <div className="flex min-h-0 min-w-0 flex-1 gap-3 pb-3 ">
+          <div className="relative flex min-h-0 min-w-0 flex-1 gap-3 pb-3 ">
             <div className="relative min-h-0 min-w-0 flex-1">
               <div
                 ref={pageContentRef}
