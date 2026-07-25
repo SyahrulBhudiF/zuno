@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Loader } from "@/components/motion/loader";
-import { ArrowDownIcon, ArrowUpIcon, CloseIcon, HeartIcon, SearchIcon } from "@/ui/icons";
+import { ArrowDownIcon, ArrowUpIcon, CloseIcon, SearchIcon } from "@/ui/icons";
 import type { Playlist, Track } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
 import type { PlayerControllerActions } from "../../player/playerStore";
@@ -11,6 +11,7 @@ import { useTrackContextMenu } from "../components/TrackContextMenu";
 import { isLocalPlaylist, reorderLocalPlaylistTracks } from "../../player/localPlaylists";
 import { usePlaylistContextMenu } from "../components/PlaylistContextMenu";
 import { formatCollectionMeta, MediaHeader } from "../components/MediaHeader";
+import { isLikedSongsId, likedSongsCover } from "../likedSongsArtwork";
 import { TrackRow } from "../components/TrackRow";
 import { useNowPlaying } from "../hooks/useNowPlaying";
 import { useKeyboardShortcuts } from "../settings/keyboardShortcuts";
@@ -357,7 +358,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     () => tracks.reduce((total, track) => total + (track.durationSec ?? 0), 0),
     [tracks],
   );
-  const isLikedSongs = playlist.kind === "liked-songs" || playlist.id === "LM";
+  const isLikedSongs = isLikedSongsId(playlist.id, playlist.kind);
 
   /*
    * O(1) membership test instead of scanning the track array on every render — these lists
@@ -441,9 +442,11 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
           artworkUrl={playlist.artworkUrl}
           artworkVariant="playlist"
           artworkSlot={isLikedSongs ? (
-            <div className="grid size-44 shrink-0 place-items-center rounded-2xl bg-primary/15 text-primary shadow-2xl ring-1 ring-white/10">
-              <HeartIcon size={72} strokeWidth={1.6} aria-hidden="true" />
-            </div>
+            <img
+              className="size-44 shrink-0 rounded-2xl object-cover shadow-2xl ring-1 ring-white/10"
+              src={likedSongsCover}
+              alt=""
+            />
           ) : undefined}
           actionsDisabled={isLoading || Boolean(error) || tracks.length === 0}
           isPlaying={isCurrentCollection && isPlaying}

@@ -1641,7 +1641,7 @@ useEffect(() => {
       material rather than three separately-styled surfaces.
     */}
     <div className="relative flex h-screen flex-col overflow-hidden rounded-[var(--window-radius)] ring-1 ring-inset ring-[var(--window-edge)]">
-    {!paperPcMode && <StarField />}
+   
     <span
       className="pointer-events-none absolute inset-x-0 top-0 z-50 h-px bg-linear-to-r from-transparent via-[var(--window-edge-highlight)] to-transparent"
       aria-hidden="true"

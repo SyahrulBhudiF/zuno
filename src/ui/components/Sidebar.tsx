@@ -2,10 +2,10 @@ import { useState, useRef, useEffect, useMemo, useSyncExternalStore, type ReactE
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
+import { isLikedSongsId, likedSongsCover } from "../likedSongsArtwork";
 import {
   AlbumIcon,
   FolderIcon,
-  HeartActiveIcon,
   PlaylistIcon,
   RefreshIcon,
 } from "@/ui/icons";
@@ -127,13 +127,14 @@ function SidebarItemTooltip({
   return (
     <Tooltip
       side="right"
-      delay={80}
+      delay={20}
       wrapperClassName="block"
+      className="bg-muted   border border-border"
       content={
-        <span className="flex max-w-56 flex-col gap-0.5 text-left">
-          <span className="truncate font-medium text-foreground">{title}</span>
+        <span className="flex max-w-56 flex-col gap-0.5 text-left  ">
+          <span className="truncate font-medium text-foreground text-sm ">{title}</span>
           {subtitle ? (
-            <span className="truncate text-xs text-muted-foreground">{subtitle}</span>
+            <span className="truncate text-xs   text-muted-foreground">{subtitle}</span>
           ) : null}
         </span>
       }
@@ -158,12 +159,8 @@ const ARTWORK_FALLBACK =
   "flex size-10 shrink-0 items-center justify-center rounded-md bg-card text-muted-foreground";
 
 function SidebarAlbumArtwork({ album }: { album: Album }) {
-  if (album.id === "LM") {
-    return (
-      <div className={cn(ARTWORK_FALLBACK, "bg-primary/15 text-primary")}>
-        <HeartActiveIcon size={22} aria-hidden="true" />
-      </div>
-    );
+  if (isLikedSongsId(album.id)) {
+    return <img className={ARTWORK_TILE} src={likedSongsCover} alt="" />;
   }
 
   return (
@@ -178,12 +175,8 @@ function SidebarAlbumArtwork({ album }: { album: Album }) {
 
 
 function SidebarPlaylistArtwork({ playlist }: { playlist: Playlist }) {
-  if (playlist.kind === "liked-songs" || playlist.id === "LM") {
-    return (
-      <div className={cn(ARTWORK_FALLBACK, "bg-primary/15 text-primary")}>
-        <HeartActiveIcon size={22} aria-hidden="true" />
-      </div>
-    );
+  if (isLikedSongsId(playlist.id, playlist.kind)) {
+    return <img className={ARTWORK_TILE} src={likedSongsCover} alt="" />;
   }
 
   if (playlist.kind === "local") {
