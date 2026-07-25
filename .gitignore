@@ -38,3 +38,10 @@ dist-ssr
 
 outputs/*
 .codex/*
+
+# Updater signing keys. `tauri signer generate -w ~/...` does not expand `~` on
+# Windows and drops a literal `~/` folder in the repo root — this makes sure a
+# private key landing here can never be committed.
+~/
+*.key
+!**/*.key.pub
