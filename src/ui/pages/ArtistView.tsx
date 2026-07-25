@@ -1,7 +1,7 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Loader } from "@/components/motion/loader";
-import { CheckIcon, CopyIcon, PlayActiveIcon, ShuffleActiveIcon, UserIcon, UserPlusIcon } from "@/ui/icons";
+import { CheckIcon, CopyIcon, ShuffleActiveIcon, UserIcon, UserPlusIcon } from "@/ui/icons";
 import type { Album, Artist, ArtistPage, Playlist, Track } from "../../datasource/types";
 import { getArtworkUrlCandidates } from "../../datasource/youtube/artwork";
 import type { LibraryController } from "../../player/LibraryController";
@@ -9,7 +9,8 @@ import type { PlayerControllerActions } from "../../player/playerStore";
 import { shuffleTracks } from "../../player/shuffleTracks";
 import { AlbumCard } from "../components/AlbumCard";
 import { ArtistLinks } from "../components/ArtistLinks";
-import { TrackArtwork } from "../components/TrackArtwork";
+import { TrackRow } from "../components/TrackRow";
+import { useNowPlaying } from "../hooks/useNowPlaying";
 import { usePlaylistContextMenu } from "../components/PlaylistContextMenu";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
 
@@ -52,6 +53,7 @@ export function ArtistView({
 }) {
   const { openTrackMenu } = useTrackContextMenu();
   const { openPlaylistMenu, openAlbumMenu } = usePlaylistContextMenu();
+  const { currentTrackId, isPlaying } = useNowPlaying();
   const [page, setPage] = useState<ArtistPage | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -240,29 +242,21 @@ export function ArtistView({
               <h2>Popular</h2>
               <div className="flex flex-col gap-0.5">
                 {popularSongs.map((track, index) => (
-                  <button
+                  <TrackRow
                     key={track.id}
-                    type="button"
-                    className="group/row flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    track={track}
+                    index={index}
+                    isCurrent={currentTrackId !== null && track.id === currentTrackId}
+                    isPlaying={isPlaying && track.id === currentTrackId}
+                    suppressArtistId={displayedArtist.id}
+                    trailing={
+                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                        {compactViews(track)}
+                      </span>
+                    }
+                    onSelect={() => void playerController.playTrackById(track.id, page.allSongs)}
                     onContextMenu={(event) => openTrackMenu(event, track)}
-                    onClick={() => void playerController.playTrackById(
-                      track.id,
-                      page.allSongs,
-                    )}
-                  >
-                    <span className="w-6 shrink-0 text-right text-xs tabular-nums text-muted-foreground">{index + 1}</span>
-                    <TrackArtwork
-                      className="size-10 shrink-0 rounded-md object-cover"
-                      artworkUrl={track.artworkUrl}
-                      iconSize={22}
-                    />
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <strong>{track.title}</strong>
-                      <ArtistLinks artists={track.artists} fallback={track.artist} suppressArtistId={displayedArtist.id} />
-                    </span>
-                    <span className="text-lg font-semibold text-foreground">{compactViews(track)}</span>
-                    <PlayActiveIcon size={18} />
-                  </button>
+                  />
                 ))}
               </div>
             </section>

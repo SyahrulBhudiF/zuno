@@ -1,17 +1,18 @@
-import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Loader } from "@/components/motion/loader";
-import { ArrowDownIcon, ArrowUpIcon, CloseIcon, HeartIcon, PlayActiveIcon, SearchIcon, ShuffleActiveIcon } from "@/ui/icons";
+import { ArrowDownIcon, ArrowUpIcon, CloseIcon, HeartIcon, SearchIcon, ShuffleActiveIcon } from "@/ui/icons";
 import type { Playlist, Track } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
-import { usePlayerState, type PlayerControllerActions } from "../../player/playerStore";
+import type { PlayerControllerActions } from "../../player/playerStore";
 import { markPlaylistPlayed } from "../../player/recentPlaylists";
 import { shuffleTracks } from "../../player/shuffleTracks";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
 import { isLocalPlaylist, reorderLocalPlaylistTracks } from "../../player/localPlaylists";
-import { ArtistLinks } from "../components/ArtistLinks";
 import { usePlaylistContextMenu } from "../components/PlaylistContextMenu";
 import { TrackArtwork } from "../components/TrackArtwork";
+import { TrackRow } from "../components/TrackRow";
+import { useNowPlaying } from "../hooks/useNowPlaying";
 import { useKeyboardShortcuts } from "../settings/keyboardShortcuts";
 import { shouldStartPageSearch } from "./pageSearchKeyboard";
 
@@ -60,10 +61,6 @@ function SortDirectionIcon({ direction }: { direction: SortDirection }) {
     : <ArrowDownIcon size={13} strokeWidth={2.2} aria-hidden="true" />;
 }
 
-function getTrackKey(track: Track): string {
-  return track.playlistItemId ?? track.id;
-}
-
 function getTrackRenderKey(track: Track, index: number): string {
   return track.playlistItemId ?? `${track.id}:${index}`;
 }
@@ -95,9 +92,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
    * component — it lives in SeekBar's local state, so a long playlist is not re-rendered on
    * every tick.
    */
-  const playerState = usePlayerState();
-  const currentTrackId = playerState.currentTrack?.id ?? null;
-  const playerStatus = playerState.status;
+  const { currentTrackId, isPlaying } = useNowPlaying();
   const [tracks, setTracks] = useState<Track[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -105,7 +100,6 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   const [nextPageKey, setNextPageKey] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
-  const [enteringTrackKeys, setEnteringTrackKeys] = useState<Set<string>>(new Set());
   const [sort, setSort] = useState<PlaylistSort>("dateAdded");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [playlistSearchQuery, setPlaylistSearchQuery] = useState("");
@@ -143,13 +137,11 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     setNextPageKey(undefined);
     setError(null);
     setLoadMoreError(null);
-    setEnteringTrackKeys(new Set());
     let showedPage = false;
     const showPage = (page: { tracks: Track[]; hasMore: boolean; nextPageKey?: string }) => {
       if (!active) return;
       showedPage = true;
       setTracks(page.tracks);
-      setEnteringTrackKeys(new Set(page.tracks.map(getTrackKey)));
       setHasMoreTracks(page.hasMore);
       setNextPageKey(page.nextPageKey);
       setIsLoading(false);
@@ -182,7 +174,6 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
       const page = await libraryController.getPlaylistTrackPage(playlist, nextPageKey);
       if (playlistIdRef.current !== loadingPlaylistId) return;
       const uniqueNewTracks = getUniqueNewTracks(tracksRef.current, page.tracks);
-      setEnteringTrackKeys(new Set(uniqueNewTracks.map(getTrackKey)));
       if (uniqueNewTracks.length > 0) {
         setTracks((current) => [...current, ...uniqueNewTracks]);
       }
@@ -263,17 +254,6 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
       ...(track.artists?.map((artist) => artist.name) ?? []),
     ].some((value) => value?.toLocaleLowerCase().includes(query)));
   }, [playlistSearchQuery, sortedTracks]);
-
-  const enteringTrackDelayIndexes = useMemo(() => {
-    const delayIndexes = new Map<string, number>();
-    visibleTracks.forEach((track) => {
-      const key = getTrackKey(track);
-      if (enteringTrackKeys.has(key)) {
-        delayIndexes.set(key, delayIndexes.size);
-      }
-    });
-    return delayIndexes;
-  }, [enteringTrackKeys, visibleTracks]);
 
   // Drag to reorder for local playlists
   useEffect(() => {
@@ -527,7 +507,6 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
           ) : (
           <div className="flex flex-col gap-0.5">
             {visibleTracks.map((track, index) => {
-              const trackKey = getTrackKey(track);
               const trackPath = track.localPath ?? track.id;
               /*
                * Match on the *player's* current track rather than a row index: the same
@@ -535,7 +514,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
                * out from under this list.
                */
               const isCurrent = currentTrackId !== null && track.id === currentTrackId;
-              const isCurrentPlaying = isCurrent && playerStatus === "playing";
+              const isCurrentPlaying = isCurrent && isPlaying;
               const isDragged = pointerDragRef.current?.localPath === trackPath && pointerDragRef.current.isDragging;
               const isDropBefore = dropTargetIndex
                 && dropTargetIndex.localPath === trackPath
@@ -544,113 +523,35 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
                 && dropTargetIndex.localPath === trackPath
                 && dropTargetIndex.insertAfter;
               return (
-                <button
+                <TrackRow
                   key={getTrackRenderKey(track, index)}
+                  track={track}
+                  index={index}
+                  isCurrent={isCurrent}
+                  isPlaying={isCurrentPlaying}
                   data-playlist-track-path={trackPath}
-                  className={`${"group/row flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"} ${
-                    enteringTrackDelayIndexes.has(trackKey) ? "" : ""
-                  }`}
-                  style={{
-                    "--track-enter-delay": `${Math.min(
-                      enteringTrackDelayIndexes.get(trackKey) ?? 0,
-                      18,
-                    ) * 28}ms`,
-                    opacity: isDragged ? 0.4 : undefined,
-                    position: "relative" as const,
-                  } as CSSProperties}
-                  onContextMenu={(event) => openTrackMenu(event, track, {
-                    playlist,
-                    onRemove: removeTrackFromList,
-                  })}
-                  onPointerDown={(event) => handlePointerDown(event, track)}
-                  onClick={() => {
+                  className={cn(isDragged && "opacity-40")}
+                  onSelect={() => {
                     if (suppressClickRef.current) {
                       suppressClickRef.current = false;
                       return;
                     }
                     void playPlaylistTrack(track);
                   }}
+                  onContextMenu={(event) => openTrackMenu(event, track, {
+                    playlist,
+                    onRemove: removeTrackFromList,
+                  })}
+                  onPointerDown={(event) => handlePointerDown(event, track)}
                 >
+                  {/* Reorder drop indicators, drawn inside the row so they track it. */}
                   {isDropBefore && (
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        height: "2px",
-                        background: "var(--color-primary)",
-                        pointerEvents: "none",
-                      }}
-                    />
+                    <span className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-primary" />
                   )}
                   {isDropAfter && (
-                    <div
-                      style={{
-                        position: "absolute",
-                        bottom: -1,
-                        left: 0,
-                        right: 0,
-                        height: "2px",
-                        background: "var(--color-primary)",
-                        pointerEvents: "none",
-                      }}
-                    />
+                    <span className="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-primary" />
                   )}
-                  {/* The index gives way to a play affordance on hover — the row number is
-                      only useful until you have decided to act on the row. */}
-                  <span className="relative w-6 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                    <span className={cn("transition-opacity", isCurrent ? "opacity-0" : "group-hover/row:opacity-0")}>
-                      {index + 1}
-                    </span>
-                    {!isCurrent && (
-                      <PlayActiveIcon
-                        size={14}
-                        className="absolute inset-0 m-auto opacity-0 transition-opacity group-hover/row:opacity-100"
-                        aria-hidden="true"
-                      />
-                    )}
-                    {isCurrent && (
-                      /* Equaliser bars when this row is the track that is playing; a static
-                         glyph when it is the current track but paused. */
-                      <span className="absolute inset-0 flex items-center justify-end gap-[2px]" aria-hidden="true">
-                        {isCurrentPlaying ? (
-                          [0, 1, 2].map((bar) => (
-                            <span
-                              key={bar}
-                              className="h-3 w-[2px] origin-bottom rounded-full bg-primary motion-safe:animate-[rowEq_900ms_ease-in-out_infinite]"
-                              style={{ animationDelay: `${bar * 140}ms` }}
-                            />
-                          ))
-                        ) : (
-                          <PlayActiveIcon size={14} className="text-primary" />
-                        )}
-                      </span>
-                    )}
-                  </span>
-
-                  <TrackArtwork
-                    className="size-10 shrink-0 rounded-md"
-                    artworkUrl={track.artworkUrl}
-                    iconSize={18}
-                  />
-
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className={cn(
-                      "truncate text-sm font-medium",
-                      isCurrent ? "text-primary" : "text-foreground",
-                    )}>
-                      {track.title}
-                    </span>
-                    <ArtistLinks
-                      className="truncate text-xs text-muted-foreground"
-                      artists={track.artists}
-                      fallback={track.artist}
-                    />
-                  </span>
-
-                  <span className="sr-only">{isCurrentPlaying ? "Now playing" : ""}</span>
-                </button>
+                </TrackRow>
               );
             })}
           </div>

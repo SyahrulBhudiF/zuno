@@ -1,7 +1,9 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Loader } from "@/components/motion/loader";
-import { CloseIcon, PlayActiveIcon, SearchIcon, ShuffleActiveIcon } from "@/ui/icons";
+import { CloseIcon, SearchIcon, ShuffleActiveIcon } from "@/ui/icons";
+import { TrackRow } from "../components/TrackRow";
+import { useNowPlaying } from "../hooks/useNowPlaying";
 import type { Album, Track } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
 import type { PlayerControllerActions } from "../../player/playerStore";
@@ -30,10 +32,6 @@ interface AlbumViewProps {
   libraryController: LibraryController;
 }
 
-function getTrackKey(track: Track): string {
-  return track.playlistItemId ?? track.id;
-}
-
 function getTrackRenderKey(track: Track, index: number): string {
   return track.playlistItemId ?? `${track.id}:${index}`;
 }
@@ -49,11 +47,11 @@ function AlbumLoadingSpinner({ label }: { label: string }) {
 export function AlbumView({ album, playerController, libraryController }: AlbumViewProps) {
   const { openTrackMenu } = useTrackContextMenu();
   const keyboardShortcuts = useKeyboardShortcuts();
+  const { currentTrackId, isPlaying } = useNowPlaying();
   const [tracks, setTracks] = useState<Track[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [albumSearchQuery, setAlbumSearchQuery] = useState("");
-  const [enteringTrackKeys, setEnteringTrackKeys] = useState<Set<string>>(new Set());
   const albumSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -63,20 +61,17 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
     setAlbumSearchQuery("");
     setIsLoading(true);
     setError(null);
-    setEnteringTrackKeys(new Set());
     let showedTracks = false;
     void libraryController.getAlbumTracks(album, (updatedTracks) => {
       if (!active) return;
       showedTracks = updatedTracks.length > 0;
       setTracks(updatedTracks);
-      setEnteringTrackKeys(new Set(updatedTracks.map(getTrackKey)));
       if (updatedTracks.length > 0) setIsLoading(false);
     })
       .then((items) => {
         if (!active) return;
         showedTracks = true;
         setTracks(items);
-        setEnteringTrackKeys(new Set(items.map(getTrackKey)));
       })
       .catch(() => {
         if (active && !showedTracks) setError("Unable to load this album.");
@@ -99,17 +94,6 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
       ...(track.artists?.map((artist) => artist.name) ?? []),
     ].some((value) => value?.toLocaleLowerCase().includes(query)));
   }, [albumSearchQuery, tracks]);
-
-  const enteringTrackDelayIndexes = useMemo(() => {
-    const delayIndexes = new Map<string, number>();
-    visibleTracks.forEach((track) => {
-      const key = getTrackKey(track);
-      if (enteringTrackKeys.has(key)) {
-        delayIndexes.set(key, delayIndexes.size);
-      }
-    });
-    return delayIndexes;
-  }, [enteringTrackKeys, visibleTracks]);
 
   useEffect(() => {
     if (!album || isLoading || error || tracks.length === 0) return;
@@ -209,33 +193,24 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
           ) : (
             <div className="flex flex-col gap-0.5">
               {visibleTracks.map((track, index) => {
-                const trackKey = getTrackKey(track);
+                /*
+                 * Matched on track identity rather than row position: the queue can be
+                 * shuffled or reordered independently of how this album is displayed.
+                 */
+                const isCurrent = currentTrackId !== null && track.id === currentTrackId;
                 return (
-                  <button
+                  <TrackRow
                     key={getTrackRenderKey(track, index)}
-                    className={`${"group/row flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"} ${
-                      enteringTrackDelayIndexes.has(trackKey) ? "" : ""
-                    }`}
-                    style={{
-                      "--track-enter-delay": `${Math.min(
-                        enteringTrackDelayIndexes.get(trackKey) ?? 0,
-                        18,
-                      ) * 28}ms`,
-                    } as CSSProperties}
+                    track={track}
+                    index={index}
+                    isCurrent={isCurrent}
+                    isPlaying={isCurrent && isPlaying}
+                    /* Every row would show the same cover as the header — noise, not
+                       information. The position number carries the identity here. */
+                    showArtwork={false}
+                    onSelect={() => void playerController.playTrackById(track.id, visibleTracks)}
                     onContextMenu={(event) => openTrackMenu(event, track)}
-                    onClick={() => void playerController.playTrackById(track.id, visibleTracks)}
-                  >
-                    <span className="w-6 shrink-0 text-right text-xs tabular-nums text-muted-foreground">{index + 1}</span>
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="truncate text-sm font-medium text-foreground">{track.title}</span>
-                      <ArtistLinks
-                        className="truncate text-xs text-muted-foreground"
-                        artists={track.artists}
-                        fallback={track.artist}
-                      />
-                    </span>
-                    <PlayActiveIcon size={18} />
-                  </button>
+                  />
                 );
               })}
             </div>
