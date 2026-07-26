@@ -1,5 +1,6 @@
 import type { DataSource } from "../datasource/DataSource";
 import type {
+  AccountOption,
   Album,
   Artist,
   ArtistPage,
@@ -10,11 +11,15 @@ import type {
   Track,
 } from "../datasource/types";
 import { logInternalError, logInternalInfo } from "../internal/logging";
+import { forgetTrackInPlaylist, rememberTrackInPlaylist } from "./playlistMembership";
 import {
+  addLocalPlaylistPath,
   addLocalTrackToPlaylist,
+  getLocalPlaylist,
   getLocalPlaylistTrackPage,
   getLocalTracksForPlaylist,
   isLocalPlaylist,
+  removeLocalPlaylistPath,
   removeLocalTrackFromPlaylist,
 } from "./localPlaylists";
 
@@ -148,6 +153,27 @@ export class LibraryController {
       });
     } catch (error) {
       this.setFailure("Unable to sign out.", error);
+    }
+  }
+
+  listAccounts(): Promise<AccountOption[]> {
+    return this.dataSource.listAccounts?.() ?? Promise.resolve([]);
+  }
+
+  /**
+   * Switches channel and reloads the library.
+   *
+   * The old library is dropped before the refresh rather than after, so the UI never shows the
+   * previous channel's playlists under the new channel's name while the fetch is in flight.
+   */
+  async selectAccount(id: string): Promise<void> {
+    if (!this.dataSource.selectAccount) return;
+    try {
+      await this.dataSource.selectAccount(id);
+      this.setState({ status: "loading", library: null, authPrompt: null, error: null });
+      await this.refresh();
+    } catch (error) {
+      this.setFailure("Unable to switch account.", error);
     }
   }
 
@@ -336,8 +362,17 @@ export class LibraryController {
     playlist: Playlist,
   ): Promise<"added" | "already-present"> {
     if (track.source === "local") {
+      // A local playlist is a list of file paths, not of tracks, so a local song joins it by
+      // path. (Local songs in a *YouTube* playlist can't be sent to YouTube at all, so those
+      // are shadowed in local storage instead — that is what addLocalTrackToPlaylist does.)
       if (isLocalPlaylist(playlist)) {
-        throw new Error("Local songs are already managed from Local Files.");
+        if (!track.localPath) {
+          throw new Error("This song has no file on disk to add.");
+        }
+        const paths = getLocalPlaylist(playlist.id)?.paths ?? [];
+        if (paths.includes(track.localPath)) return "already-present";
+        addLocalPlaylistPath(playlist.id, track.localPath);
+        return "added";
       }
       return addLocalTrackToPlaylist(track, playlist);
     }
@@ -347,11 +382,18 @@ export class LibraryController {
     if (this.state.status === "signed-out" || !this.state.library) {
       throw new Error("Sign in to YouTube Music before adding songs to playlists.");
     }
-    return this.dataSource.addTrackToPlaylist(track, playlist);
+    const result = await this.dataSource.addTrackToPlaylist(track, playlist);
+    rememberTrackInPlaylist(track, playlist);
+    return result;
   }
 
   async removeTrackFromPlaylist(track: Track, playlist: Playlist): Promise<void> {
-    if (track.source === "local" && !isLocalPlaylist(playlist)) {
+    forgetTrackInPlaylist(track, playlist);
+    if (track.source === "local") {
+      if (isLocalPlaylist(playlist)) {
+        if (track.localPath) removeLocalPlaylistPath(playlist.id, track.localPath);
+        return;
+      }
       removeLocalTrackFromPlaylist(track, playlist);
       return;
     }

@@ -10,7 +10,7 @@ import {
   type PlaybackSettings,
 } from "./playbackSettings";
 
-export type PlaybackOrderMode = "in-order" | "shuffle" | "repeat-one";
+export type PlaybackOrderMode = "in-order" | "shuffle" | "repeat-one" | "repeat-all";
 
 export type PlayerStatus = "idle" | "loading" | "playing" | "paused" | "error";
 
@@ -30,6 +30,8 @@ export interface PlayerSession {
   queue: Track[];
   queueIndex: number;
   manualQueueLength?: number;
+  /** Index into `queue` after which playback stops, or null. Deliberately not persisted. */
+  stopAfterQueueIndex?: number | null;
   status: "playing" | "paused" | "idle";
   positionSec: number;
   volume: number;
@@ -53,7 +55,8 @@ function getErrorMessage(error: unknown): string {
 
 function normalizePlaybackOrderMode(mode: unknown): PlaybackOrderMode {
   if (mode === "shuffle") return "shuffle";
-  if (mode === "repeat-one" || mode === "repeat-all") return "repeat-one";
+  if (mode === "repeat-one") return "repeat-one";
+  if (mode === "repeat-all") return "repeat-all";
   return "in-order";
 }
 
@@ -111,6 +114,15 @@ export class PlayerController {
   private handlingTrackEnd = false;
   private pendingSeekTime: number | null = null;
   private radioQueueRequestId = 0;
+  /*
+   * "End queue on this song": the queue entry after which playback stops.
+   *
+   * Held by reference, not by index or id. Indices shift on every removal and reorder, and an
+   * id is ambiguous when the same song sits in the queue twice — but Queue splices the very
+   * objects it was handed, so the reference stays pinned to the entry the user actually
+   * clicked. It is dropped on restore, since JSON round-tripping breaks identity.
+   */
+  private stopAfterTrack: Track | null = null;
   private navigationRequest: Promise<void> = Promise.resolve();
   private playbackOrderMode: PlaybackOrderMode = "in-order";
   private isPlaylistMode = false;
@@ -148,6 +160,9 @@ export class PlayerController {
       queue: [...this.queue.all],
       queueIndex: this.queue.currentIndex,
       manualQueueLength: this.queue.queuedManually,
+      stopAfterQueueIndex: this.stopAfterTrack
+        ? this.queue.all.indexOf(this.stopAfterTrack)
+        : null,
       status: this.state.currentTrack
         ? (this.state.status === "playing" ? "playing" : "paused")
         : "idle",
@@ -172,6 +187,7 @@ export class PlayerController {
       session.queueIndex,
       session.manualQueueLength ?? 0,
     );
+    this.stopAfterTrack = null;
     this.autoplayEnabled = session.autoplayEnabled;
     this.pendingSeekTime = Math.max(0, session.positionSec);
     this.audioEngine.setVolume(session.volume);
@@ -400,13 +416,17 @@ export class PlayerController {
       const nextMode: PlaybackOrderMode = this.playbackOrderMode === "in-order"
         ? "shuffle"
         : this.playbackOrderMode === "shuffle"
-          ? "repeat-one"
-          : "in-order";
+          ? "repeat-all"
+          : this.playbackOrderMode === "repeat-all"
+            ? "repeat-one"
+            : "in-order";
       this.setPlaybackOrderMode(nextMode);
     } else {
       const nextMode: PlaybackOrderMode = this.playbackOrderMode === "shuffle"
-        ? "repeat-one"
-        : "shuffle";
+        ? "repeat-all"
+        : this.playbackOrderMode === "repeat-all"
+          ? "repeat-one"
+          : "shuffle";
       this.setPlaybackOrderMode(nextMode);
     }
   }
@@ -440,6 +460,60 @@ export class PlayerController {
     if (!track) return false;
     this.emit();
     return this.playTrackById(track.id);
+  }
+
+  /** Queues a whole album or playlist behind whatever is already hand-picked. */
+  addTracksToQueue(tracks: Track[]): void {
+    if (tracks.length === 0) return;
+    this.queue.addMany(tracks);
+    this.emit();
+    logInternalInfo("PlayerController.addTracksToQueue", { count: tracks.length });
+  }
+
+  /** Pass null to clear. Playback stops once the track at `index` finishes. */
+  setStopAfterQueueIndex(index: number | null): void {
+    const next = index === null ? null : this.queue.all[index] ?? null;
+    // Clicking the marked song again clears it, so one control both sets and unsets.
+    this.stopAfterTrack = next === this.stopAfterTrack ? null : next;
+    this.emit();
+    logInternalInfo("PlayerController.setStopAfterQueueIndex", {
+      index,
+      armed: Boolean(this.stopAfterTrack),
+    });
+  }
+
+  /** Replaces everything after this queue entry with a station seeded from it. */
+  async generateQueueAfter(index: number): Promise<boolean> {
+    const seed = this.queue.all[index];
+    if (!seed || !this.dataSource.getRecommendations) return false;
+
+    const recommendations = await this.getVariedRecommendations(seed);
+    if (recommendations.length === 0) return false;
+
+    this.queue.replaceAfter(index, recommendations);
+    // The queue is no longer "this playlist, in order", so the end-of-playlist handoff to
+    // recommendations no longer applies — this *is* that handoff.
+    this.isPlaylistMode = false;
+    this.autoplayEnabled = true;
+    this.emit();
+    logInternalInfo("PlayerController.generateQueueAfter", {
+      seedTrackId: seed.id,
+      count: recommendations.length,
+    });
+    return true;
+  }
+
+  /** Shuffles only the automatic tail; hand-picked "play next" entries keep their order. */
+  shuffleUpcomingQueue(): void {
+    this.queue.shuffleRemaining(this.queue.queuedManually);
+    this.emit();
+    logInternalInfo("PlayerController.shuffleUpcomingQueue");
+  }
+
+  clearUpcomingQueue(): void {
+    this.queue.clearUpcoming();
+    this.emit();
+    logInternalInfo("PlayerController.clearUpcomingQueue");
   }
 
   moveQueueTrack(sourceIndex: number, targetIndex: number, insertAfter: boolean): void {
@@ -507,12 +581,41 @@ export class PlayerController {
         return;
       }
 
+      // Checked before the queue advances, so `current` is still the track that just ended.
+      // The marker is one-shot: stopping is what it was for, and leaving it armed would stop
+      // playback again the next time this entry came round.
+      if (this.stopAfterTrack && this.queue.current === this.stopAfterTrack) {
+        logInternalInfo("PlayerController.stopAfterTrack reached", {
+          trackId: this.stopAfterTrack.id,
+        });
+        this.stopAfterTrack = null;
+        this.setState({ status: "paused" });
+        return;
+      }
+
       const nextTrack = this.queue.next(false);
 
       if (nextTrack && nextTrack.id !== this.state.currentTrack?.id) {
         this.refillAutomaticQueue();
         await this.playTrackById(nextTrack.id);
         return;
+      }
+
+      /*
+       * Looping is decided here rather than by passing `wrap` to Queue.next, because it only
+       * applies at the *end* of the collection — everywhere else next() already advances
+       * normally. Without this the queue falls through to recommendations and the album
+       * quietly turns into a radio station.
+       */
+      if (this.playbackOrderMode === "repeat-all" && this.queue.all.length > 0) {
+        const firstTrack = this.queue.select(0);
+        if (firstTrack) {
+          logInternalInfo("PlayerController.handleTrackEnded looping queue", {
+            trackCount: this.queue.all.length,
+          });
+          await this.playTrackById(firstTrack.id);
+          return;
+        }
       }
 
       const seed = this.state.currentTrack;

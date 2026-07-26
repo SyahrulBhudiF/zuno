@@ -1,3 +1,4 @@
+import type { PlaybackOrderMode } from "../../player/PlayerController";
 import { usePlayerState } from "../../player/playerStore";
 
 export interface NowPlaying {
@@ -7,10 +8,12 @@ export interface NowPlaying {
   isPlaying: boolean;
   /** A track is being resolved and buffered; nothing is audible yet. */
   isLoading: boolean;
+  /** In-order, shuffle, repeat-one or repeat-all. */
+  playbackOrderMode: PlaybackOrderMode;
 }
 
 /**
- * The two facts a track list needs to mark its rows.
+ * The few facts a collection page needs to mark its rows and its header actions.
  *
  * Narrowing to primitives here is deliberate: the pages never touch the player state object,
  * so `TrackRow`'s memo comparison stays cheap and a row only re-renders when its own
@@ -25,5 +28,6 @@ export function useNowPlaying(): NowPlaying {
     currentTrackId: state.currentTrack?.id ?? null,
     isPlaying: state.status === "playing",
     isLoading: state.status === "loading",
+    playbackOrderMode: state.playbackOrderMode,
   };
 }

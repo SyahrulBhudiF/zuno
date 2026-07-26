@@ -39,11 +39,17 @@ type PlayerControllerMethod =
   | "toggleMute"
   | "getPlaybackOrderMode"
   | "cyclePlaybackOrderMode"
+  | "setPlaybackOrderMode"
   | "getLyrics"
   | "getPlayerSession"
   | "removeFromQueueAt"
   | "playQueueTrackAt"
-  | "moveQueueTrack";
+  | "moveQueueTrack"
+  | "shuffleUpcomingQueue"
+  | "clearUpcomingQueue"
+  | "addTracksToQueue"
+  | "setStopAfterQueueIndex"
+  | "generateQueueAfter";
 
 export type PlayerControllerActions = Pick<PlayerController, PlayerControllerMethod>;
 
@@ -110,6 +116,8 @@ class ActivePlayerController implements PlayerControllerActions {
   };
   getPlaybackOrderMode = () => tabManager.getActivePlayer().getPlaybackOrderMode();
   cyclePlaybackOrderMode = () => tabManager.getActivePlayer().cyclePlaybackOrderMode();
+  setPlaybackOrderMode = (mode: Parameters<PlayerController["setPlaybackOrderMode"]>[0]) =>
+    tabManager.getActivePlayer().setPlaybackOrderMode(mode);
   getLyrics = (track: Parameters<PlayerController["getLyrics"]>[0]) =>
     tabManager.getActivePlayer().getLyrics(track);
   getPlayerSession = () => tabManager.getActivePlayer().exportSession();
@@ -120,6 +128,14 @@ class ActivePlayerController implements PlayerControllerActions {
     targetIndex: number,
     insertAfter: boolean,
   ) => tabManager.getActivePlayer().moveQueueTrack(sourceIndex, targetIndex, insertAfter);
+  shuffleUpcomingQueue = () => tabManager.getActivePlayer().shuffleUpcomingQueue();
+  clearUpcomingQueue = () => tabManager.getActivePlayer().clearUpcomingQueue();
+  addTracksToQueue = (tracks: Parameters<PlayerController["addTracksToQueue"]>[0]) =>
+    tabManager.getActivePlayer().addTracksToQueue(tracks);
+  setStopAfterQueueIndex = (index: number | null) =>
+    tabManager.getActivePlayer().setStopAfterQueueIndex(index);
+  generateQueueAfter = (index: number) =>
+    tabManager.getActivePlayer().generateQueueAfter(index);
 }
 
 export const playerController: PlayerControllerActions = new ActivePlayerController();

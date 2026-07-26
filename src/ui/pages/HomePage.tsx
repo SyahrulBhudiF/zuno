@@ -36,14 +36,14 @@ const PICKS_ITEM_SIZE = 250;
  * centre ones ~38px above the midline — past the stage's clip-path, so their tops get cut.
  * A flatter arc keeps the cylinder legible and the row inside its box.
  */
-const PICKS_ARC = 48;
+const PICKS_ARC = 68;
 
 /*
  * Stage height must clear the tallest thing that can happen: the card, plus half the arc
  * (convex raises the centre cards), plus the hover lift. Sized so nothing reaches the clip
  * edge rather than exactly hugging the card.
  */
-const PICKS_STAGE_HEIGHT = PICKS_ITEM_SIZE + PICKS_ARC + 28;
+const PICKS_STAGE_HEIGHT = PICKS_ITEM_SIZE + PICKS_ARC ;
 
 const suggestionCache = new Map<string, Track[]>();
 const suggestionLoads = new Map<string, Promise<Track[]>>();

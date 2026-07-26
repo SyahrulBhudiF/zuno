@@ -221,7 +221,7 @@ function CreatePlaylistButton({
           aria-expanded={open}
           onClick={() => setOpen(!open)}
           className={cn(
-            "mx-2 mb-1 flex shrink-0 group items-center self-center  justify-center gap-1.5 rounded-full  bg-black/90  py-2",
+            "mx-2 mb-1 flex shrink-0 group items-center self-center  justify-center gap-1.5 rounded-full  bg-foreground/90 dark:bg-foreground/30  py-2",
             "text-sm text-muted-foreground transition-colors hover:bg-primary hover:text-foreground",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             open && "bg-primary text-foreground",
@@ -265,9 +265,9 @@ function CreatePlaylistButton({
   );
 }
 
-const ARTWORK_TILE = "size-10 shrink-0 rounded-md object-cover";
+const ARTWORK_TILE = "size-10 shrink-0 rounded object-cover";
 const ARTWORK_FALLBACK =
-  "flex size-10 shrink-0 items-center justify-center rounded-md bg-card text-muted-foreground";
+  "flex size-10 shrink-0 items-center justify-center rounded bg-card text-muted-foreground";
 
 function SidebarAlbumArtwork({ album }: { album: Album }) {
   if (isLikedSongsId(album.id)) {

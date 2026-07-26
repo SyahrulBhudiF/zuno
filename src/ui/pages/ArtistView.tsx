@@ -52,7 +52,7 @@ export function ArtistView({
   onOpenAlbum: (album: Album) => void;
   onOpenPlaylist: (playlist: Playlist) => void;
 }) {
-  const { openTrackMenu } = useTrackContextMenu();
+  const { openPlaylistPicker, openTrackMenu } = useTrackContextMenu();
   const { openPlaylistMenu, openAlbumMenu } = usePlaylistContextMenu();
   const { currentTrackId, isPlaying, isLoading: isPlayerLoading } = useNowPlaying();
   const [page, setPage] = useState<ArtistPage | null>(null);
@@ -202,6 +202,9 @@ export function ArtistView({
         }
         meta={displayedArtist.subscriberCount}
         circularArtwork
+        /* Supplied even though artworkSlot draws the image: MediaHeader publishes this to
+           the ambient store, which is what tints the chrome above the page. */
+        artworkUrl={currentArtistArtworkUrl}
         artworkSlot={
           <div className="size-44 shrink-0 overflow-hidden rounded-full bg-card shadow-2xl ring-1 ring-white/10">
             {currentArtistArtworkUrl ? (
@@ -231,6 +234,7 @@ export function ArtistView({
         isLoading={isCurrentCollection && isPlayerLoading}
         onPlay={togglePlayCollection}
         onShuffle={playShuffled}
+        onAddToQueue={() => playerController.addTracksToQueue(page?.allSongs ?? [])}
         actions={
           <button
             className="flex items-center gap-2 rounded-full bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -277,6 +281,8 @@ export function ArtistView({
                       </span>
                     }
                     onSelect={() => void playerController.playTrackById(track.id, page.allSongs)}
+                    onQuickAddToQueue={() => playerController.addToQueue(track)}
+                    onQuickAdd={() => openPlaylistPicker(track)}
                     onContextMenu={(event) => openTrackMenu(event, track)}
                   />
                 ))}

@@ -1,14 +1,230 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { CloseIcon, PlaylistIcon, TrashIcon } from "@/ui/icons";
-import { usePlayerSession, playerController } from "../../../player/playerStore";
+import { Tooltip } from "@/components/motion/tooltip";
+import {
+  ClockIcon,
+  DiceIcon,
+  PauseIcon,
+  ShuffleIcon,
+  TrashIcon,
+} from "@/ui/icons";
+import type { Track } from "../../../datasource/types";
+import { usePlayerSession, playerController, usePlayerState } from "../../../player/playerStore";
+import {
+  toggleQueuePanelCollapsed,
+  useQueuePanelCollapsed,
+} from "../../settings/queuePanel";
 import { ArtistLinks } from "../ArtistLinks";
+import { TrackArtwork } from "../TrackArtwork";
+import { SquareAltArrowLeftIcon, SquareAltArrowRightIcon } from "@solar-icons/react/linear";
 
 interface QueuePanelProps {
   /** Open/close animation now lives in Layout's AnimatePresence wrapper. */
   isOpen?: boolean;
   onClose: () => void;
 }
+
+/** Pointer travel before a press becomes a drag rather than a click. */
+const DRAG_SLOP_PX = 6;
+
+const ICON_BUTTON =
+  "flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+type QueueSection = "manual" | "automatic";
+
+/** A queue entry paired with the absolute index the controller needs to act on it. */
+interface QueueEntry {
+  track: Track;
+  /** Index into the whole queue — what removeFromQueueAt / moveQueueTrack expect. */
+  absoluteIndex: number;
+  /** 1-based position among upcoming tracks, for display. */
+  position: number;
+  section: QueueSection;
+}
+
+function formatRemaining(tracks: QueueEntry[]): string | null {
+  let seconds = 0;
+  for (const { track } of tracks) {
+    // One missing duration makes the total a lie, so don't show one at all.
+    if (!track.durationSec) return null;
+    seconds += track.durationSec;
+  }
+  if (seconds === 0) return null;
+
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.round((seconds % 3600) / 60);
+  return hours > 0 ? `${hours} hr ${minutes} min` : `${minutes} min`;
+}
+
+/**
+ * One row of the queue.
+ *
+ * Memoised because an auto-queue is routinely 25+ tracks and the panel re-renders on every
+ * player emit — including once per track change. Every prop here is a primitive or a stable
+ * reference, so the comparison actually holds.
+ */
+const QueueRow = memo(function QueueRow({
+  entry,
+  collapsed,
+  isDragged,
+  isStopAfter,
+  isGenerating,
+  dropEdge,
+  onPlay,
+  onRemove,
+  onStopAfter,
+  onGenerateAfter,
+  onPointerDown,
+}: {
+  entry: QueueEntry;
+  collapsed: boolean;
+  isDragged: boolean;
+  /** Playback stops once this entry finishes. */
+  isStopAfter: boolean;
+  isGenerating: boolean;
+  dropEdge: "before" | "after" | null;
+  onPlay: (absoluteIndex: number) => void;
+  onRemove: (absoluteIndex: number) => void;
+  onStopAfter: (absoluteIndex: number) => void;
+  onGenerateAfter: (absoluteIndex: number) => void;
+  onPointerDown: (
+    event: React.PointerEvent<HTMLButtonElement>,
+    absoluteIndex: number,
+    section: QueueSection,
+  ) => void;
+}) {
+  const { track, absoluteIndex, position, section } = entry;
+
+  const row = (
+    <div
+      data-queue-index={absoluteIndex}
+      data-queue-section={section}
+      className={cn(
+        "group/queue-item relative flex items-center rounded transition-colors hover:bg-card",
+        // The pointer handler writes --drag-translation; this is what renders the lift.
+        "[transform:translateY(var(--drag-translation,0px))]",
+        collapsed ? "justify-center" : "gap-1",
+        isDragged && "opacity-40",
+        // The stop marker has to read without hovering, so it draws a rule under the row —
+        // the queue visibly ends here.
+        isStopAfter && "after:absolute after:inset-x-2 after:-bottom-px after:h-px after:bg-primary/70",
+        dropEdge === "before" &&
+          "before:absolute before:inset-x-2 before:-top-px before:h-0.5 before:rounded-full before:bg-primary",
+        dropEdge === "after" &&
+          "after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-primary",
+      )}
+    >
+      <button
+        type="button"
+        className={cn(
+          "flex min-w-0 items-center rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          collapsed ? "p-1.5" : "flex-1 gap-2.5 p-1.5",
+        )}
+        onPointerDown={(event) => onPointerDown(event, absoluteIndex, section)}
+        onClick={() => onPlay(absoluteIndex)}
+        aria-label={collapsed ? `Play ${track.title}` : undefined}
+      >
+        {/* The cover carries the position and the play affordance so the row needs no
+            separate number column — that is what buys back the width when collapsed. */}
+        <span className="relative shrink-0">
+          <TrackArtwork
+            className={cn("rounded", collapsed ? "size-11" : "size-10")}
+            artworkUrl={track.artworkUrl}
+            iconSize={collapsed ? 20 : 18}
+          />
+          <span
+            className={cn(
+              "absolute inset-0 grid place-items-center rounded-lg bg-background/70 text-[11px] font-semibold tabular-nums text-foreground backdrop-blur-[2px]",
+              "opacity-0 transition-opacity group-hover/queue-item:opacity-100",
+            )}
+            aria-hidden="true"
+          >
+            {position}
+          </span>
+        </span>
+
+        {!collapsed && (
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate text-sm text-foreground">{track.title}</span>
+            <ArtistLinks
+              className="truncate text-xs text-muted-foreground"
+              artists={track.artists}
+              fallback={track.artist}
+            />
+          </span>
+        )}
+      </button>
+
+      {!collapsed && (
+        <span
+          className={cn(
+            "mr-1 flex shrink-0 items-center transition-opacity",
+            // The stop marker stays visible unhovered — it is state, not an affordance.
+            isStopAfter
+              ? "opacity-100"
+              : "opacity-0 focus-within:opacity-100 group-hover/queue-item:opacity-100",
+          )}
+        >
+          <Tooltip content={isStopAfter ? "Don't end queue here" : "End queue after this"}>
+            <button
+              type="button"
+              className={cn(ICON_BUTTON, isStopAfter && "text-primary")}
+              onClick={() => onStopAfter(absoluteIndex)}
+              aria-pressed={isStopAfter}
+            >
+              <PauseIcon size={15} aria-hidden="true" />
+              <span className="sr-only">
+                {isStopAfter ? "Don't end queue here" : "End queue after this"}
+              </span>
+            </button>
+          </Tooltip>
+          <Tooltip content="Generate a new queue from here">
+            <button
+              type="button"
+              className={cn(ICON_BUTTON, isGenerating && "text-primary")}
+              disabled={isGenerating}
+              onClick={() => onGenerateAfter(absoluteIndex)}
+            >
+              <DiceIcon
+                size={15}
+                aria-hidden="true"
+                className={isGenerating ? "motion-safe:animate-spin" : undefined}
+              />
+              <span className="sr-only">Generate a new queue from here</span>
+            </button>
+          </Tooltip>
+          <Tooltip content="Remove from queue">
+            <button
+              type="button"
+              className={cn(ICON_BUTTON, "hover:text-primary")}
+              onClick={() => onRemove(absoluteIndex)}
+            >
+              <TrashIcon size={15} aria-hidden="true" />
+              <span className="sr-only">{`Remove ${track.title} from queue`}</span>
+            </button>
+          </Tooltip>
+        </span>
+      )}
+    </div>
+  );
+
+  // Collapsed hides the title, so the tooltip is the only way to read the row. Expanded
+  // already shows everything, and a tooltip on every row would be noise.
+  if (!collapsed) return row;
+  return (
+    <Tooltip
+      side="left"
+      content={
+        <span className="flex flex-col">
+          <span className="font-medium">{track.title}</span>
+          <span className="text-muted-foreground">{track.artist}</span>
+        </span>
+      }
+    >
+      {row}
+    </Tooltip>
+  );
+});
 
 export function QueuePanel({ onClose }: QueuePanelProps) {
   const panelRef = useRef<HTMLElement>(null);
@@ -17,7 +233,7 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
   const pointerDragRef = useRef<{
     pointerId: number;
     sourceIndex: number;
-    section: "manual" | "automatic";
+    section: QueueSection;
     startX: number;
     startY: number;
     isDragging: boolean;
@@ -28,25 +244,80 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
     index: number;
     insertAfter: boolean;
   } | null>(null);
+  /*
+   * The drop target is read inside a window listener that must not be torn down and rebuilt
+   * on every pointermove — that is what the previous version did, since dropTarget was in the
+   * effect's dependency list. The ref carries the value; the state only drives the paint.
+   */
+  const dropTargetRef = useRef(dropTarget);
+  dropTargetRef.current = dropTarget;
+
+  const collapsed = useQueuePanelCollapsed();
   const playerSession = usePlayerSession();
+  const playerState = usePlayerState();
+  const currentTrack = playerState.currentTrack;
+  const isPlaying = playerState.status === "playing";
+
   const queue = playerSession?.queue ?? [];
   const queueIndex = playerSession?.queueIndex ?? -1;
   const manualQueueLength = playerSession?.manualQueueLength ?? 0;
-  const upcomingStartIndex = Math.max(queueIndex + 1, 0);
-  const upcoming = queue.slice(upcomingStartIndex);
-  const manualQueue = upcoming.slice(0, manualQueueLength);
-  const autoQueue = upcoming.slice(manualQueueLength);
+  const stopAfterQueueIndex = playerSession?.stopAfterQueueIndex ?? null;
+  // Generating hits the network, so the row it was started from shows it is working.
+  const [generatingIndex, setGeneratingIndex] = useState<number | null>(null);
 
-  const handleRemove = (offset: number) => {
-    playerController.removeFromQueueAt(upcomingStartIndex + offset);
+  /*
+   * One flat pass over the upcoming tracks, tagged with everything a row needs. The old panel
+   * sliced the queue three times and then recomputed the same absolute index inline at four
+   * different call sites, each with its own `upcomingStartIndex + manualQueueLength + index`
+   * arithmetic — which is exactly the sort of thing that drifts out of sync.
+   */
+  const { manual, automatic } = useMemo(() => {
+    const start = Math.max(queueIndex + 1, 0);
+    const manualEntries: QueueEntry[] = [];
+    const automaticEntries: QueueEntry[] = [];
+
+    for (let offset = 0; start + offset < queue.length; offset += 1) {
+      const entry: QueueEntry = {
+        track: queue[start + offset],
+        absoluteIndex: start + offset,
+        position: offset + 1,
+        section: offset < manualQueueLength ? "manual" : "automatic",
+      };
+      (entry.section === "manual" ? manualEntries : automaticEntries).push(entry);
+    }
+
+    return { manual: manualEntries, automatic: automaticEntries };
+  }, [manualQueueLength, queue, queueIndex]);
+
+  const upcomingCount = manual.length + automatic.length;
+  const remaining = useMemo(
+    () => formatRemaining([...manual, ...automatic]),
+    [automatic, manual],
+  );
+
+  const handleRemove = (absoluteIndex: number) => {
+    playerController.removeFromQueueAt(absoluteIndex);
   };
 
-  const handlePlay = (offset: number) => {
+  const handleStopAfter = (absoluteIndex: number) => {
+    playerController.setStopAfterQueueIndex(absoluteIndex);
+  };
+
+  const handleGenerateAfter = async (absoluteIndex: number) => {
+    setGeneratingIndex(absoluteIndex);
+    try {
+      await playerController.generateQueueAfter(absoluteIndex);
+    } finally {
+      setGeneratingIndex(null);
+    }
+  };
+
+  const handlePlay = (absoluteIndex: number) => {
     if (suppressClickRef.current) {
       suppressClickRef.current = false;
       return;
     }
-    void playerController.playQueueTrackAt(upcomingStartIndex + offset);
+    void playerController.playQueueTrackAt(absoluteIndex);
   };
 
   useEffect(() => {
@@ -59,7 +330,7 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
           event.clientX - drag.startX,
           event.clientY - drag.startY,
         );
-        if (distance < 6) return;
+        if (distance < DRAG_SLOP_PX) return;
         drag.isDragging = true;
         setDraggedIndex(drag.sourceIndex);
       }
@@ -71,6 +342,8 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
         `${translationY}px`,
       );
 
+      // Reordering across the manual/automatic boundary is rejected by Queue.move, so the
+      // drop indicator must never suggest it is possible.
       const items = Array.from(
         panelRef.current?.querySelectorAll<HTMLElement>("[data-queue-index]") ?? [],
       ).filter((item) =>
@@ -100,10 +373,10 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
       } else if (!targetElement) {
         targetElement = items.reduce<HTMLElement | null>((closest, item) => {
           if (!closest) return item;
-          const itemCenter = item.getBoundingClientRect().top
-            + item.getBoundingClientRect().height / 2;
-          const closestCenter = closest.getBoundingClientRect().top
-            + closest.getBoundingClientRect().height / 2;
+          const itemBounds = item.getBoundingClientRect();
+          const closestBounds = closest.getBoundingClientRect();
+          const itemCenter = itemBounds.top + itemBounds.height / 2;
+          const closestCenter = closestBounds.top + closestBounds.height / 2;
           return Math.abs(itemCenter - event.clientY)
             < Math.abs(closestCenter - event.clientY)
             ? item
@@ -118,26 +391,19 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
 
       const targetIndex = Number(targetElement.dataset.queueIndex);
       const bounds = targetElement.getBoundingClientRect();
-      setDropTarget({
-        index: targetIndex,
-        insertAfter: event.clientY >= bounds.top + bounds.height / 2,
-      });
+      const insertAfter = event.clientY >= bounds.top + bounds.height / 2;
+      const current = dropTargetRef.current;
+      if (current?.index === targetIndex && current.insertAfter === insertAfter) return;
+      setDropTarget({ index: targetIndex, insertAfter });
     };
 
     const handlePointerUp = (event: PointerEvent) => {
       const drag = pointerDragRef.current;
       if (!drag || event.pointerId !== drag.pointerId) return;
 
-      if (
-        drag.isDragging
-        && dropTarget
-        && dropTarget.index !== drag.sourceIndex
-      ) {
-        playerController.moveQueueTrack(
-          drag.sourceIndex,
-          dropTarget.index,
-          dropTarget.insertAfter,
-        );
+      const drop = dropTargetRef.current;
+      if (drag.isDragging && drop && drop.index !== drag.sourceIndex) {
+        playerController.moveQueueTrack(drag.sourceIndex, drop.index, drop.insertAfter);
         suppressClickRef.current = true;
         window.setTimeout(() => {
           suppressClickRef.current = false;
@@ -162,12 +428,12 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
     };
-  }, [dropTarget]);
+  }, []);
 
   const handleTrackPointerDown = (
     event: React.PointerEvent<HTMLButtonElement>,
     absoluteIndex: number,
-    section: "manual" | "automatic",
+    section: QueueSection,
   ) => {
     if (event.button !== 0) return;
     const trackItem = event.currentTarget.closest<HTMLElement>("[data-queue-index]");
@@ -187,148 +453,201 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
     trackItem.style.willChange = "transform";
   };
 
-  const getTrackItemClassName = (absoluteIndex: number) => cn(
-    "group/queue-item relative flex items-center gap-1 rounded-lg transition-colors hover:bg-card",
-    // handlePointerMove writes --drag-translation; this is what renders the lift.
-    "[transform:translateY(var(--drag-translation,0px))]",
-    draggedIndex !== null && "select-none",
-    draggedIndex === absoluteIndex && "opacity-40",
-    dropTarget?.index === absoluteIndex && !dropTarget.insertAfter &&
-      "before:absolute before:inset-x-2 before:-top-px before:h-0.5 before:rounded-full before:bg-primary",
-    dropTarget?.index === absoluteIndex && dropTarget.insertAfter &&
-      "after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-primary",
-  );
+  const renderRows = (entries: QueueEntry[]) =>
+    entries.map((entry) => (
+      <QueueRow
+        key={`${entry.track.id}:${entry.absoluteIndex}`}
+        entry={entry}
+        collapsed={collapsed}
+        isDragged={draggedIndex === entry.absoluteIndex}
+        isStopAfter={stopAfterQueueIndex === entry.absoluteIndex}
+        isGenerating={generatingIndex === entry.absoluteIndex}
+        dropEdge={
+          dropTarget?.index === entry.absoluteIndex
+            ? (dropTarget.insertAfter ? "after" : "before")
+            : null
+        }
+        onPlay={handlePlay}
+        onRemove={handleRemove}
+        onStopAfter={handleStopAfter}
+        onGenerateAfter={(index) => void handleGenerateAfter(index)}
+        onPointerDown={handleTrackPointerDown}
+      />
+    ));
+
+  const sectionLabel = (label: string, count: number) =>
+    collapsed ? (
+      // A hairline instead of a heading: at 76px a word would either truncate or wrap.
+      <span
+        className="mx-auto my-1.5 h-px w-6 rounded-full bg-border"
+        role="separator"
+        aria-label={label}
+      />
+    ) : (
+      <div className="flex items-baseline justify-between gap-2 px-2 pb-1.5 pt-1">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {label}
+        </span>
+        <span className="text-[11px] tabular-nums text-muted-foreground">{count}</span>
+      </div>
+    );
 
   return (
     <aside
       ref={panelRef}
-      className="flex h-full flex-col overflow-y-auto overscroll-contain"
-      aria-label="Queue panel"
+      className={cn(
+        "flex h-full flex-col overflow-y-auto overscroll-contain",
+        // Dragging over rows must not select their text.
+        draggedIndex !== null && "select-none",
+      )}
+      aria-label="Queue"
     >
-      <div className="sticky top-0 z-10 flex items-center justify-between bg-card/80 px-3 py-2.5 backdrop-blur">
-        <h2 className="text-xs font-semibold tracking-[0.14em] text-muted-foreground">QUEUE</h2>
+      <header
+        className={cn(
+          "sticky top-0 z-10 flex shrink-0 items-center gap-1 bg-card backdrop-blur",
+          collapsed ? "flex-col px-2 py-2" : "px-3 py-2.5",
+        )}
+      >
+        <Tooltip
+          side={collapsed ? "left" : "bottom"}
+          content={collapsed ? "Expand queue" : "Collapse queue"}
+        >
+          <button type="button" className={ICON_BUTTON} onClick={toggleQueuePanelCollapsed}>
+            {collapsed ? (
+              <SquareAltArrowLeftIcon size={22} aria-hidden="true" />
+            ) : (
+              <SquareAltArrowRightIcon size={22} aria-hidden="true" />
+            )}
+            <span className="sr-only">{collapsed ? "Expand queue" : "Collapse queue"}</span>
+          </button>
+        </Tooltip>
+
+        {!collapsed && (
+          <div className="flex min-w-0 flex-1 flex-col">
+            <h2 className="text-sm font-semibold text-foreground">Up next</h2>
+            <p className="flex items-center gap-1 truncate text-[11px] text-muted-foreground">
+              <span>{upcomingCount === 0 ? "Nothing queued" : `${upcomingCount} songs`}</span>
+              {remaining && (
+                <>
+                  <ClockIcon size={11} aria-hidden="true" />
+                  <span>{remaining}</span>
+                </>
+              )}
+            </p>
+          </div>
+        )}
+
+        {!collapsed && upcomingCount > 0 && (
+          <>
+            <Tooltip content="Shuffle what's next">
+              <button
+                type="button"
+                className={ICON_BUTTON}
+                onClick={() => playerController.shuffleUpcomingQueue()}
+              >
+                <ShuffleIcon size={16} aria-hidden="true" />
+                <span className="sr-only">Shuffle what's next</span>
+              </button>
+            </Tooltip>
+            <Tooltip content="Clear the queue">
+              <button
+                type="button"
+                className={cn(ICON_BUTTON, "hover:text-primary")}
+                onClick={() => playerController.clearUpcomingQueue()}
+              >
+                <TrashIcon size={16} aria-hidden="true" />
+                <span className="sr-only">Clear the queue</span>
+              </button>
+            </Tooltip>
+          </>
+        )}
+      </header>
+
+      {/* The track playing right now, pinned above the list. Without it the panel opens on a
+          list of songs with no anchor — you can see what is next but not what it follows. */}
+      {currentTrack && (
+        <div
+          className={cn(
+            "flex shrink-0 items-center rounded bg-primary/5",
+            collapsed ? "mx-2 mb-1 justify-center p-1.5" : "mx-2 mb-1 gap-2.5 p-2",
+          )}
+        >
+          <span className="relative shrink-0">
+            <TrackArtwork
+              className={cn(
+                "rounded ring-1 ring-primary/60",
+                collapsed ? "size-11" : "size-10",
+              )}
+              artworkUrl={currentTrack.artworkUrl}
+              iconSize={collapsed ? 20 : 18}
+            />
+            {isPlaying && (
+              <span
+                className="absolute inset-x-0 bottom-1 flex items-end justify-center gap-[2px]"
+                aria-hidden="true"
+              >
+                {[0, 1, 2].map((bar) => (
+                  <span
+                    key={bar}
+                    className="h-2 w-[2px] origin-bottom rounded-full bg-primary motion-safe:animate-[rowEq_900ms_ease-in-out_infinite]"
+                    style={{ animationDelay: `${bar * 140}ms` }}
+                  />
+                ))}
+              </span>
+            )}
+          </span>
+
+          {!collapsed && (
+            <span className="flex min-w-0 flex-col">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-primary">
+                {isPlaying ? "Now playing" : "Paused"}
+              </span>
+              <span className="truncate text-sm font-medium text-foreground">
+                {currentTrack.title}
+              </span>
+              <ArtistLinks
+                className="truncate text-xs text-muted-foreground"
+                artists={currentTrack.artists}
+                fallback={currentTrack.artist}
+              />
+            </span>
+          )}
+        </div>
+      )}
+
+      {upcomingCount === 0 ? (
+        collapsed ? null : (
+          <p className="px-3 py-8 text-center text-sm text-muted-foreground">
+            Nothing queued. Songs you add with "Play next" land here.
+          </p>
+        )
+      ) : (
+        <div className={cn("flex flex-col gap-0.5 pb-2", collapsed ? "px-1.5" : "px-2")}>
+          {manual.length > 0 && (
+            <>
+              {sectionLabel("Added by you", manual.length)}
+              {renderRows(manual)}
+            </>
+          )}
+          {automatic.length > 0 && (
+            <>
+              {manual.length > 0 && sectionLabel("Up next", automatic.length)}
+              {renderRows(automatic)}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Collapsed has no room for a close button in the header, and the player bar's queue
+          button already closes the panel, so this only exists when expanded. */}
+      {!collapsed && (
         <button
           type="button"
-          className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="mx-2 mb-2 mt-auto shrink-0 rounded py-1.5 text-xs text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onClick={onClose}
-          aria-label="Close queue panel"
         >
-          <CloseIcon size={18} />
+          Hide queue
         </button>
-      </div>
-
-      {upcoming.length === 0 ? (
-        <p className="px-3 py-8 text-center text-sm text-muted-foreground">No queued songs.</p>
-      ) : (
-        <>
-          {manualQueue.length > 0 && (
-            <div className="px-2 py-2">
-              <div className="flex items-center gap-1.5 px-1 pb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                <PlaylistIcon size={16} />
-                <span>Manually added</span>
-              </div>
-              <div className="flex flex-col gap-0.5">
-                {manualQueue.map((track, index) => (
-                  <div
-                    key={`${track.id}:${upcomingStartIndex + index}`}
-                    data-queue-index={upcomingStartIndex + index}
-                    data-queue-section="manual"
-                    className={getTrackItemClassName(upcomingStartIndex + index)}
-                  >
-                    <button
-                      type="button"
-                      className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      onPointerDown={(event) =>
-                        handleTrackPointerDown(
-                          event,
-                          upcomingStartIndex + index,
-                          "manual",
-                        )
-                      }
-                      onClick={() => handlePlay(index)}
-                    >
-                      <span className="w-5 shrink-0 text-right text-xs tabular-nums text-muted-foreground">{index + 1}</span>
-                      <span className="flex min-w-0 flex-col">
-                        <span className="truncate text-sm text-foreground">{track.title}</span>
-                        <ArtistLinks
-                          className="truncate text-xs text-muted-foreground"
-                          artists={track.artists}
-                          fallback={track.artist}
-                        />
-                      </span>
-                     
-                    </button>
-                    <button
-                      type="button"
-                      className="mr-1 flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity hover:text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/queue-item:opacity-100"
-                      onClick={() => handleRemove(index)}
-                      aria-label={`Remove ${track.title} from queue`}
-                    >
-                      <TrashIcon size={16} aria-hidden="true" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {autoQueue.length > 0 && (
-            <div className="px-2 py-2">
-              {manualQueue.length > 0 && (
-                <div className="flex items-center gap-1.5 px-1 pb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  <PlaylistIcon size={16} />
-                  <span>Auto queue</span>
-                </div>
-              )}
-              <div className="flex flex-col gap-0.5">
-                {autoQueue.map((track, index) => (
-                  <div
-                    key={`${track.id}:${upcomingStartIndex + manualQueueLength + index}`}
-                    data-queue-index={upcomingStartIndex + manualQueueLength + index}
-                    data-queue-section="automatic"
-                    className={getTrackItemClassName(
-                      upcomingStartIndex + manualQueueLength + index,
-                    )}
-                  >
-                    <button
-                      type="button"
-                      className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      onPointerDown={(event) =>
-                        handleTrackPointerDown(
-                          event,
-                          upcomingStartIndex + manualQueueLength + index,
-                          "automatic",
-                        )
-                      }
-                      onClick={() => handlePlay(manualQueueLength + index)}
-                    >
-                      <span className="w-5 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                        {manualQueueLength + index + 1}
-                      </span>
-                      <span className="flex min-w-0 flex-col">
-                        <span className="truncate text-sm text-foreground">{track.title}</span>
-                        <ArtistLinks
-                          className="truncate text-xs text-muted-foreground"
-                          artists={track.artists}
-                          fallback={track.artist}
-                        />
-                      </span>
-                      
-                    </button>
-                    <button
-                      type="button"
-                      className="mr-1 flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity hover:text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/queue-item:opacity-100"
-                      onClick={() => handleRemove(manualQueueLength + index)}
-                      aria-label={`Remove ${track.title} from queue`}
-                    >
-                      <TrashIcon size={16} aria-hidden="true" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </>
       )}
     </aside>
   );

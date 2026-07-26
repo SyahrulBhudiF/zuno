@@ -11,6 +11,8 @@ import {
 } from "./ui/settings/windowControls";
 import { hydrateMiniPlayerSettings } from "./ui/settings/miniPlayer";
 import { hydratePlayerControlSettings } from "./ui/settings/playerControls";
+import { hydrateQueuePanelSettings } from "./ui/settings/queuePanel";
+import { hydrateTraySettings } from "./ui/settings/tray";
 import { hydrateLastFmSettings } from "./ui/settings/lastfm";
 import { hydrateKeyboardShortcuts } from "./ui/settings/keyboardShortcuts";
 import {
@@ -37,6 +39,8 @@ void Promise.all([
   hydrateWindowControlSettings(),
   hydrateMiniPlayerSettings(),
   hydratePlayerControlSettings(),
+  hydrateQueuePanelSettings(),
+  hydrateTraySettings(),
   hydrateLastFmSettings(),
   hydrateKeyboardShortcuts(),
   hydratePlaybackSettings(),

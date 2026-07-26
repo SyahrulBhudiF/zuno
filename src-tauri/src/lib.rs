@@ -765,10 +765,80 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+/// Key written by the frontend's durable settings layer. Read here rather than pushed from
+/// JS so the close handler answers correctly even before the webview has finished booting.
+const MINIMIZE_TO_TRAY_SETTING: &str = "minimize-to-tray";
+
+fn minimize_to_tray_enabled(app: &tauri::AppHandle) -> bool {
+    read_app_settings(app)
+        .ok()
+        .and_then(|settings| settings.get(MINIMIZE_TO_TRAY_SETTING).and_then(|v| v.as_bool()))
+        .unwrap_or(false)
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// Hides to the tray when the user asked for that, otherwise exits.
+///
+/// Both the titlebar close button and the OS close request come through here so they cannot
+/// disagree — a window that vanishes from one and quits from the other is the classic
+/// minimize-to-tray bug.
+fn close_or_hide_main_window(app: &tauri::AppHandle) {
+    if minimize_to_tray_enabled(app) {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.hide();
+        }
+        eprintln!("[internal][tauri][info] main window hidden to tray");
+        return;
+    }
+    app.exit(0);
+}
+
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+
+    let show = MenuItem::with_id(app, "tray-show", "Show Zuno", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "tray-quit", "Quit Zuno", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    TrayIconBuilder::with_id("main-tray")
+        .icon(app.default_window_icon().cloned().ok_or_else(|| {
+            tauri::Error::AssetNotFound("default window icon".to_string())
+        })?)
+        .tooltip("Zuno")
+        .menu(&menu)
+        // The menu is for the right-click; a left click should just bring the window back.
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "tray-show" => show_main_window(app),
+            // The only path that always exits, whatever the setting says.
+            "tray-quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { button, button_state, .. } = event {
+                if button == tauri::tray::MouseButton::Left
+                    && button_state == tauri::tray::MouseButtonState::Up
+                {
+                    show_main_window(tray.app_handle());
+                }
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
     eprintln!("[internal][tauri][info] quit_app invoked");
-    app.exit(0);
+    close_or_hide_main_window(&app);
 }
 
 #[tauri::command]
@@ -2325,6 +2395,10 @@ pub fn run() {
             if let Err(error) = initialize_app_log(app.handle()) {
                 std::eprintln!("[internal][tauri][warn] {}", error.message);
             }
+            // Always built, so toggling the setting takes effect without a restart.
+            if let Err(error) = build_tray(app.handle()) {
+                std::eprintln!("[internal][tauri][warn] tray unavailable: {error}");
+            }
             Ok(())
         })
         .on_window_event(move |window, event| match event {
@@ -2335,7 +2409,7 @@ pub fn run() {
                 );
                 if window.label() == "main" {
                     api.prevent_close();
-                    window.app_handle().exit(0);
+                    close_or_hide_main_window(window.app_handle());
                 }
             }
             tauri::WindowEvent::Focused(false) => {

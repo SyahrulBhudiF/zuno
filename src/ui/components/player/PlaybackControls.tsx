@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import {
   PauseActiveIcon,
   PlayActiveIcon,
+  RepeatActiveIcon,
   RepeatIcon,
   RepeatOneActiveIcon,
   ShuffleActiveIcon,
@@ -53,15 +54,25 @@ export function PlaybackControls({ extraControlsAlwaysVisible = true }: Playback
   const orderLabel =
     state.playbackOrderMode === "repeat-one"
       ? "Loop current song"
-      : state.playbackOrderMode === "shuffle"
-        ? "Shuffle playback"
-        : "Play in order";
+      : state.playbackOrderMode === "repeat-all"
+        ? "Loop the queue"
+        : state.playbackOrderMode === "shuffle"
+          ? "Shuffle playback"
+          : "Play in order";
 
   // In-order is the resting state, so it reads as Linear; the other two are Bold.
   const isOrderActive = state.playbackOrderMode !== "in-order";
 
   return (
     <div className="flex items-center gap-1">
+      {/*
+        Mirrors the playback-order button on the opposite side. That button keeps its layout
+        space when hidden (it only fades), so without a counterweight the visible
+        previous/play/next trio sits off-centre — and shifts again the moment the bar is
+        hovered. `aria-hidden` keeps the spacer out of the accessibility tree.
+      */}
+      <div className="size-9 shrink-0" aria-hidden="true" />
+
       <button
         type="button"
         className={CONTROL_BUTTON}
@@ -74,7 +85,7 @@ export function PlaybackControls({ extraControlsAlwaysVisible = true }: Playback
 
       <button
         type="button"
-        className="flex size-11 items-center justify-center rounded-full bg-primary text-primary-foreground transition-[transform,background-color] hover:bg-primary/90 active:scale-95 disabled:pointer-events-none disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex size-11 items-center justify-center rounded-full bg-primary text-primary-foreground transition-[transform,background-color] hover:bg-primary/80 active:scale-95 disabled:pointer-events-none disabled:opacity-40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         onClick={handlePlayPause}
         disabled={isBusy || !hasCurrentTrack}
         aria-label={isBusy ? "Loading song" : isPlaying ? "Pause" : "Play"}
@@ -110,7 +121,7 @@ export function PlaybackControls({ extraControlsAlwaysVisible = true }: Playback
 
       <div
         className={cn(
-          "transition-opacity",
+          "size-9 shrink-0 transition-opacity",
           !extraControlsAlwaysVisible &&
             "opacity-0 focus-within:opacity-100 group-hover/playerbar:opacity-100",
         )}
@@ -124,6 +135,8 @@ export function PlaybackControls({ extraControlsAlwaysVisible = true }: Playback
         >
           {state.playbackOrderMode === "repeat-one" ? (
             <RepeatOneActiveIcon size={20} />
+          ) : state.playbackOrderMode === "repeat-all" ? (
+            <RepeatActiveIcon size={20} />
           ) : state.playbackOrderMode === "shuffle" ? (
             <ShuffleActiveIcon size={20} />
           ) : (

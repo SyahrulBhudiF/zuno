@@ -84,7 +84,7 @@ function PlaylistLoadingSpinner({ label }: { label: string }) {
 }
 
 export function PlaylistView({ playlist, playerController, libraryController }: PlaylistViewProps) {
-  const { openTrackMenu } = useTrackContextMenu();
+  const { openPlaylistPicker, openTrackMenu } = useTrackContextMenu();
   const { openPlaylistMenu } = usePlaylistContextMenu();
   const keyboardShortcuts = useKeyboardShortcuts();
   /*
@@ -93,7 +93,12 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
    * component — it lives in SeekBar's local state, so a long playlist is not re-rendered on
    * every tick.
    */
-  const { currentTrackId, isPlaying, isLoading: isPlayerLoading } = useNowPlaying();
+  const {
+    currentTrackId,
+    isPlaying,
+    isLoading: isPlayerLoading,
+    playbackOrderMode,
+  } = useNowPlaying();
   const [tracks, setTracks] = useState<Track[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -382,6 +387,16 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     if (started) markPlaylistPlayed(playlist.id);
   };
 
+  const playInLoop = async () => {
+    const firstTrack = tracks[0];
+    if (!firstTrack) return;
+
+    // Set before starting, so a very short first track cannot end before the mode applies.
+    playerController.setPlaybackOrderMode("repeat-all");
+    const started = await playerController.playTrackById(firstTrack.id, tracks);
+    if (started) markPlaylistPlayed(playlist.id);
+  };
+
   const playShuffled = async () => {
     const shuffledTracks = shuffleTracks(tracks);
     const firstTrack = shuffledTracks[0];
@@ -448,6 +463,9 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
           isLoading={isCurrentCollection && isPlayerLoading}
           onPlay={() => void togglePlayCollection()}
           onShuffle={() => void playShuffled()}
+          onPlayInLoop={() => void playInLoop()}
+          isLooping={isCurrentCollection && playbackOrderMode === "repeat-all"}
+          onAddToQueue={() => playerController.addTracksToQueue(tracks)}
         />
       </div>
       {isLoading && <PlaylistLoadingSpinner label="Loading songs" />}
@@ -558,6 +576,8 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
                     }
                     void playPlaylistTrack(track);
                   }}
+                  onQuickAddToQueue={() => playerController.addToQueue(track)}
+                  onQuickAdd={() => openPlaylistPicker(track)}
                   onContextMenu={(event) => openTrackMenu(event, track, {
                     playlist,
                     onRemove: removeTrackFromList,

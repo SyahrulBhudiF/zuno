@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import { PauseActiveIcon, PlayActiveIcon, ShuffleActiveIcon } from "@/ui/icons";
+import { Tooltip } from "@/components/motion/tooltip";
+import { ListIcon, PauseActiveIcon, PlayActiveIcon, RepeatActiveIcon, ShuffleActiveIcon } from "@/ui/icons";
 import { SpinnerSteps } from "@/components/motion/loader";
 import { TrackArtwork } from "./TrackArtwork";
 import { setAmbientArtwork } from "../stores/ambientArtworkStore";
@@ -56,6 +57,12 @@ interface MediaHeaderProps {
   /** This collection is starting playback; the button holds its width and shows a spinner. */
   isLoading?: boolean;
   onShuffle?: () => void;
+  /** Queues every track in this collection behind what is already hand-picked. */
+  onAddToQueue?: () => void;
+  /** Plays from the top with repeat-all on, so the collection restarts instead of ending. */
+  onPlayInLoop?: () => void;
+  /** Reflects repeat-all being active for this collection. */
+  isLooping?: boolean;
   actionsDisabled?: boolean;
   /** Extra controls beside play/shuffle, e.g. Subscribe. */
   actions?: ReactNode;
@@ -88,6 +95,9 @@ export function MediaHeader({
   isPlaying = false,
   isLoading = false,
   onShuffle,
+  onAddToQueue,
+  onPlayInLoop,
+  isLooping = false,
   actionsDisabled = false,
   actions,
 }: MediaHeaderProps) {
@@ -170,6 +180,43 @@ export function MediaHeader({
               <ShuffleActiveIcon size={18} aria-hidden="true" />
               Shuffle
             </button>
+          ) : null}
+
+          {onPlayInLoop ? (
+            <Tooltip content="Play from the top and start over when it ends">
+              <button
+                type="button"
+                disabled={actionsDisabled}
+                onClick={onPlayInLoop}
+                aria-pressed={isLooping}
+                aria-label="Play in loop"
+                className={cn(
+                  "flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium transition-colors",
+                  "disabled:pointer-events-none disabled:opacity-50",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  isLooping
+                    ? "bg-primary/15 text-primary"
+                    : "bg-card text-foreground hover:bg-muted",
+                )}
+              >
+                <RepeatActiveIcon size={18} aria-hidden="true" />
+                Loop
+              </button>
+            </Tooltip>
+          ) : null}
+
+          {onAddToQueue ? (
+            <Tooltip content="Add every song here to the queue">
+              <button
+                type="button"
+                disabled={actionsDisabled}
+                onClick={onAddToQueue}
+                aria-label="Add to queue"
+                className="flex size-11 items-center justify-center rounded-full bg-card text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ListIcon size={18} aria-hidden="true" />
+              </button>
+            </Tooltip>
           ) : null}
 
           {actions}

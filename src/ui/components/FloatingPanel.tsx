@@ -8,7 +8,7 @@ const GAP = 10;
 /** Keeps the panel off the window edges. */
 const VIEWPORT_MARGIN = 12;
 
-type PanelSide = "right" | "top";
+type PanelSide = "right" | "top" | "bottom";
 
 interface FloatingPanelProps {
   open: boolean;
@@ -101,16 +101,19 @@ export function FloatingPanel({
       const panelHeight = panelRef.current?.offsetHeight ?? 0;
       const panelWidth = panelRef.current?.offsetWidth ?? 0;
 
-      if (side === "top") {
-        // Centred over the trigger, then pulled inside the viewport on both axes.
+      if (side === "top" || side === "bottom") {
+        // Centred on the trigger, then pulled inside the viewport on both axes.
         const maxLeft = window.innerWidth - panelWidth - VIEWPORT_MARGIN;
-        setPosition({
-          left: Math.max(
-            VIEWPORT_MARGIN,
-            Math.min(anchor.left + anchor.width / 2 - panelWidth / 2, maxLeft),
-          ),
-          top: Math.max(VIEWPORT_MARGIN, anchor.top - panelHeight - GAP),
-        });
+        const left = Math.max(
+          VIEWPORT_MARGIN,
+          Math.min(anchor.left + anchor.width / 2 - panelWidth / 2, maxLeft),
+        );
+        if (side === "top") {
+          setPosition({ left, top: Math.max(VIEWPORT_MARGIN, anchor.top - panelHeight - GAP) });
+          return;
+        }
+        const maxTop = window.innerHeight - panelHeight - VIEWPORT_MARGIN;
+        setPosition({ left, top: Math.min(anchor.bottom + GAP, Math.max(VIEWPORT_MARGIN, maxTop)) });
         return;
       }
 
@@ -185,17 +188,27 @@ export function FloatingPanel({
               ref={panelRef}
               role="dialog"
               aria-modal="false"
-              initial={side === "top" ? { opacity: 0, scale: 0.94, y: 6 } : { opacity: 0, scale: 0.94, x: -6 }}
+              initial={
+                side === "top"
+                  ? { opacity: 0, scale: 0.94, y: 6 }
+                  : side === "bottom"
+                    ? { opacity: 0, scale: 0.94, y: -6 }
+                    : { opacity: 0, scale: 0.94, x: -6 }
+              }
               animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
-              exit={side === "top"
-                ? { opacity: 0, scale: 0.96, y: 4, transition: { duration: 0.12 } }
-                : { opacity: 0, scale: 0.96, x: -4, transition: { duration: 0.12 } }}
+              exit={
+                side === "top"
+                  ? { opacity: 0, scale: 0.96, y: 4, transition: { duration: 0.12 } }
+                  : side === "bottom"
+                    ? { opacity: 0, scale: 0.96, y: -4, transition: { duration: 0.12 } }
+                    : { opacity: 0, scale: 0.96, x: -4, transition: { duration: 0.12 } }
+              }
               transition={{ type: "spring", stiffness: 460, damping: 34, mass: 0.6 }}
               {...hoverProps}
               style={{ position: "fixed", left: position.left, top: position.top }}
               className={cn(
-                side === "top" ? "origin-bottom" : "origin-left",
-                "z-[100] rounded-2xl bg-popover p-3 text-popover-foreground",
+                side === "top" ? "origin-bottom" : side === "bottom" ? "origin-top" : "origin-left",
+                "z-[100] rounded-lg  bg-popover p-2 text-popover-foreground",
                 "shadow-2xl ring-1 ring-border",
                 className,
               )}

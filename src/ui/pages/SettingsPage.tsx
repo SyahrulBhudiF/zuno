@@ -64,7 +64,9 @@ import {
   setAutostartEnabled,
 } from "../settings/autostart";
 import {
+  setCompactPlayerBar,
   setExtraPlayerControlsAlwaysVisible,
+  useCompactPlayerBar,
   useExtraPlayerControlsAlwaysVisible,
 } from "../settings/playerControls";
 import { setPaperPcMode, usePaperPcMode } from "../settings/paperPcMode";
@@ -86,6 +88,7 @@ import {
   setMainWindowGeometryPersistenceEnabled,
   useMainWindowGeometryPersistenceEnabled,
 } from "../settings/mainWindowGeometry";
+import { setMinimizeToTray, useMinimizeToTray } from "../settings/tray";
 import {
   captureKeyboardShortcut,
   formatKeyboardShortcut,
@@ -111,6 +114,7 @@ import {
 } from "../settings/lastfm";
 import { isLinux } from "../platform";
 import { GITHUB_NEW_ISSUE_URL, GITHUB_REPOSITORY_URL } from "../links";
+import { AccountAvatar, AccountSwitcher } from "../components/AccountSwitcher";
 
 const KOFI_URL = "https://ko-fi.com/totally2late";
 
@@ -205,6 +209,46 @@ function SettingToggle({
   );
 }
 
+/**
+ * Header for a settings card: icon, title and description on the left, status on the right.
+ *
+ * The four cards each rolled their own, and three of them put the status chip immediately
+ * after the description inside a plain `flex gap-3` — so "Signed out" read as part of the
+ * sentence rather than as the card's state. `justify-between` plus a `min-w-0 flex-1` text
+ * column is what actually pins it to the right edge and truncates instead of overflowing.
+ */
+function SettingsCardHeader({
+  title,
+  titleId,
+  description,
+  icon,
+  status,
+}: {
+  title: string;
+  titleId: string;
+  description: ReactNode;
+  icon?: ReactNode;
+  /** Right-aligned state, e.g. "Connected". */
+  status?: ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      {icon ? (
+        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/15 text-primary">
+          {icon}
+        </span>
+      ) : null}
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <h2 id={titleId} className="text-lg font-semibold text-foreground">
+          {title}
+        </h2>
+        <p className="text-sm text-muted-foreground">{description}</p>
+      </div>
+      {status ? <span className="shrink-0 text-sm">{status}</span> : null}
+    </div>
+  );
+}
+
 /** Quiet outbound links at the foot of the page. */
 const SETTINGS_FOOTER_LINK =
   "flex items-center gap-2 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-md";
@@ -291,9 +335,11 @@ export function SettingsPage({
   const miniPlayerEnabled = useMiniPlayerEnabled();
   const miniPlayerHoverAction = useMiniPlayerHoverAction();
   const extraPlayerControlsAlwaysVisible = useExtraPlayerControlsAlwaysVisible();
+  const compactPlayerBar = useCompactPlayerBar();
   const windowsStyleWindowControls = useWindowsStyleWindowControls();
   const nativeWindowControls = useNativeWindowControls();
   const mainWindowGeometryPersistenceEnabled = useMainWindowGeometryPersistenceEnabled();
+  const minimizeToTray = useMinimizeToTray();
   const lastFmScrobblingEnabled = useLastFmScrobblingEnabled();
   const localPlaylists = useSyncExternalStore(
     subscribeToLocalPlaylists,
@@ -687,28 +733,29 @@ export function SettingsPage({
       {activeTab === "about" && (
         <div className="flex flex-col gap-5" role="tabpanel" aria-label="About settings">
           <section className={SETTINGS_CARD} aria-labelledby="account-settings-title">
-            <div className="flex items-center gap-3">
-              <div>
-                <h2 className="text-lg" id="account-settings-title">Account</h2>
-                <p>{isSignedIn ? "Signed in to YouTube Music" : "No account connected"}</p>
-              </div>
-              <span className={cn("text-sm text-muted-foreground", isSignedIn && "text-primary")}>
-                {isSignedIn ? "Connected" : "Signed out"}
-              </span>
-            </div>
+            <SettingsCardHeader
+              title="Account"
+              titleId="account-settings-title"
+              icon={<UserIcon size={18} aria-hidden="true" />}
+              description={isSignedIn ? "Signed in to YouTube Music" : "No account connected"}
+              status={
+                <span className={isSignedIn ? "text-primary" : "text-muted-foreground"}>
+                  {isSignedIn ? "Connected" : "Signed out"}
+                </span>
+              }
+            />
 
-            <div className="flex items-center gap-3">
-              {account?.artworkUrl ? (
-                <img className="size-11 shrink-0 rounded-full object-cover" src={account.artworkUrl} alt="" />
-              ) : (
-                <div className="grid size-11 shrink-0 place-items-center rounded-full bg-card text-muted-foreground">
-                  <UserIcon size={30} />
-                </div>
-              )}
+            {/* `justify-between` with a `min-w-0 flex-1` text column: without both, the name
+                and description push the sign-out button off the right edge on long channel
+                names instead of truncating. */}
+            <div className="flex items-center justify-between gap-3">
+              <AccountAvatar artworkUrl={account?.artworkUrl} className="size-11" iconSize={26} />
 
-              <div className="flex min-w-0 flex-col">
-                <span className="truncate text-base font-medium text-foreground">{account?.name ?? "YouTube Music"}</span>
-                <span className="text-sm text-muted-foreground">
+              <div className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-base font-medium text-foreground">
+                  {isSignedIn ? account?.name || "YouTube Music" : "Not signed in"}
+                </span>
+                <span className="truncate text-sm text-muted-foreground">
                   {isSignedIn ? "Your library and listening history are available." : "Sign in to load your library."}
                 </span>
               </div>
@@ -735,23 +782,35 @@ export function SettingsPage({
               )}
             </div>
 
+            {/* Renders nothing unless the account actually has more than one channel. */}
+            {isSignedIn && (
+              <div className="flex flex-col gap-1.5 border-t border-border pt-4">
+                <span className="px-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Channel
+                </span>
+                <AccountSwitcher libraryController={libraryController} showSingle />
+              </div>
+            )}
+
             {libraryState.error && <p className="text-sm text-destructive">{libraryState.error}</p>}
           </section>
 
           <section className={SETTINGS_CARD} aria-labelledby="lastfm-settings-title">
-            <div className="flex items-center gap-3">
-              <div>
-                <h2 className="text-lg" id="lastfm-settings-title">Last.fm</h2>
-                <p>
-                  {lastFmSession
-                    ? `Connected as ${lastFmSession.username}`
-                    : "Connect Last.fm to scrobble your listening history."}
-                </p>
-              </div>
-              <span className={cn("text-sm text-muted-foreground", lastFmSession && "text-primary")}>
-                {lastFmSession ? "Connected" : "Signed out"}
-              </span>
-            </div>
+            <SettingsCardHeader
+              title="Last.fm"
+              titleId="lastfm-settings-title"
+              icon={<LastFmIcon size={18} aria-hidden="true" />}
+              description={
+                lastFmSession
+                  ? `Connected as ${lastFmSession.username}`
+                  : "Connect Last.fm to scrobble your listening history."
+              }
+              status={
+                <span className={lastFmSession ? "text-primary" : "text-muted-foreground"}>
+                  {lastFmSession ? "Connected" : "Signed out"}
+                </span>
+              }
+            />
 
             <div className="flex flex-col gap-5">
               <SettingToggle
@@ -762,8 +821,8 @@ export function SettingsPage({
                 onCheckedChange={setLastFmScrobblingEnabled}
               />
 
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={SETTING_LABEL}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
                   <strong>Account connection</strong>
                   <span>
                     {lastFmAuth
@@ -811,13 +870,13 @@ export function SettingsPage({
           </section>
 
           <section className={SETTINGS_CARD} aria-labelledby="about-settings-title">
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg" id="about-settings-title">About</h2>
-            </div>
+            <h2 className="text-lg font-semibold text-foreground" id="about-settings-title">
+              About
+            </h2>
 
             <div className="flex flex-col gap-5">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={SETTING_LABEL}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
                   <strong>Updates</strong>
                   <span>
                     Installed version: {
@@ -873,8 +932,8 @@ export function SettingsPage({
                 <p className="text-sm text-destructive">{updateError}</p>
               )}
 
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={SETTING_LABEL}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
                   <strong>Quick start</strong>
                   <span>Replay the guided introduction.</span>
                 </span>
@@ -895,9 +954,9 @@ export function SettingsPage({
       {activeTab === "system" && (
         <div className="flex flex-col gap-5" role="tabpanel" aria-label="System settings">
           <section className={SETTINGS_CARD} aria-labelledby="system-settings-title">
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg" id="system-settings-title">System</h2>
-            </div>
+            <h2 className="text-lg font-semibold text-foreground" id="system-settings-title">
+              System
+            </h2>
 
             <div className="flex flex-col gap-5">
               <SettingToggle
@@ -911,6 +970,13 @@ export function SettingsPage({
               {autostartError && <p className="text-sm text-destructive">{autostartError}</p>}
 
               <SettingToggle
+                title="Minimize to tray"
+                description="Closing the window hides Zuno to the system tray and keeps playing. Quit from the tray icon."
+                checked={minimizeToTray}
+                onCheckedChange={setMinimizeToTray}
+              />
+
+              <SettingToggle
                 title="Remember window size and location"
                 description="Reopen the main window with its last size and screen position."
                 checked={mainWindowGeometryPersistenceEnabled}
@@ -919,7 +985,7 @@ export function SettingsPage({
 
               <div className="flex flex-col gap-3">
                 <div className="flex flex-wrap items-end justify-between gap-3">
-                  <span className={SETTING_LABEL}>
+                  <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
                     <strong>Local playlists</strong>
                     <span>Create playlists from folders on this computer.</span>
                   </span>
@@ -1027,8 +1093,8 @@ export function SettingsPage({
                 )}
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={SETTING_LABEL}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
                   <strong>Application log</strong>
                   <span>Open the current log file for sharing or troubleshooting.</span>
                 </span>
@@ -1053,7 +1119,7 @@ export function SettingsPage({
               />
 
               <div className="flex flex-wrap items-end justify-between gap-4 py-2">
-                <span className={SETTING_LABEL}>
+                <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
                   <strong>Cache</strong>
                   <span className="tabular-nums">
                     {cacheStats
@@ -1104,8 +1170,8 @@ export function SettingsPage({
 
               {cacheError && <p className="text-sm text-destructive">{cacheError}</p>}
 
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={SETTING_LABEL}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
                   <strong>Delete all app data</strong>
                   <span>Reset settings, cache, account, queue, tabs, onboarding, and local data.</span>
                 </span>
@@ -1133,13 +1199,16 @@ export function SettingsPage({
       {activeTab === "shortcuts" && (
         <div className="flex flex-col gap-5" role="tabpanel" aria-label="Keyboard shortcut settings">
           <section className={SETTINGS_CARD} aria-labelledby="keyboard-shortcuts-settings-title">
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg" id="keyboard-shortcuts-settings-title">Keyboard shortcuts</h2>
-            </div>
+            <h2
+              className="text-lg font-semibold text-foreground"
+              id="keyboard-shortcuts-settings-title"
+            >
+              Keyboard shortcuts
+            </h2>
 
             <div className="flex flex-col gap-5">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className={SETTING_LABEL}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
                   <strong>Reset shortcuts</strong>
                   <span>Restore every keyboard shortcut to its default.</span>
                 </span>
@@ -1203,13 +1272,12 @@ export function SettingsPage({
       {activeTab === "window" && (
         <div className="flex flex-col gap-5" role="tabpanel" aria-label="Style settings">
           <section className={SETTINGS_CARD} aria-labelledby="window-settings-title">
-            <div className="flex items-center gap-3">
-              <div>
-                <h2 className="text-lg" id="window-settings-title">Window controls</h2>
-                <p>Choose the title bar buttons and compact player behavior.</p>
-              </div>
-              <QueuePanelIcon className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/15 text-primary" size={22} />
-            </div>
+            <SettingsCardHeader
+              title="Window controls"
+              titleId="window-settings-title"
+              icon={<QueuePanelIcon size={18} aria-hidden="true" />}
+              description="Choose the title bar buttons and compact player behavior."
+            />
 
             <SettingToggle
               title="Mini player"
@@ -1284,6 +1352,13 @@ export function SettingsPage({
             </div>
 
             <SettingToggle
+              title="Compact player bar"
+              description="Tuck the seek bar under the transport controls instead of spanning the full width."
+              checked={compactPlayerBar}
+              onCheckedChange={setCompactPlayerBar}
+            />
+
+            <SettingToggle
               title="Always show extra controls"
               description="Keep lyrics and queue visible instead of showing them only on hover."
               checked={extraPlayerControlsAlwaysVisible}
@@ -1296,17 +1371,12 @@ export function SettingsPage({
       {activeTab === "appearance" && (
         <div className="flex flex-col gap-5" role="tabpanel" aria-label="Appearance settings">
           <section className={SETTINGS_CARD} aria-labelledby="theme-settings-title">
-            <div className="flex items-center gap-3">
-              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/15 text-primary">
-                <PaletteIcon size={18} aria-hidden="true" />
-              </span>
-              <div className="min-w-0">
-                <h2 className="text-lg" id="theme-settings-title">Theme</h2>
-                <p className="text-sm text-muted-foreground">
-                  Applies instantly across both windows.
-                </p>
-              </div>
-            </div>
+            <SettingsCardHeader
+              title="Theme"
+              titleId="theme-settings-title"
+              icon={<PaletteIcon size={18} aria-hidden="true" />}
+              description="Applies instantly across both windows."
+            />
 
             <div
               className="grid grid-cols-3 gap-2"

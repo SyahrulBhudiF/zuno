@@ -111,10 +111,28 @@ async function sha1Hex(value: string): Promise<string> {
     .join("");
 }
 
-async function applyMusicCookieAuth(headers: Record<string, string>): Promise<void> {
-  if (headers["x-youtube-client-name"] !== "67") return;
+/**
+ * Signs an InnerTube request with the SAPISIDHASH the cookie session requires.
+ *
+ * The hash is bound to the origin it is sent to, so the origin here has to match the host the
+ * request actually goes to — see getRequestUrl, which redirects WEB_REMIX traffic to
+ * music.youtube.com. Everything else stays on www.youtube.com.
+ *
+ * This used to bail out for anything that was not WEB_REMIX, which meant plain WEB requests
+ * went out unsigned and YouTube answered them as if signed out. The channel-switcher endpoint
+ * is WEB-only, so it always came back as a signed-out stub with no accounts in it.
+ */
+async function applyCookieAuth(
+  headers: Record<string, string>,
+  requestUrl: string,
+): Promise<void> {
+  // InnerTube API calls only. Signing an ordinary page or media fetch would rewrite its
+  // Origin and Referer to a host it is not going to, which is worse than leaving it alone.
+  if (!headers.cookie || !new URL(requestUrl).pathname.startsWith("/youtubei/")) return;
 
-  const origin = "https://music.youtube.com";
+  const origin = headers["x-youtube-client-name"] === "67"
+    ? "https://music.youtube.com"
+    : "https://www.youtube.com";
   const sapisid = getSapisidAuthCookie(headers.cookie);
   if (sapisid) {
     const timestamp = Math.floor(Date.now() / 1000);
@@ -175,7 +193,9 @@ export async function tauriFetch(input: RequestInfo | URL, init?: TauriFetchInit
   requestHeaders.forEach((value, key) => {
     headers[key] = value;
   });
-  await applyMusicCookieAuth(headers);
+  // Signed before the URL is resolved, because getRequestUrl keys off the client name that
+  // decides the origin the signature is bound to.
+  await applyCookieAuth(headers, normalizeUrl(input));
   const method =
     init?.method ??
     (typeof input !== "string" && !(input instanceof URL) ? input.method : "GET");

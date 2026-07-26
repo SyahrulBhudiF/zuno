@@ -46,17 +46,14 @@ export function Layout({
   showTransientScrollbar = false,
   rightPanel,
   rightPanelWidth = 340,
-  onRightPanelWidthChange,
 }: LayoutProps) {
   const ambientArtwork = useAmbientArtwork();
   const pageContentRef = useRef<HTMLDivElement>(null);
   const rightPanelRef = useRef<HTMLDivElement>(null);
-  const dragStartX = useRef<number | null>(null);
   const scrollHideTimerRef = useRef<number | null>(null);
   const scrollDragOffsetRef = useRef<number | null>(null);
   const isScrollbarHoveredRef = useRef(false);
   const isDraggingScrollbarRef = useRef(false);
-  const [isDraggingRightPanel, setIsDraggingRightPanel] = useState(false);
   const [scrollbarState, setScrollbarState] = useState({
     isVisible: false,
     canScroll: false,
@@ -135,34 +132,6 @@ export function Layout({
     const maxScrollTop = Math.max(1, scrollRoot.scrollHeight - scrollRoot.clientHeight);
     scrollRoot.scrollTop = (thumbTop / travel) * maxScrollTop;
   }, [scrollbarState.canScroll, scrollbarState.thumbHeight]);
-
-  useEffect(() => {
-    const handleMouseMove = (event: MouseEvent) => {
-      if (
-        dragStartX.current === null
-        || !rightPanelRef.current
-        || !onRightPanelWidthChange
-      ) return;
-
-      if (Math.abs(event.clientX - dragStartX.current) < 4) return;
-      const rect = rightPanelRef.current.getBoundingClientRect();
-      const availableWidth = Math.max(280, window.innerWidth - sidebarWidth - 240);
-      const nextWidth = rect.right - event.clientX;
-      onRightPanelWidthChange(Math.max(280, Math.min(520, availableWidth, nextWidth)));
-    };
-
-    const handleMouseUp = () => {
-      dragStartX.current = null;
-      setIsDraggingRightPanel(false);
-    };
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [onRightPanelWidthChange, sidebarWidth]);
 
   useEffect(() => {
     const scrollRoot = pageContentRef.current;
@@ -323,9 +292,10 @@ export function Layout({
               )}
             </div>
 
-            {/* Inline resizable panel, not an overlay drawer: the queue sits beside the
-                page on desktop and its drag-to-resize handle must keep working. */}
-            <AnimatePresence initial={false}>
+          </div>
+        </div>
+
+ <AnimatePresence initial={false}>
               {rightPanel && (
                 <motion.div
                   ref={rightPanelRef}
@@ -333,27 +303,13 @@ export function Layout({
                   animate={{ width: rightPanelWidth, opacity: 1 }}
                   exit={{ width: 0, opacity: 0 }}
                   transition={{ type: "spring", stiffness: 420, damping: 40 }}
-                  className="relative min-h-0 shrink-0 overflow-hidden rounded-xl bg-card/40 backdrop-blur"
+                  className="relative min-h-0 shrink-0 overflow-hidden  bg-card backdrop-blur"
                 >
-                  <div
-                    className={cn(
-                      "absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize transition-colors",
-                      isDraggingRightPanel ? "bg-primary" : "hover:bg-primary/40",
-                    )}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      dragStartX.current = event.clientX;
-                      setIsDraggingRightPanel(true);
-                    }}
-                    title="Drag to resize queue"
-                  />
                   {rightPanel}
                 </motion.div>
               )}
             </AnimatePresence>
-          </div>
-        </div>
+
       </div>
     </div>
   );

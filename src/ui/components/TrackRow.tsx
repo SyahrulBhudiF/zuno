@@ -5,7 +5,8 @@ import {
   type ReactNode,
 } from "react";
 import { cn } from "@/lib/utils";
-import { PlayActiveIcon } from "@/ui/icons";
+import { Tooltip } from "@/components/motion/tooltip";
+import { ListIcon, PlaylistAddIcon, PlayActiveIcon } from "@/ui/icons";
 import type { Track } from "../../datasource/types";
 import { ArtistLinks } from "./ArtistLinks";
 import { TrackArtwork } from "./TrackArtwork";
@@ -30,6 +31,10 @@ interface TrackRowProps extends PassthroughButtonProps {
   isPlaying: boolean;
   onSelect: () => void;
   onContextMenu?: (event: MouseEvent<HTMLElement>) => void;
+  /** Shows a quick "add to playlist" affordance on hover. Omit to hide it. */
+  onQuickAdd?: () => void;
+  /** Shows a quick "add to queue" affordance on hover. Omit to hide it. */
+  onQuickAddToQueue?: () => void;
   /** Album pages repeat one cover on every row, so they opt out. */
   showArtwork?: boolean;
   /** Hides the artist whose page we are already on. */
@@ -39,6 +44,53 @@ interface TrackRowProps extends PassthroughButtonProps {
   className?: string;
   /** Rendered inside the row: drag indicators and the like. */
   children?: ReactNode;
+}
+
+/**
+ * A hover action inside the row.
+ *
+ * A span with role="button" rather than a <button>: the row itself is a button, and nesting
+ * one inside another is invalid and gets flattened by the parser. The click must not fall
+ * through either, or "add to queue" would also start the song playing.
+ */
+function QuickAction({
+  label,
+  tooltip,
+  onActivate,
+  children,
+}: {
+  label: string;
+  tooltip: string;
+  onActivate: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip content={tooltip}>
+      <span
+        role="button"
+        tabIndex={0}
+        aria-label={label}
+        className={cn(
+          "grid size-8 shrink-0 place-items-center rounded-full text-muted-foreground",
+          "opacity-0 transition hover:bg-background hover:text-foreground",
+          "group-hover/row:opacity-100 focus:opacity-100",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        )}
+        onClick={(event) => {
+          event.stopPropagation();
+          onActivate();
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          event.stopPropagation();
+          onActivate();
+        }}
+      >
+        {children}
+      </span>
+    </Tooltip>
+  );
 }
 
 /**
@@ -61,6 +113,8 @@ export const TrackRow = memo(function TrackRow({
   isPlaying,
   onSelect,
   onContextMenu,
+  onQuickAdd,
+  onQuickAddToQueue,
   showArtwork = true,
   suppressArtistId,
   trailing,
@@ -147,6 +201,31 @@ export const TrackRow = memo(function TrackRow({
           suppressArtistId={suppressArtistId}
         />
       </span>
+
+      {/* Hover actions. The row itself is a <button>, so these cannot be buttons — see
+          QuickAction. They sit before `trailing` so durations stay hard against the edge. */}
+      {(onQuickAddToQueue || onQuickAdd) && (
+        <span className="flex shrink-0 items-center">
+          {onQuickAddToQueue && (
+            <QuickAction
+              label={`Add ${track.title} to the queue`}
+              tooltip="Add to queue"
+              onActivate={onQuickAddToQueue}
+            >
+              <ListIcon size={17} aria-hidden="true" />
+            </QuickAction>
+          )}
+          {onQuickAdd && (
+            <QuickAction
+              label={`Add ${track.title} to a playlist`}
+              tooltip="Add to playlist"
+              onActivate={onQuickAdd}
+            >
+              <PlaylistAddIcon size={17} aria-hidden="true" />
+            </QuickAction>
+          )}
+        </span>
+      )}
 
       {trailing}
 

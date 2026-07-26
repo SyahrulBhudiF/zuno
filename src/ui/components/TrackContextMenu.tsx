@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { CheckIcon, CloseIcon, HeartActiveIcon, HeartIcon, LinkIcon, ListIcon, PlaylistAddIcon, PlaylistIcon, SearchIcon, SkipNextIcon, TrashIcon } from "@/ui/icons";
 import type { Playlist, Track } from "../../datasource/types";
@@ -22,9 +23,18 @@ import { TrackArtwork } from "./TrackArtwork";
 import { cn } from "@/lib/utils";
 import { Loader } from "@/components/motion/loader";
 
+/** Stable identity so useSyncExternalStore's server snapshot never loops. */
+const NO_PLAYLISTS: Playlist[] = [];
+const getNoPlaylists = () => NO_PLAYLISTS;
+
 const PICKER_ROW =
   "flex w-full items-center gap-2.5 rounded-lg p-1.5 transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
-import { isLocalPlaylist } from "../../player/localPlaylists";
+import {
+  getLocalPlaylistItems,
+  isLocalPlaylist,
+  subscribeToLocalPlaylists,
+} from "../../player/localPlaylists";
+import { isTrackKnownInPlaylist } from "../../player/playlistMembership";
 import { ArtistLinks } from "./ArtistLinks";
 
 interface MenuPosition {
@@ -41,6 +51,7 @@ interface TrackContextMenuValue {
       onRemove?: (track: Track) => void;
     },
   ) => void;
+  openPlaylistPicker: (track: Track) => void;
   toggleTrackLike: (track: Track) => Promise<void>;
 }
 
@@ -83,16 +94,41 @@ export function TrackContextMenuProvider({
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
+  const localPlaylists = useSyncExternalStore(
+    subscribeToLocalPlaylists,
+    getLocalPlaylistItems,
+    getNoPlaylists,
+  );
+
+  /*
+   * Every playlist this song could be added to, each tagged with whether it is already there.
+   *
+   * Local playlists were missing entirely — they never appear in `library.playlists`, so the
+   * picker only ever offered YouTube ones. They are only a valid target for a song that has a
+   * file on disk, since a local playlist is a list of paths.
+   */
   const playlists = useMemo(() => {
+    const seen = new Set<string>();
+    const candidates: Playlist[] = [];
+    for (const playlist of [...(libraryState.library?.playlists ?? []), ...localPlaylists]) {
+      if (playlist.isEditable === false || seen.has(playlist.id)) continue;
+      if (isLocalPlaylist(playlist) && track?.source !== "local") continue;
+      seen.add(playlist.id);
+      candidates.push(playlist);
+    }
+
     const normalizedQuery = query.trim().toLocaleLowerCase();
-    const items = (libraryState.library?.playlists ?? []).filter(
-      (playlist) => playlist.isEditable !== false && (track?.source !== "local" || !isLocalPlaylist(playlist)),
-    );
-    if (!normalizedQuery) return items;
-    return items.filter((playlist) =>
-      playlist.title.toLocaleLowerCase().includes(normalizedQuery)
-    );
-  }, [libraryState.library?.playlists, query, track?.source]);
+    const matching = normalizedQuery
+      ? candidates.filter((playlist) =>
+          playlist.title.toLocaleLowerCase().includes(normalizedQuery)
+        )
+      : candidates;
+
+    return matching.map((playlist) => ({
+      playlist,
+      isMember: track ? isTrackKnownInPlaylist(track, playlist) : false,
+    }));
+  }, [libraryState.library?.playlists, localPlaylists, query, track]);
 
   useEffect(() => {
     if (!menuPosition) return;
@@ -242,6 +278,14 @@ export function TrackContextMenuProvider({
     }
   };
 
+  /** Opens the picker straight away, for callers with no context menu in between. */
+  const openPlaylistPicker = (selectedTrack: Track) => {
+    if (addingPlaylistId) return;
+    setTrack(selectedTrack);
+    setMenuContext(null);
+    openPicker();
+  };
+
   const openPicker = () => {
     setMenuPosition(null);
     setError(null);
@@ -303,8 +347,8 @@ export function TrackContextMenuProvider({
 
     if (event.key === "Enter" && selectedPlaylistIndex !== null) {
       event.preventDefault();
-      const playlist = playlists[selectedPlaylistIndex];
-      if (playlist) void addToPlaylist(playlist);
+      const entry = playlists[selectedPlaylistIndex];
+      if (entry) void addToPlaylist(entry.playlist);
     }
   };
 
@@ -370,7 +414,7 @@ export function TrackContextMenuProvider({
   );
 
   return (
-    <TrackContextMenuContext.Provider value={{ openTrackMenu, toggleTrackLike }}>
+    <TrackContextMenuContext.Provider value={{ openTrackMenu, openPlaylistPicker, toggleTrackLike }}>
       {children}
 
       {menuPosition && track && (
@@ -490,14 +534,16 @@ export function TrackContextMenuProvider({
             {error && <p className="text-sm text-destructive">{error}</p>}
 
             <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
-              {libraryState.status === "signed-out" ? (
-                <p className="px-2 py-6 text-center text-sm text-muted-foreground">Sign in to YouTube Music to add songs.</p>
-              ) : playlists.length === 0 ? (
+              {playlists.length === 0 ? (
                 <p className="px-2 py-6 text-center text-sm text-muted-foreground">
-                  {query ? "No matching playlists." : "No editable playlists were found."}
+                  {query
+                    ? "No matching playlists."
+                    : libraryState.status === "signed-out"
+                      ? "Sign in to YouTube Music to add songs, or create a local playlist."
+                      : "No editable playlists were found."}
                 </p>
               ) : (
-                playlists.map((playlist, index) => (
+                playlists.map(({ playlist, isMember }, index) => (
                   <button
                     key={playlist.id}
                     ref={(element) => {
@@ -518,11 +564,21 @@ export function TrackContextMenuProvider({
                     </span>
                     <span className="flex min-w-0 flex-1 flex-col text-left [&_span]:truncate [&_span]:text-xs [&_span]:text-muted-foreground [&_strong]:truncate [&_strong]:text-sm [&_strong]:font-medium">
                       <strong>{playlist.title}</strong>
-                      <span>{playlist.owner}</span>
+                      <span>{isMember ? "Already added" : playlist.owner}</span>
                     </span>
-                    {addingPlaylistId === playlist.id && (
+                    {addingPlaylistId === playlist.id ? (
                       <span className="shrink-0 text-xs text-muted-foreground">Adding...</span>
-                    )}
+                    ) : isMember ? (
+                      /* Still clickable: this only means we *know* it is in there. Adding again
+                         is harmless and answers "Already in playlist". */
+                      <span
+                        className="grid size-5 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground"
+                        title="Already in this playlist"
+                      >
+                        <CheckIcon size={13} aria-hidden="true" />
+                        <span className="sr-only">Already in this playlist</span>
+                      </span>
+                    ) : null}
                   </button>
                 ))
               )}

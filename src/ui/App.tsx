@@ -30,6 +30,10 @@ import { ArtistNavigationProvider } from "./components/ArtistLinks";
 import { TitleBar } from "./components/TitleBar";
 import { PlayerBar } from "./components/player/PlayerBar";
 import { QueuePanel } from "./components/player/QueuePanel";
+import { useQueuePanelCollapsed } from "./settings/queuePanel";
+
+/** Wide enough for a 44px cover plus breathing room, matching the sidebar rail's feel. */
+const COLLAPSED_QUEUE_WIDTH = 62;
 import { Layout } from "./components/Layout";
 import type { Tab, TabViewState } from "./types/tab";
 import {
@@ -292,6 +296,7 @@ export default function App() {
    */
   const [sidebarWidth, setSidebarWidth] = useState(62);
   const [queuePanelWidth, setQueuePanelWidth] = useState(340);
+  const isQueuePanelCollapsed = useQueuePanelCollapsed();
   const [loadingScreenState, setLoadingScreenState] = useState<"visible" | "leaving" | "hidden">("visible");
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(() =>
     readLocalOnboardingComplete() ? true : null
@@ -1682,8 +1687,8 @@ useEffect(() => {
             !playerUIState.isLyricsOpen
             && (activeTab?.view === "playlist" || activeTab?.view === "album")
           }
-          rightPanelWidth={queuePanelWidth}
-          onRightPanelWidthChange={setQueuePanelWidth}
+          rightPanelWidth={isQueuePanelCollapsed ? COLLAPSED_QUEUE_WIDTH : queuePanelWidth}
+          onRightPanelWidthChange={isQueuePanelCollapsed ? undefined : setQueuePanelWidth}
           rightPanel={showQueueMounted ? (
             <QueuePanel
               isOpen={isQueuePanelOpen}

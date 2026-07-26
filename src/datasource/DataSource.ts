@@ -1,4 +1,5 @@
 import type {
+  AccountOption,
   Album,
   ArtistPage,
   AuthPrompt,
@@ -26,6 +27,9 @@ export abstract class DataSource {
   restoreSession?(): Promise<boolean>;
   signIn?(onPrompt: (prompt: AuthPrompt) => void): Promise<void>;
   signOut?(): Promise<void>;
+  /** Channels available on the signed-in account. Absent when the source has no such notion. */
+  listAccounts?(): Promise<AccountOption[]>;
+  selectAccount?(id: string): Promise<void>;
   getCachedLibrary?(): Promise<LibrarySnapshot | null>;
   getLibrary?(onUpdate?: (library: LibrarySnapshot) => void): Promise<LibrarySnapshot>;
   getAlbumTracks?(album: Album, onUpdate?: (tracks: Track[]) => void): Promise<Track[]>;

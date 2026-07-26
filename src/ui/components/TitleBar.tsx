@@ -1,10 +1,10 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
-import { GitHubIcon, SettingsIcon } from "@/ui/icons";
+import { GitHubIcon, LoginIcon, SettingsIcon } from "@/ui/icons";
 import { GITHUB_REPOSITORY_URL } from "../links";
 import { logInternalError, logInternalInfo, logInternalWarn } from "../../internal/logging";
 import { MusicTabs } from "./MusicTabs";
@@ -14,6 +14,9 @@ import {
   useWindowsStyleWindowControls,
 } from "../settings/windowControls";
 import { Button } from "@/components/motion/button";
+import { libraryController, useLibraryState } from "../../player/playerStore";
+import { AccountAvatar, AccountSwitcher } from "./AccountSwitcher";
+import { FloatingPanel } from "./FloatingPanel";
 import { motion } from "motion/react";
 import appIcon from "../../../assets/img/Logo.png";
 
@@ -51,6 +54,10 @@ export function TitleBar({
   onboardingFirstTabId,
 }: TitleBarProps) {
   const appWindow = getCurrentWindow();
+  const libraryState = useLibraryState();
+  const account = libraryState.library?.account;
+  const isSignedIn = libraryState.status === "ready" && Boolean(account);
+  const [isAccountPanelOpen, setIsAccountPanelOpen] = useState(false);
   const nativeWindowControls = useNativeWindowControls();
   const windowsStyleWindowControls = useWindowsStyleWindowControls();
   const homePointerRef = useRef<{
@@ -191,7 +198,7 @@ export function TitleBar({
         chrome the window buttons disappear but these still belong here.
       */}
       <div className="flex shrink-0 items-center gap-1 pl-2 pr-1" aria-label="App actions">
-        <Tooltip content="Source on GitHub">
+        <Tooltip side="bottom" content="Source on GitHub">
           <Button
             variant='ghost'
           size='icon'
@@ -201,7 +208,7 @@ export function TitleBar({
             <GitHubIcon size={16} aria-hidden="true"  />
           </Button>
         </Tooltip>
-        <Tooltip content="Settings">
+        <Tooltip side="bottom" content="Settings">
         <Button
             variant='ghost'
           size='icon'
@@ -212,6 +219,59 @@ export function TitleBar({
             <SettingsIcon size={17} aria-hidden="true" />
           </Button>
         </Tooltip>
+
+        {/* Only once signed in: an avatar that opens nothing is worse than no avatar. The
+            panel is portalled because the title bar clips its children. */}
+        {/* Always present, signed in or not: when signed out it is the way *in*, so hiding
+            it would leave the toolbar with no account affordance at all. */}
+        <FloatingPanel
+          open={isAccountPanelOpen}
+          onOpenChange={setIsAccountPanelOpen}
+          side="bottom"
+          className="w-54"
+          trigger={
+            <Tooltip side="bottom" content={isSignedIn ? account?.name || "Account" : "Sign in"}>
+              <button
+                type="button"
+                onClick={() => setIsAccountPanelOpen((open) => !open)}
+                aria-haspopup="menu"
+                aria-expanded={isAccountPanelOpen}
+                aria-label={isSignedIn ? `Account: ${account?.name || "YouTube Music"}` : "Sign in"}
+                className={cn(
+                  "ml-0.5 grid size-7 place-items-center rounded-full transition-shadow",
+                  "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                  isAccountPanelOpen && "ring-1 ring-border",
+                )}
+              >
+                <AccountAvatar
+                  artworkUrl={isSignedIn ? account?.artworkUrl : undefined}
+                  className="size-7"
+                  iconSize={15}
+                />
+              </button>
+            </Tooltip>
+          }
+        >
+          {isSignedIn ? (
+            <AccountSwitcher
+              libraryController={libraryController}
+              onSwitched={() => setIsAccountPanelOpen(false)}
+              showSingle
+            />
+          ) : (
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-foreground transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              onClick={() => {
+                setIsAccountPanelOpen(false);
+                onOpenSettings();
+              }}
+            >
+              <LoginIcon size={17} aria-hidden="true" />
+              Sign in to YouTube Music
+            </button>
+          )}
+        </FloatingPanel>
       </div>
 
       {!nativeWindowControls && (

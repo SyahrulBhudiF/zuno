@@ -45,9 +45,14 @@ function AlbumLoadingSpinner({ label }: { label: string }) {
 }
 
 export function AlbumView({ album, playerController, libraryController }: AlbumViewProps) {
-  const { openTrackMenu } = useTrackContextMenu();
+  const { openPlaylistPicker, openTrackMenu } = useTrackContextMenu();
   const keyboardShortcuts = useKeyboardShortcuts();
-  const { currentTrackId, isPlaying, isLoading: isPlayerLoading } = useNowPlaying();
+  const {
+    currentTrackId,
+    isPlaying,
+    isLoading: isPlayerLoading,
+    playbackOrderMode,
+  } = useNowPlaying();
   const [tracks, setTracks] = useState<Track[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -128,6 +133,17 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
     if (firstTrack) void playerController.playTrackById(firstTrack.id, tracks);
   };
 
+  /*
+   * Order is set before playback starts, not after: playTrackById resolves asynchronously,
+   * and a mode applied afterwards can lose a race with a track that ends almost immediately.
+   */
+  const playInLoop = () => {
+    const firstTrack = tracks[0];
+    if (!firstTrack) return;
+    playerController.setPlaybackOrderMode("repeat-all");
+    void playerController.playTrackById(firstTrack.id, tracks);
+  };
+
   const playShuffled = () => {
     const shuffledTracks = shuffleTracks(tracks);
     const firstTrack = shuffledTracks[0];
@@ -154,6 +170,9 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
         isLoading={isCurrentCollection && isPlayerLoading}
         onPlay={togglePlayCollection}
         onShuffle={playShuffled}
+        onPlayInLoop={playInLoop}
+        isLooping={isCurrentCollection && playbackOrderMode === "repeat-all"}
+        onAddToQueue={() => playerController.addTracksToQueue(tracks)}
       />
       {isLoading && <AlbumLoadingSpinner label="Loading songs" />}
       {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}
@@ -211,6 +230,8 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
                     isCurrent={isCurrent}
                     isPlaying={isCurrent && isPlaying}
                     onSelect={() => void playerController.playTrackById(track.id, visibleTracks)}
+                    onQuickAddToQueue={() => playerController.addToQueue(track)}
+                    onQuickAdd={() => openPlaylistPicker(track)}
                     onContextMenu={(event) => openTrackMenu(event, track)}
                   />
                 );

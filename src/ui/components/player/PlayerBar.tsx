@@ -9,7 +9,10 @@ import { PlaybackControls } from "./PlaybackControls";
 import { SeekBar } from "./SeekBar";
 import { VolumeControl } from "./VolumeControl";
 import { LyricsButton } from "./LyricsButton";
-import { useExtraPlayerControlsAlwaysVisible } from "../../settings/playerControls";
+import {
+  useCompactPlayerBar,
+  useExtraPlayerControlsAlwaysVisible,
+} from "../../settings/playerControls";
 
 interface PlayerBarProps {
   onToggleLyrics: () => void;
@@ -132,6 +135,7 @@ export function PlayerBar({ onToggleLyrics, onToggleQueue, isQueueOpen, onConnec
   };
 
   const extraControlsAlwaysVisible = useExtraPlayerControlsAlwaysVisible();
+  const compactPlayerBar = useCompactPlayerBar();
 
 
 
@@ -170,15 +174,23 @@ export function PlayerBar({ onToggleLyrics, onToggleQueue, isQueueOpen, onConnec
         className="group/playerbar flex shrink-0 flex-col gap-1 bg-background px-4 pb-3 pt-2 backdrop-blur"
         onClick={handlePlayerBarClick}
       >
-        <SeekBar />
+        {/* Expanded: the seek bar spans the full bar above everything. */}
+        {!compactPlayerBar && <SeekBar />}
 
         <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
           <div className="min-w-0">
             <TrackInfo />
           </div>
 
-          <div className="flex justify-center">
+          {/* Compact: the seek bar tucks under the controls, in the centre column only, so
+              the bar keeps one row of height and the transport stays the anchor. */}
+          <div className="flex flex-col items-center gap-1">
             <PlaybackControls extraControlsAlwaysVisible={extraControlsAlwaysVisible} />
+            {compactPlayerBar && (
+              <div className="w-full min-w-[22rem]">
+                <SeekBar />
+              </div>
+            )}
           </div>
 
           <div className="flex min-w-0 items-center justify-end gap-1">

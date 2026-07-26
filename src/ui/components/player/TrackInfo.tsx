@@ -58,7 +58,7 @@ export function TrackInfo() {
     >
       {uiState.showAlbumArt && (
         <TrackArtwork
-          className="size-14 shrink-0 rounded-lg object-cover"
+          className="size-14 shrink-0 rounded object-cover"
           artworkUrl={currentTrack.artworkUrl}
           iconSize={28}
         />
@@ -71,7 +71,7 @@ export function TrackInfo() {
             ref={titleTextRef}
             aria-hidden={isTitleOverflowing}
             className={cn(
-              "block whitespace-nowrap text-sm font-medium text-foreground",
+              "block whitespace-nowrap text-md font-medium text-foreground",
               isTitleOverflowing && "invisible absolute",
             )}
           >

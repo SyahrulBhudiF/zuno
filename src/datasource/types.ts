@@ -93,6 +93,15 @@ export interface AccountProfile {
   artworkUrl?: string;
 }
 
+/** One channel on the signed-in account, as offered by the account switcher. */
+export interface AccountOption {
+  /** Opaque and stable across reloads; pass back to selectAccount. */
+  id: string;
+  name: string;
+  artworkUrl?: string;
+  isActive: boolean;
+}
+
 export interface LibrarySnapshot {
   account: AccountProfile;
   albums: Album[];

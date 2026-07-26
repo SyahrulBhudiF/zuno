@@ -4,6 +4,7 @@ import { clearCache, getCachedJson, setCachedJson } from "../../internal/cache";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../../internal/logging";
 import { DataSource, type StreamData } from "../DataSource";
 import type {
+  AccountOption,
   Album,
   Artist,
   ArtistPage,
@@ -211,10 +212,31 @@ type RawToggleMenuServiceItemRenderer = {
 type AccountCandidate = {
   accountIndex: number;
   name?: string;
+  artworkUrl?: string;
   onBehalfOfUser?: string;
   serializedDelegationContext?: string;
   selected?: boolean;
 };
+
+/**
+ * Stable identity for an account across reloads.
+ *
+ * The three fields below are exactly what `useAccountCandidate` applies to the session, so two
+ * candidates with the same key are the same account as far as YouTube is concerned. This was
+ * already being built inline at four call sites; it is one function now so a switch and a
+ * comparison cannot disagree about what "the same account" means.
+ */
+function accountCandidateKey(candidate: {
+  accountIndex: number;
+  onBehalfOfUser?: string | null;
+  serializedDelegationContext?: string | null;
+}): string {
+  return [
+    candidate.accountIndex,
+    candidate.onBehalfOfUser ?? "",
+    candidate.serializedDelegationContext ?? "",
+  ].join(":");
+}
 
 type LibraryResponses = {
   client: Innertube;
@@ -225,6 +247,8 @@ type LibraryResponses = {
 
 const LIKED_SONGS_PLAYLIST_ID = "LM";
 const LIBRARY_CACHE_KEY = "youtube-music:library:v5";
+/** The account the user picked by hand, which outranks the automatic probe. */
+const SELECTED_ACCOUNT_STORAGE_KEY = "youtube-music:selected-account";
 const ARTIST_CACHE_VERSION = "v3";
 const ARTIST_SUBSCRIPTION_OVERRIDE_MS = 60_000;
 const PLAYLIST_PAGE_SESSION_TTL_MS = 10 * 60_000;
@@ -246,6 +270,9 @@ export class YouTubeMusicDataSource extends DataSource {
   private musicOnBehalfOfUser: string | null = null;
   private musicSerializedDelegationContext: string | null = null;
   private musicAccountName = "YouTube Music";
+  private musicAccountArtworkUrl: string | null = null;
+  /** Candidates from the last discovery pass, so the switcher does not refetch on every open. */
+  private accountCandidateCache: AccountCandidate[] | null = null;
   private libraryRefreshPromise: Promise<LibrarySnapshot> | null = null;
   private readonly albumRefreshPromises = new Map<string, Promise<Track[]>>();
   private readonly playlistRefreshPromises = new Map<string, Promise<Track[]>>();
@@ -309,8 +336,10 @@ export class YouTubeMusicDataSource extends DataSource {
   private getWebClient(): Promise<Innertube> {
     if (!this.webClientPromise) {
       logInternalInfo("YouTubeMusicDataSource.getWebClient creating client");
+      // No player needed: this client only enumerates accounts and resolves like endpoints,
+      // neither of which touches stream URLs, and retrieving it downloads the player script.
       this.webClientPromise = Innertube.create({
-        ...this.getSessionOptions(),
+        ...this.getSessionOptions(false),
         client_type: ClientType.WEB,
       });
     }
@@ -373,10 +402,19 @@ export class YouTubeMusicDataSource extends DataSource {
   }
 
   private resetMusicSessionSelection(): void {
+    // Signing out and back in may land on a different Google account entirely, where the old
+    // preference would point at a channel that no longer exists.
+    try {
+      localStorage.removeItem(SELECTED_ACCOUNT_STORAGE_KEY);
+    } catch {
+      // A stale preference is ignored anyway: it only applies when a candidate matches it.
+    }
     this.musicAccountIndex = 0;
     this.musicOnBehalfOfUser = null;
     this.musicSerializedDelegationContext = null;
     this.musicAccountName = "YouTube Music";
+    this.musicAccountArtworkUrl = null;
+    this.accountCandidateCache = null;
     this.musicClientPromise = null;
     this.webClientPromise = null;
   }
@@ -1844,13 +1882,148 @@ export class YouTubeMusicDataSource extends DataSource {
     ].join(" ");
   }
 
-  private async getAccountCandidates(client: Innertube): Promise<AccountCandidate[]> {
+  /**
+   * The page id InnerTube expects in `onBehalfOfUser` for a brand channel.
+   *
+   * Not the UC… channel id: those look like the obvious answer and are what the endpoint
+   * advertises most visibly, but sending one makes /browse answer 500. The value InnerTube
+   * wants is the obfuscated page id, which is the first segment of the datasync token
+   * ("<pageId>||<userId>"). The channel id is kept only as a last resort for items whose
+   * endpoint carries no token at all.
+   */
+  private findDelegatedPageId(endpoint: unknown): string | undefined {
+    const datasync = this.findStringByKey(endpoint, new Set(["datasyncIdToken"]));
+    const pageId = datasync?.split("||")[0]?.trim();
+    if (pageId) return pageId;
+
+    return this.findStringByKey(endpoint, new Set(["channelIdentifier", "externalChannelId"]))
+      ?? this.findYoutubeChannelId(endpoint)
+      ?? this.findBrowseId(endpoint);
+  }
+
+  private readPreferredAccountKey(): string | null {
+    try {
+      return localStorage.getItem(SELECTED_ACCOUNT_STORAGE_KEY);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Every channel on the signed-in Google account, with the active one flagged. */
+  async listAccounts(): Promise<AccountOption[]> {
+    if (!this.musicCookie) return [];
+
+    let candidates = this.accountCandidateCache;
+    if (!candidates) {
+      candidates = await this.getAccountCandidates();
+    }
+
+    const activeKey = accountCandidateKey({
+      accountIndex: this.musicAccountIndex,
+      onBehalfOfUser: this.musicOnBehalfOfUser,
+      serializedDelegationContext: this.musicSerializedDelegationContext,
+    });
+    return candidates.map((candidate) => {
+      const id = accountCandidateKey(candidate);
+      return {
+        id,
+        name: candidate.name ?? "YouTube Music",
+        artworkUrl: candidate.artworkUrl,
+        isActive: id === activeKey,
+      };
+    });
+  }
+
+  /**
+   * Switches the session to another channel and drops everything scoped to the old one.
+   *
+   * The library cache is keyed by nothing but a version string, so leaving it in place would
+   * show the previous channel's playlists under the new one's name until the refresh landed.
+   */
+  async selectAccount(id: string): Promise<void> {
+    const candidates = this.accountCandidateCache
+      ?? await this.getAccountCandidates();
+    const candidate = candidates.find((item) => accountCandidateKey(item) === id);
+    if (!candidate) throw new Error("That account is no longer available.");
+
+    /*
+     * Remember how to get back before changing anything.
+     *
+     * A rejected delegation makes every later request 500, and since the preference is
+     * persisted and outranks the automatic probe, a failed switch would otherwise leave the
+     * library broken across restarts with no way back except signing out.
+     */
+    const previous: AccountCandidate = {
+      accountIndex: this.musicAccountIndex,
+      name: this.musicAccountName,
+      artworkUrl: this.musicAccountArtworkUrl ?? undefined,
+      onBehalfOfUser: this.musicOnBehalfOfUser ?? undefined,
+      serializedDelegationContext: this.musicSerializedDelegationContext ?? undefined,
+    };
+    const previousPreference = this.readPreferredAccountKey();
+
+    try {
+      localStorage.setItem(SELECTED_ACCOUNT_STORAGE_KEY, id);
+    } catch {
+      // The switch still applies for this run; only the preference fails to stick.
+    }
+
+    await this.useAccountCandidate(candidate);
+
+    // Prove the new identity actually works before throwing away the cached library for it.
+    try {
+      await this.loadLibraryResponses(await this.getMusicClient());
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.selectAccount rejected, reverting", {
+        name: candidate.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      try {
+        if (previousPreference === null) {
+          localStorage.removeItem(SELECTED_ACCOUNT_STORAGE_KEY);
+        } else {
+          localStorage.setItem(SELECTED_ACCOUNT_STORAGE_KEY, previousPreference);
+        }
+      } catch {
+        // Falling back to the automatic probe is still correct without the preference.
+      }
+      await this.useAccountCandidate(previous);
+      throw new Error(`YouTube Music rejected the switch to ${candidate.name ?? "that channel"}.`);
+    }
+
+    // Playlists, albums and artist pages are all scoped to the old channel, not just the
+    // library snapshot, so the whole cache goes — the same thing sign-in and sign-out do.
+    try {
+      await clearCache();
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.selectAccount cache clear failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    this.libraryRefreshPromise = null;
+    logInternalInfo("YouTubeMusicDataSource.selectAccount", { name: candidate.name });
+  }
+
+  /**
+   * Every channel on the signed-in Google account.
+   *
+   * Deliberately uses the *web* client. `AccountManager.getInfo(true)` asks for
+   * `{ client: 'WEB' }` because the channel switcher is a www.youtube.com endpoint, but that
+   * override only picks the context — the base URL and client name still come from the
+   * Innertube instance. Handed the music client, the request went to
+   * music.youtube.com/youtubei/v1/account/accounts_list as WEB_REMIX (client name 67), which
+   * answers 200 with a stub that parses to zero AccountItem nodes. That is why only the
+   * synthesised fallback ever came back.
+   */
+  private async getAccountCandidates(): Promise<AccountCandidate[]> {
     const fallback: AccountCandidate = { accountIndex: 0, name: "YouTube Music", selected: true };
     try {
+      const client = await this.getWebClient();
       const accountItems = await client.account.getInfo(true) as Array<{
         account_name?: { toString(): string };
         account_byline?: { toString(): string };
         channel_handle?: { toString(): string };
+        account_photo?: unknown;
         endpoint?: unknown;
         has_channel?: boolean;
         is_disabled?: boolean;
@@ -1860,8 +2033,15 @@ export class YouTubeMusicDataSource extends DataSource {
         .filter((item) => !item.is_disabled)
         .flatMap((item, index): AccountCandidate[] => {
           const endpoint = item.endpoint;
-          const onBehalfOfUser = this.findBrowseId(endpoint)
-            ?? this.findYoutubeChannelId(endpoint);
+          /*
+           * The WEB channel switcher identifies a channel through
+           * selectActiveIdentityEndpoint.supportedTokens, not through the delegation context
+           * the YouTube Music account menu uses. Those tokens carry a channelIdentifier
+           * (UC...) and a datasyncIdToken; neither is a browseId and neither lives under a
+           * key named *serializedDelegationContext, so the original two lookups came back
+           * empty for every brand channel and dropped them all on the floor.
+           */
+          const onBehalfOfUser = this.findDelegatedPageId(endpoint);
           const serializedDelegationContext = this.findStringByKey(
             endpoint,
             new Set(["selectedSerializedDelegationContext", "serializedDelegationContext"]),
@@ -1870,31 +2050,78 @@ export class YouTubeMusicDataSource extends DataSource {
             || item.channel_handle?.toString()
             || item.account_byline?.toString()
             || undefined;
-          if (!onBehalfOfUser && !serializedDelegationContext && index === 0) {
-            return [{ ...fallback, name, selected: item.is_selected }];
+          const artworkUrl = selectArtworkUrl(collectArtworkCandidates(item.account_photo));
+          /*
+           * accounts_list puts the owner's own channel first, and that is exactly what the
+           * plain cookie session already resolves to — so it is emitted without delegation.
+           * The condition used to also require that no identifier was found, which was fine
+           * while none ever was; now that they are extracted, delegating to your own channel
+           * would change its identity key and disturb the default path for no gain.
+           */
+          if (index === 0) {
+            return [{ ...fallback, name, artworkUrl, selected: item.is_selected }];
           }
           if (!onBehalfOfUser && !serializedDelegationContext) return [];
           return [{
             accountIndex: 0,
             name,
+            artworkUrl,
             onBehalfOfUser,
             serializedDelegationContext,
             selected: item.is_selected,
           }];
         });
 
+      /*
+       * Discovered candidates first, fallback last. uniqueById merges collisions by letting
+       * the *earlier* entry's non-empty values win — so with the fallback in front, its
+       * placeholder name "YouTube Music" overwrote the real profile name on every account
+       * whose key matches it, which is every personal (non-brand) account. That is why the
+       * header read "YouTube Music" with no picture no matter what the API returned. Ordered
+       * this way the fallback only fills in gaps, which is all it was ever meant to do.
+       */
       const unique = this.uniqueById(
-        [fallback, ...candidates].map((candidate) => ({
+        [...candidates, fallback].map((candidate) => ({
           ...candidate,
-          id: [
-            candidate.accountIndex,
-            candidate.onBehalfOfUser ?? "",
-            candidate.serializedDelegationContext ?? "",
-          ].join(":"),
+          id: accountCandidateKey(candidate),
         })),
       ).map(({ id: _id, ...candidate }) => candidate);
+      this.accountCandidateCache = unique;
 
       logInternalInfo("YouTubeMusicDataSource.getAccountCandidates success", {
+        rawItemCount: accountItems.length,
+        rawEndpoints: accountItems.map((item) => {
+          const endpoint = item.endpoint as { name?: string; payload?: unknown } | undefined;
+          const tokens = (endpoint?.payload as { supportedTokens?: unknown[] } | undefined)
+            ?.supportedTokens;
+          return {
+            endpointName: endpoint?.name,
+            // Named to avoid the logger's sensitive-key filter, which strips anything
+            // matching /token/ and redacted this field on the previous pass.
+            identityFields: Array.isArray(tokens)
+              ? tokens.flatMap((entry) =>
+                  entry && typeof entry === "object" ? Object.keys(entry) : [])
+              : undefined,
+            payloadKeys: endpoint?.payload && typeof endpoint.payload === "object"
+              ? Object.keys(endpoint.payload)
+              : undefined,
+          };
+        }),
+        derivedIds: accountItems.map((item) => {
+          const id = this.findDelegatedPageId(item.endpoint);
+          // Shape only, never the value: enough to tell a page id from a channel id.
+          return id
+            ? { length: id.length, looksLikeChannel: id.startsWith("UC"), digitsOnly: /^\d+$/.test(id) }
+            : null;
+        }),
+        rawItemNames: accountItems.map((item) => ({
+          name: item.account_name?.toString(),
+          handle: item.channel_handle?.toString(),
+          hasPhoto: Boolean(item.account_photo),
+          hasChannel: item.has_channel,
+          disabled: item.is_disabled,
+          selected: item.is_selected,
+        })),
         candidateCount: unique.length,
         selectedCount: unique.filter((candidate) => candidate.selected).length,
         candidates: unique.map((candidate) => ({
@@ -1927,6 +2154,7 @@ export class YouTubeMusicDataSource extends DataSource {
     this.musicOnBehalfOfUser = candidate.onBehalfOfUser ?? null;
     this.musicSerializedDelegationContext = candidate.serializedDelegationContext ?? null;
     this.musicAccountName = candidate.name ?? "YouTube Music";
+    this.musicAccountArtworkUrl = candidate.artworkUrl ?? null;
     if (changed) {
       this.musicClientPromise = null;
       this.webClientPromise = null;
@@ -1952,7 +2180,44 @@ export class YouTubeMusicDataSource extends DataSource {
       ...initialResponses,
     };
     let bestSignal = this.getLibrarySignal(best.libraryLanding, best.historyResponse);
-    const profileCandidates = await this.getAccountCandidates(initialClient);
+    const profileCandidates = await this.getAccountCandidates();
+
+    /*
+     * An explicit choice ends the search. The probe below picks whichever account returns the
+     * most library content, which is the right default but the wrong answer for someone who
+     * deliberately switched to a channel that happens to have less in it — without this the
+     * switch would silently undo itself on the next refresh.
+     */
+    const preferredKey = this.readPreferredAccountKey();
+    const preferred = preferredKey
+      ? profileCandidates.find((candidate) => accountCandidateKey(candidate) === preferredKey)
+      : undefined;
+    if (preferred) {
+      const client = await this.useAccountCandidate(preferred);
+      const responses = await this.loadLibraryResponses(client);
+      logInternalInfo("YouTubeMusicDataSource.findBestLibraryResponses using saved account", {
+        name: preferred.name,
+      });
+      return { client, account: preferred, ...responses };
+    }
+
+    /*
+     * Adopt the profile's own name and photo for the account already in use.
+     *
+     * This is why the header used to read "YouTube Music" with no picture: the starting
+     * `best.account` is synthesised from session fields whose defaults are exactly that, and
+     * the loop below skips any candidate matching the current key — so the real profile, which
+     * matches by definition on a single-channel account, was never allowed to fill them in.
+     */
+    const activeProfile = profileCandidates.find(
+      (candidate) => accountCandidateKey(candidate) === accountCandidateKey(best.account),
+    );
+    if (activeProfile) {
+      best = { ...best, account: { ...best.account, ...activeProfile } };
+      this.musicAccountName = activeProfile.name ?? this.musicAccountName;
+      this.musicAccountArtworkUrl = activeProfile.artworkUrl ?? this.musicAccountArtworkUrl;
+    }
+
     const authUserCandidates: AccountCandidate[] = bestSignal <= 0
       ? [1, 2, 3, 4, 5].map((accountIndex) => ({
           accountIndex,
@@ -1962,26 +2227,12 @@ export class YouTubeMusicDataSource extends DataSource {
     const candidates = this.uniqueById(
       [...profileCandidates, ...authUserCandidates].map((candidate) => ({
         ...candidate,
-        id: [
-          candidate.accountIndex,
-          candidate.onBehalfOfUser ?? "",
-          candidate.serializedDelegationContext ?? "",
-        ].join(":"),
+        id: accountCandidateKey(candidate),
       })),
     ).map(({ id: _id, ...candidate }) => candidate);
 
     for (const candidate of candidates) {
-      const key = [
-        candidate.accountIndex,
-        candidate.onBehalfOfUser ?? "",
-        candidate.serializedDelegationContext ?? "",
-      ].join(":");
-      const bestKey = [
-        best.account.accountIndex,
-        best.account.onBehalfOfUser ?? "",
-        best.account.serializedDelegationContext ?? "",
-      ].join(":");
-      if (key === bestKey) continue;
+      if (accountCandidateKey(candidate) === accountCandidateKey(best.account)) continue;
 
       try {
         const client = await this.useAccountCandidate(candidate, {
@@ -2185,6 +2436,7 @@ export class YouTubeMusicDataSource extends DataSource {
     return {
       account: {
         name: this.musicAccountName,
+        artworkUrl: this.musicAccountArtworkUrl ?? undefined,
       },
       albums,
       playlists,

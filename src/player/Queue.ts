@@ -2,6 +2,8 @@ import type { Track } from "../datasource/types";
 
 export class Queue {
   private items: Track[] = [];
+  /** Pre-shuffle order of the automatic tail, so shuffle mode can be undone. */
+  private originalUpcoming: Track[] | null = null;
   private index = -1;
   private manualQueueLength = 0;
   private sourceTracks: Track[] = [];
@@ -45,6 +47,28 @@ export class Queue {
 
     this.items.splice(this.index + 1 + this.manualQueueLength, 0, track);
     this.manualQueueLength += 1;
+  }
+
+  /** Bulk "add to queue", used when a whole album or playlist is queued at once. */
+  addMany(tracks: Track[]): void {
+    for (const track of tracks) this.add(track);
+  }
+
+  /**
+   * Replaces everything after `index` with a freshly generated list.
+   *
+   * Anything hand-picked that sat past `index` is gone, so the manual run shrinks to whatever
+   * part of it survives before the cut — otherwise the generated tracks would be miscounted
+   * as manually queued and skip-back would treat them as such.
+   */
+  replaceAfter(index: number, tracks: Track[]): void {
+    if (index < this.index || index >= this.items.length) return;
+    this.items = [...this.items.slice(0, index + 1), ...tracks];
+    this.manualQueueLength = Math.min(
+      this.manualQueueLength,
+      Math.max(0, index - this.index),
+    );
+    this.originalUpcoming = null;
   }
 
   playNext(track: Track): void {
@@ -134,6 +158,23 @@ export class Queue {
     }
   }
 
+  /**
+   * Drops everything after the current track, manual and automatic alike.
+   *
+   * The current track keeps playing — clearing what is *next* should never stop what is
+   * *now*. The remembered pre-shuffle order goes with it, since it describes tracks that no
+   * longer exist.
+   */
+  clearUpcoming(): void {
+    if (this.index < 0) {
+      this.items = [];
+    } else {
+      this.items = this.items.slice(0, this.index + 1);
+    }
+    this.manualQueueLength = 0;
+    this.originalUpcoming = null;
+  }
+
   select(index: number): Track | null {
     if (index < 0 || index >= this.items.length) return null;
 
@@ -167,8 +208,6 @@ export class Queue {
     const insertIndex = adjustedTargetIndex + (insertAfter ? 1 : 0);
     this.items.splice(insertIndex, 0, track);
   }
-
-  private originalUpcoming: Track[] | null = null;
 
   shuffleRemaining(manualCount: number): void {
     const manualQueueEnd = this.index + 1 + manualCount;
