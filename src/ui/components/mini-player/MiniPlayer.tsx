@@ -850,7 +850,7 @@ export default function MiniPlayer() {
         className={cn(
           "relative flex flex-col overflow-hidden",
           "bg-neutral-900/80 backdrop-blur-xl",
-          "ring-1 ring-white/10 transition-[height,width,padding,background-color] duration-300",
+          "ring-1 ring-white/10 transition-[height,width,padding,background-color] duration-100",
           "[transition-timing-function:cubic-bezier(0.32,0.72,0,1)]",
           expanded ? "bg-neutral-900/95 ring-white/15" : "",
           isDragging ? "cursor-grabbing" : "cursor-grab",
@@ -900,7 +900,7 @@ export default function MiniPlayer() {
           style={{ height: COLLAPSED_HEIGHT }}
         >
           <button
-            className="group/art relative grid size-8 shrink-0 place-items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+            className="group/art relative grid size-11 shrink-0 place-items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
             onMouseDown={(event) => void handleAlbumArtMouseDown(event)}
             onClick={handleAlbumArtClick}
             aria-label="Restore main window"
@@ -924,7 +924,7 @@ export default function MiniPlayer() {
             <TrackArtwork
               artworkUrl={artworkUrl ?? undefined}
               className={cn(
-                "relative size-[26px] shrink-0 rounded-full bg-neutral-800 transition-transform duration-300",
+                "relative size-[28px] shrink-0 rounded-full bg-neutral-800 transition-transform duration-300",
                 isPlaying && "motion-safe:animate-[spin_12s_linear_infinite]",
                 "group-hover/art:scale-90",
               )}

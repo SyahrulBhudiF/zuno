@@ -751,22 +751,51 @@ fn sanitize_log_token(token: &str) -> String {
     token.to_string()
 }
 
+/// Query parameters kept verbatim when a URL is logged.
+///
+/// An allowlist, not a blocklist: googlevideo grows new parameters constantly and a blocklist
+/// would silently start writing down the next credential it invents. Everything here is
+/// descriptive — expiry, format, size, client identity — and none of it authenticates anything.
+const LOGGABLE_URL_PARAMS: &[&str] = &[
+    "expire", "id", "itag", "source", "mime", "clen", "dur", "lmt", "c", "cver", "mn", "ms",
+    "mv", "mt", "fvip", "keepalive", "ratebypass", "requiressl", "gir", "sq", "rn", "ver",
+    "xpc", "spc", "vprv", "svpuc", "txp", "range", "met", "rqh", "aitags", "sabr", "pcm2",
+];
+
+/// Renders a URL for the log with its credentials removed but its diagnostics intact.
+///
+/// The previous behaviour dropped the whole query string, which made a signed media URL
+/// unreadable — the parameters that explain a 403 (expiry, itag, client version) were discarded
+/// alongside the ones that must never be written down. Withheld values are replaced by their
+/// length, which answers the question actually being asked of them ("is it present and
+/// plausible, or missing and truncated?") without recording the secret itself.
 fn sanitize_log_url(value: &str) -> String {
-    match url::Url::parse(value) {
-        Ok(mut parsed) => {
-            parsed.set_query(None);
-            parsed.set_fragment(None);
-            format!(
-                "{}{}",
-                parsed.as_str().trim_end_matches('/'),
-                if value.contains('?') {
-                    "?[redacted]"
-                } else {
-                    ""
-                }
-            )
-        }
-        Err(_) => "[redacted-url]".to_string(),
+    let Ok(parsed) = url::Url::parse(value) else {
+        return "[redacted-url]".to_string();
+    };
+
+    let base = format!(
+        "{}://{}{}",
+        parsed.scheme(),
+        parsed.host_str().unwrap_or("?"),
+        parsed.path()
+    );
+
+    let query: Vec<String> = parsed
+        .query_pairs()
+        .map(|(key, value)| {
+            if LOGGABLE_URL_PARAMS.contains(&key.as_ref()) {
+                format!("{key}={value}")
+            } else {
+                format!("{key}=[{}ch]", value.len())
+            }
+        })
+        .collect();
+
+    if query.is_empty() {
+        base
+    } else {
+        format!("{base}?{}", query.join("&"))
     }
 }
 
@@ -1765,12 +1794,16 @@ async fn fetch_audio_bytes(
     let client = client_builder.build().map_err(|error| CommandError {
         message: format!("audio HTTP client creation failed: {error}"),
     })?;
-    let (response, style) =
-        send_audio_request(&client, &url, cookie.as_deref(), "bytes=0-").await?;
-    eprintln!(
-        "[internal][tauri][info] fetch_audio_bytes accepted style={:?} track_id={}",
-        style, track_id
-    );
+    /*
+     * The whole file in one request, asked for the way the browser asks: `range=0-{clen-1}` in
+     * the query string. When `clen` is absent there is nothing to bound the request with, so it
+     * goes out plain — still without a Range header, which is what gets these refused.
+     */
+    let ranged_url = match signed_content_length(&request_url) {
+        Some(total) if total > 0 => audio_url_with_range(&url, 0, total - 1),
+        _ => url.clone(),
+    };
+    let response = send_audio_request(&client, &ranged_url, cookie.as_deref(), &track_id).await?;
 
     let body = response.bytes().await.map_err(|error| {
         eprintln!(
@@ -1859,31 +1892,40 @@ fn offline_http_client(request_url: &url::Url) -> Result<reqwest::Client, Comman
         .map_err(|error| cache_error(format!("audio HTTP client creation failed: {error}")))
 }
 
-/// How a googlevideo media request is dressed.
+/// Appends googlevideo's `range` query parameter.
 ///
-/// Two hypotheses were in play for the 403s and both were reasonable: too little session
-/// context (no cookie, wrong origin), or too much invented context (Origin/Referer/Sec-Fetch
-/// values a real client would not send for this URL). Rather than pick one and hope, the
-/// request is attempted plainly first and escalated only if that is refused — and the log
-/// records which variant actually worked, so the guessing ends after one real download.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum AudioRequestStyle {
-    /// A bare signed-URL fetch. A signed CDN URL is meant to stand on its own, and extra
-    /// headers can only ever add ways to be rejected.
-    Plain,
-    /// The full authenticated dress: the session cookie plus the origin the URL was issued
-    /// to. Needed if googlevideo ties the URL to the /player session that minted it.
-    Authenticated,
+/// The browser asks for bytes *here*, not with a Range header: a live YouTube Music session
+/// sends `&range=1754030-3508710` and no Range header at all. A signed URL fetched with a Range
+/// header is refused with a bare 403 and an empty body.
+///
+/// This is why every earlier attempt failed identically — two header styles, a bounded range and
+/// an open one, four combinations, all refused. The Range header itself was the problem, so
+/// varying its value or the headers around it could never have helped.
+fn audio_url_with_range(url: &str, start: u64, end: u64) -> String {
+    let separator = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{separator}range={start}-{end}")
 }
 
-const AUDIO_REQUEST_STYLES: [AudioRequestStyle; 2] =
-    [AudioRequestStyle::Plain, AudioRequestStyle::Authenticated];
+/// Total byte length as declared by the URL's own `clen`.
+///
+/// Needed because a `range=` query answers 200 with just that slice rather than 206 with a
+/// Content-Range, so the response cannot say how large the whole file is.
+fn signed_content_length(request_url: &url::Url) -> Option<u64> {
+    request_url
+        .query_pairs()
+        .find(|(key, _)| key == "clen")
+        .and_then(|(_, value)| value.parse::<u64>().ok())
+}
 
+/// A googlevideo media request, dressed the way the browser dresses one.
+///
+/// Origin and Referer name music.youtube.com because that is the session the URL was issued to,
+/// and the cookie because the player's own media requests are credentialed — googlevideo echoes
+/// `access-control-allow-credentials` back at them.
 fn googlevideo_audio_request(
     client: &reqwest::Client,
     url: &str,
     cookie: Option<&str>,
-    style: AudioRequestStyle,
 ) -> reqwest::RequestBuilder {
     let request = client
         .get(url)
@@ -1891,63 +1933,53 @@ fn googlevideo_audio_request(
         .header("Accept", "*/*")
         // identity so the CDN does not gzip audio that is already compressed; the length
         // check downstream depends on Content-Length meaning what it says.
-        .header("Accept-Encoding", "identity;q=1, *;q=0");
+        .header("Accept-Encoding", "identity;q=1, *;q=0")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .header("Origin", "https://music.youtube.com")
+        .header("Referer", "https://music.youtube.com/");
 
-    match style {
-        AudioRequestStyle::Plain => request,
-        AudioRequestStyle::Authenticated => {
-            let request = request
-                .header("Accept-Language", "en-US,en;q=0.9")
-                .header("Origin", "https://music.youtube.com")
-                .header("Referer", "https://music.youtube.com/");
-            match cookie.filter(|value| !value.trim().is_empty()) {
-                Some(cookie) => request.header("Cookie", cookie),
-                None => request,
-            }
-        }
+    match cookie.filter(|value| !value.trim().is_empty()) {
+        Some(cookie) => request.header("Cookie", cookie),
+        None => request,
     }
 }
 
-/// Fetches a signed audio URL, escalating request style until one is accepted.
-///
-/// Returns the response and the style that worked so the caller can log it.
+/// Fetches a signed audio URL whose byte range, if any, is already in the URL.
 async fn send_audio_request(
     client: &reqwest::Client,
     url: &str,
     cookie: Option<&str>,
-    range: &str,
-) -> Result<(reqwest::Response, AudioRequestStyle), CommandError> {
-    let mut last_status: Option<reqwest::StatusCode> = None;
+    track_id: &str,
+) -> Result<reqwest::Response, CommandError> {
+    let started_at = Instant::now();
+    let response = googlevideo_audio_request(client, url, cookie)
+        .send()
+        .await
+        .map_err(|error| cache_error(format!("audio request failed: {error}")))?;
 
-    for style in AUDIO_REQUEST_STYLES {
-        let response = googlevideo_audio_request(client, url, cookie, style)
-            .header("Range", range)
-            .send()
-            .await
-            .map_err(|error| cache_error(format!("audio request failed: {error}")))?;
-
-        if response.status().is_success() {
-            if style != AudioRequestStyle::Plain {
-                eprintln!(
-                    "[internal][tauri][info] googlevideo accepted style={:?} after {:?} was refused",
-                    style, last_status
-                );
-            }
-            return Ok((response, style));
-        }
-
-        last_status = Some(response.status());
-        eprintln!(
-            "[internal][tauri][warn] googlevideo refused style={:?} status={}",
-            style,
-            response.status()
-        );
+    if response.status().is_success() {
+        return Ok(response);
     }
 
-    Err(cache_error(format!(
-        "request returned {}",
-        last_status.map(|status| status.to_string()).unwrap_or_else(|| "no response".into())
-    )))
+    /*
+     * googlevideo answers a refused media request with an empty body, so its reason — if it gives
+     * one at all — is only ever in the response headers. None of them are secret.
+     */
+    let headers: Vec<String> = response
+        .headers()
+        .iter()
+        .map(|(name, value)| format!("{name}={}", value.to_str().unwrap_or("?")))
+        .collect();
+    let status = response.status();
+    eprintln!(
+        "[internal][tauri][warn] googlevideo refused track_id={} status={} duration_ms={} headers=[{}]",
+        track_id,
+        status,
+        started_at.elapsed().as_millis(),
+        headers.join(", ")
+    );
+
+    Err(cache_error(format!("request returned {status}")))
 }
 
 fn emit_offline_progress(
@@ -1996,141 +2028,35 @@ async fn offline_audio_save(
     let started_at = Instant::now();
 
     /*
-     * The googlevideo request itself, not the /player call that produced it. A signed URL is
-     * useless without its query string, so the parameter names are logged (never the values —
-     * `sig` and `pot` are credentials) to prove nothing upstream trimmed them.
-     */
-    let query_keys: Vec<&str> = request_url.query_pairs().map(|(key, _)| key).collect::<Vec<_>>()
-        .iter()
-        .map(|key| match key.as_ref() {
-            "expire" => "expire", "ei" => "ei", "ip" => "ip", "id" => "id",
-            "itag" => "itag", "source" => "source", "sig" => "sig", "lsig" => "lsig",
-            "pot" => "pot", "n" => "n", "mime" => "mime", "clen" => "clen",
-            _ => "other",
-        })
-        .collect();
-    /*
-     * Two ways a structurally complete URL is still dead on arrival, both invisible in the key
-     * list above and both answered with a bare 403:
-     *   - the throttling `n` failed to transform, in which case youtubei.js writes the marker
-     *     `enhanced_except_*` into the URL rather than throwing;
-     *   - `expire` has passed.
-     * Logged as a verdict, not a value, since `n` is part of the signature.
-     */
-    let nsig_failed = request_url
-        .query_pairs()
-        .find(|(key, _)| key == "n")
-        .is_some_and(|(_, value)| value.starts_with("enhanced_except"));
-    /*
-     * Each signed URL embeds the IP the /player call was seen from, and googlevideo refuses a
-     * request arriving from any other address. If that value *changes between downloads* then
-     * this machine's egress address is rotating (a CGNAT pool, or IPv6 temporary addresses),
-     * which would refuse every download whose URL was signed for a since-abandoned address and
-     * let through only the occasional one that still matches.
+     * One line per download attempt, carrying the track it belongs to. The refusals used to be
+     * correlatable only by their position in the file, which made a ladder of attempts across
+     * several tracks genuinely hard to read.
      *
-     * Compared against the previous request rather than printed: the value is the user's own
-     * public IP, and "did it change" is the entire question.
+     * The URL is passed raw: the eprintln! macro sanitizes every line on its way out, so
+     * pre-sanitizing here would redact the redaction and report the length of "[105ch]" rather
+     * than of the signature.
      */
-    static LAST_SIGNED_IP: std::sync::Mutex<Option<IpAddr>> = std::sync::Mutex::new(None);
-    let signed_ip = request_url.query_pairs().find_map(|(key, value)| {
-        (key == "ip").then(|| value.parse::<IpAddr>().ok()).flatten()
-    });
-    let signed_ip_changed = match LAST_SIGNED_IP.lock() {
-        Ok(mut last) => {
-            let changed = last.is_some() && *last != signed_ip;
-            *last = signed_ip;
-            Some(changed)
-        }
-        Err(_) => None,
-    };
-
-    let expires_in = request_url
-        .query_pairs()
-        .find(|(key, _)| key == "expire")
-        .and_then(|(_, value)| value.parse::<i64>().ok())
-        .map(|expire| {
-            expire
-                - std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|elapsed| elapsed.as_secs() as i64)
-                    .unwrap_or(0)
-        });
-
     eprintln!(
-        "[internal][tauri][info] offline_audio_save request host={} path={} query_params={} nsig_failed={} expires_in_s={:?} signed_ip_v6={} signed_ip_changed={:?} keys={:?}",
-        request_url.host_str().unwrap_or("?"),
-        request_url.path(),
-        request_url.query_pairs().count(),
-        nsig_failed,
-        expires_in,
-        signed_ip.is_some_and(|ip| ip.is_ipv6()),
-        signed_ip_changed,
-        query_keys
+        "[internal][tauri][info] offline_audio_save request track_id={} url={}",
+        track_id, url
     );
 
-    // Probe with a range: the response tells us both the total size and whether ranges are
-    // honoured, in one request whose body we keep either way.
-    let probe_result = send_audio_request(
-        &client,
-        &url,
-        cookie.as_deref(),
-        &format!("bytes=0-{}", OFFLINE_CHUNK_BYTES - 1),
-    )
-    .await;
-
     /*
-     * A bounded Range is refused by some googlevideo edges with a bare 403, while the open
-     * `bytes=0-` that playback sends is accepted for the very same signed URL — which is exactly
-     * why one track saves and the next four do not. Rather than guess which edge does what, fall
-     * back to the request playback already makes: it is the one path proven to work, so a
-     * download can never fail where playback succeeds.
-     *
-     * The cost is losing chunk parallelism and byte-level progress for that track. A slower
-     * download that completes beats a fast one that 403s.
+     * `clen` rather than a probe request. A `range=` query is answered with 200 and just that
+     * slice — there is no 206 and no Content-Range — so the response cannot report the total
+     * size and the old probe-and-inspect dance has nothing left to inspect. The URL states the
+     * length itself, and it is covered by the signature, so it cannot disagree with the file.
      */
-    let (probe, style) = match probe_result {
-        Ok(value) => value,
-        Err(error) => {
-            eprintln!(
-                "[internal][tauri][warn] offline_audio_save ranged probe rejected ({}) falling back to open range",
-                error.message
-            );
-            let whole = fetch_audio_bytes(url.clone(), track_id.clone(), cookie.clone()).await?;
-            if whole.is_empty() {
-                return Err(cache_error("audio download returned no data"));
-            }
-            let total = whole.len() as u64;
-            emit_offline_progress(&app, &track_id, total, total, &mut 0);
-            return write_offline_entry(&app, &track_id, &whole, started_at, false);
-        }
-    };
-
-    let supports_ranges = probe.status() == reqwest::StatusCode::PARTIAL_CONTENT;
-    let total_bytes = if supports_ranges {
-        probe
-            .headers()
-            .get(reqwest::header::CONTENT_RANGE)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.rsplit('/').next().map(|size| size.to_string()))
-            .and_then(|size| size.parse::<u64>().ok())
-            .unwrap_or(0)
-    } else {
-        probe.content_length().unwrap_or(0)
-    };
+    let total_bytes = signed_content_length(&request_url).unwrap_or(0);
 
     let mut last_percent: u8 = 0;
     let mut bytes: Vec<u8>;
 
-    if supports_ranges && total_bytes > OFFLINE_CHUNK_BYTES {
-        let first = probe
-            .bytes()
-            .await
-            .map_err(|error| cache_error(format!("audio read failed: {error}")))?;
-        let mut received = first.len() as u64;
-        emit_offline_progress(&app, &track_id, received, total_bytes, &mut last_percent);
+    if total_bytes > OFFLINE_CHUNK_BYTES {
+        let mut received = 0u64;
 
         let mut ranges = Vec::new();
-        let mut start = first.len() as u64;
+        let mut start = 0u64;
         while start < total_bytes {
             let end = (start + OFFLINE_CHUNK_BYTES - 1).min(total_bytes - 1);
             ranges.push((start, end));
@@ -2142,15 +2068,14 @@ async fn offline_audio_save(
             let client = client.clone();
             let url = url.clone();
             let cookie = cookie.clone();
-            let style = style;
             async move {
-                // Reuses the style the probe proved, rather than re-running the ladder on
-                // every chunk and paying a refused request each time.
-                let response = googlevideo_audio_request(&client, &url, cookie.as_deref(), style)
-                    .header("Range", format!("bytes={start}-{end}"))
-                    .send()
-                    .await
-                    .map_err(|error| cache_error(format!("audio range request failed: {error}")))?;
+                let response =
+                    googlevideo_audio_request(&client, &audio_url_with_range(&url, start, end), cookie.as_deref())
+                        .send()
+                        .await
+                        .map_err(|error| {
+                            cache_error(format!("audio range request failed: {error}"))
+                        })?;
                 if !response.status().is_success() {
                     return Err(cache_error(format!("range returned {}", response.status())));
                 }
@@ -2194,26 +2119,21 @@ async fn offline_audio_save(
         // Ranges complete out of order, so the file is reassembled by offset.
         chunks.sort_by_key(|(start, _)| *start);
         bytes = Vec::with_capacity(total_bytes as usize);
-        bytes.extend_from_slice(&first);
         for (_, body) in chunks {
             bytes.extend_from_slice(&body);
         }
     } else {
-        // Single stream: either the file fits in one chunk, or the server ignored Range.
-        let mut body = probe.bytes_stream();
-        bytes = Vec::with_capacity(total_bytes as usize);
-        while let Some(chunk) = body.next().await {
-            let chunk =
-                chunk.map_err(|error| cache_error(format!("audio stream failed: {error}")))?;
-            bytes.extend_from_slice(&chunk);
-            emit_offline_progress(
-                &app,
-                &track_id,
-                bytes.len() as u64,
-                total_bytes,
-                &mut last_percent,
-            );
-        }
+        // Small enough for one request, or `clen` was absent and there is nothing to chunk by.
+        let whole = fetch_audio_bytes(url.clone(), track_id.clone(), cookie.clone()).await?;
+        bytes = whole;
+        let received = bytes.len() as u64;
+        emit_offline_progress(
+            &app,
+            &track_id,
+            received,
+            if total_bytes > 0 { total_bytes } else { received },
+            &mut last_percent,
+        );
     }
 
     if bytes.is_empty() {
@@ -2227,7 +2147,7 @@ async fn offline_audio_save(
         )));
     }
 
-    write_offline_entry(&app, &track_id, &bytes, started_at, supports_ranges)
+    write_offline_entry(&app, &track_id, &bytes, started_at, total_bytes > OFFLINE_CHUNK_BYTES)
 }
 
 /// Commits a completed download to the offline store.
@@ -3321,7 +3241,66 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::cookie_domain_matches;
+    use super::{audio_url_with_range, cookie_domain_matches, sanitize_log_url, signed_content_length};
+
+    #[test]
+    fn audio_url_with_range_appends_without_disturbing_the_signature() {
+        // The real shape: a query already present, so the range joins it with `&`.
+        assert_eq!(
+            audio_url_with_range("https://rr6.googlevideo.com/videoplayback?itag=140", 0, 1023),
+            "https://rr6.googlevideo.com/videoplayback?itag=140&range=0-1023"
+        );
+        // A URL with no query at all still has to produce a valid one.
+        assert_eq!(
+            audio_url_with_range("https://rr6.googlevideo.com/videoplayback", 10, 20),
+            "https://rr6.googlevideo.com/videoplayback?range=10-20"
+        );
+        // Percent-encoded values must survive untouched — re-encoding `==` breaks the signature.
+        assert!(audio_url_with_range("https://x/y?xpc=EgVo2aDSNQ%3D%3D", 0, 1)
+            .contains("xpc=EgVo2aDSNQ%3D%3D"));
+    }
+
+    #[test]
+    fn signed_content_length_reads_clen() {
+        let url = url::Url::parse("https://rr6.googlevideo.com/videoplayback?itag=140&clen=4844302")
+            .expect("test URL parses");
+        assert_eq!(signed_content_length(&url), Some(4_844_302));
+
+        let no_clen =
+            url::Url::parse("https://rr6.googlevideo.com/videoplayback?itag=140").expect("parses");
+        assert_eq!(signed_content_length(&no_clen), None);
+    }
+
+
+    #[test]
+    fn sanitize_log_url_withholds_credentials_and_keeps_diagnostics() {
+        let sanitized = sanitize_log_url(
+            "https://rr6---sn-2uja.googlevideo.com/videoplayback\
+             ?expire=1790000000&itag=140&mime=audio%2Fmp4&clen=4844302&c=WEB_REMIX&cver=1.0\
+             &ip=203.0.113.7&sig=SECRETSIG&lsig=SECRETLSIG&pot=SECRETPOT&n=SECRETN",
+        );
+
+        // Nothing secret survives, checked by value so a future allowlist edit that admits one
+        // of these fails here rather than in production.
+        for secret in ["SECRETSIG", "SECRETLSIG", "SECRETPOT", "SECRETN", "203.0.113.7"] {
+            assert!(!sanitized.contains(secret), "leaked {secret} in {sanitized}");
+        }
+
+        // ...and the parameters that explain a 403 are still readable.
+        for kept in ["expire=1790000000", "itag=140", "c=WEB_REMIX", "cver=1.0", "clen=4844302"] {
+            assert!(sanitized.contains(kept), "dropped {kept} from {sanitized}");
+        }
+
+        // Withheld values report their length, which is how a present-but-truncated signature is
+        // told apart from a missing one.
+        assert!(sanitized.contains("sig=[9ch]"), "{sanitized}");
+        assert!(sanitized.contains("https://rr6---sn-2uja.googlevideo.com/videoplayback?"));
+    }
+
+    #[test]
+    fn sanitize_log_url_rejects_unparseable_input() {
+        assert_eq!(sanitize_log_url("not a url"), "[redacted-url]");
+    }
 
     #[test]
     fn cookie_domain_matches_exact_and_parent_domains() {

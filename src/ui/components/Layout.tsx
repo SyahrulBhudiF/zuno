@@ -161,7 +161,7 @@ export function Layout({
   useEffect(() => () => clearScrollHideTimer(), [clearScrollHideTimer]);
 
   return (
-    <div className="relative flex min-h-0 flex-1 overflow-hidden  ">
+    <div className="relative flex min-h-0 flex-1 overflow-hidden bg-background ">
      
 
       <div className="relative flex min-h-0 min-w-0 flex-1">
@@ -171,7 +171,7 @@ export function Layout({
           onNavigateAlbum={onNavigateAlbum}
           onNavigatePlaylist={onNavigatePlaylist}
         />
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 bg-background backdrop-blur">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 bg-background backdrop-blur rounded-tl-lg">
           {/*
             Ambient wash for the page beneath. Rendered here rather than inside the page so
             it can start at the very top of the column — behind the search bar — instead of
@@ -183,7 +183,7 @@ export function Layout({
           {ambientArtwork ? (
             <span
               key={ambientArtwork}
-              className="pointer-events-none absolute inset-x-0 top-0 h-[22rem] overflow-hidden [mask-image:linear-gradient(to_bottom,background_25%,transparent)]"
+              className="pointer-events-none absolute inset-x-0 top-0 h-[22rem] overflow-hidden [mask-image:linear-gradient(to_bottom,background_25%,transparent)] rounded-tl-lg"
               aria-hidden="true"
             >
               <span className="absolute -inset-x-1/4 -top-1/2 bottom-0 scale-125 opacity-40 blur-[64px] saturate-[2]">

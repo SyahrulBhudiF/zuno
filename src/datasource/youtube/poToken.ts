@@ -20,7 +20,6 @@ import { buildURL, getHeaders } from "bgutils-js/utils";
 import type { WebPoSignalOutput } from "bgutils-js/shared-types";
 
 import { logInternalInfo, logInternalWarn } from "../../internal/logging";
-import { tauriFetch } from "./tauriFetch";
 
 /** YouTube's BotGuard request key. Constant across clients; not a secret. */
 const REQUEST_KEY = "O43z0dpjhgX20SCx4KAo";
@@ -35,8 +34,19 @@ type CachedMinter = { minter: WebPoMinter; expiresAt: number };
 
 let cached: Promise<CachedMinter> | null = null;
 
+/*
+ * The WebView's own fetch, not the Rust proxy.
+ *
+ * Attestation is the one place where *how* the request is made is part of what is being judged:
+ * these calls go to Google's anti-abuse API, which sees the TLS and HTTP/2 fingerprint of
+ * whatever issues them. Routing them through reqwest presents a non-browser client to the very
+ * service being asked to certify that a browser is present. The WebView is real Chromium, so it
+ * fingerprints as one.
+ */
+const attestationFetch: typeof fetch = (...args) => globalThis.fetch(...args);
+
 async function attest(): Promise<CachedMinter> {
-  const challenge = await getChallenge({ requestKey: REQUEST_KEY, fetchFunction: tauriFetch });
+  const challenge = await getChallenge({ requestKey: REQUEST_KEY, fetchFunction: attestationFetch });
 
   const interpreterJavascript =
     challenge.interpreterJavascript?.privateDoNotAccessOrElseSafeScriptWrappedValue;
@@ -68,7 +78,7 @@ async function attest(): Promise<CachedMinter> {
   const webPoSignalOutput: WebPoSignalOutput = [];
   const botguardResponse = await botguard.snapshot({ webPoSignalOutput });
 
-  const response = await tauriFetch(buildURL("GenerateIT"), {
+  const response = await attestationFetch(buildURL("GenerateIT"), {
     method: "POST",
     headers: getHeaders(),
     body: JSON.stringify([REQUEST_KEY, botguardResponse]),
@@ -77,7 +87,22 @@ async function attest(): Promise<CachedMinter> {
     throw new Error(`Integrity token request returned HTTP ${response.status}.`);
   }
 
-  const [integrityToken, estimatedTtlSecs] = (await response.json()) as [string?, number?];
+  const [integrityToken, estimatedTtlSecs, , websafeFallbackToken] = (await response.json()) as [
+    string?,
+    number?,
+    number?,
+    string?,
+  ];
+  /*
+   * A fallback token is what Google returns when it does not trust the runtime. It mints tokens
+   * that look entirely normal and are then rejected downstream, so its presence is the
+   * difference between "attested" and "politely declined".
+   */
+  logInternalInfo("poToken.integrity issued", {
+    hasToken: Boolean(integrityToken),
+    fallbackPresent: Boolean(websafeFallbackToken),
+    ttlSeconds: estimatedTtlSecs ?? null,
+  });
   if (!integrityToken) {
     throw new Error("Integrity token response contained no token.");
   }

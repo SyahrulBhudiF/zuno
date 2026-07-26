@@ -32,7 +32,7 @@ import {
 } from "../../internal/audioQuality";
 import { tauriFetch } from "./tauriFetch";
 
-type ClientLabel = "music" | "web";
+type ClientLabel = "music" | "web" | "download";
 type NativeAudioPayload = {
   bodyBase64: string;
   mimeType: string;
@@ -279,7 +279,7 @@ class YouTubeMusicAuthError extends Error {
 export class YouTubeMusicDataSource extends DataSource {
   private musicClientPromise: Promise<Innertube> | null = null;
   private webClientPromise: Promise<Innertube> | null = null;
-  private visitorDataPromise: Promise<string | undefined> | null = null;
+  private downloadClientPromise: Promise<Innertube> | null = null;
   private musicCookie: string | null = null;
   private musicAccountIndex = 0;
   private musicOnBehalfOfUser: string | null = null;
@@ -330,39 +330,43 @@ export class YouTubeMusicDataSource extends DataSource {
   }
 
   /**
-   * The visitor ID every client in this data source shares.
+   * Rewrites `cver` to the client version this session actually used.
    *
-   * A PO token is bound to one visitor ID, so the music and web clients cannot each generate
-   * their own — a token minted for one would not validate the other, which is what the logs
-   * showed before this existed. `generate_session_locally` means the ID is produced offline, so
-   * this throwaway client costs no network round trip.
+   * youtubei.js stamps `cver` from its own bundled constant whenever it deciphers a URL, while
+   * refreshMusicClientMetadata replaces the live session's version with the one scraped off
+   * music.youtube.com. The two disagree by however stale the installed youtubei.js is — a
+   * February 2025 constant against a current session — so the /player call signs the URL as one
+   * client and the media request then claims to be another. googlevideo answers that with a bare
+   * 403 and no body, which is indistinguishable from every other rejection it issues.
+   *
+   * Safe to rewrite: `cver` is not covered by the signature. youtubei.js sets it *after*
+   * deciphering, which it could not do if `sig` depended on it.
    */
-  private async getVisitorData(): Promise<string | undefined> {
-    if (!this.visitorDataPromise) {
-      this.visitorDataPromise = Innertube.create({
-        ...this.getSessionOptions(false),
-        client_type: ClientType.MUSIC,
-      })
-        .then((client) => client.session.context.client.visitorData)
-        .catch(() => undefined);
-    }
+  private withSessionClientVersion(streamUrl: string, client: Innertube): string {
+    const sessionVersion = client.session.context.client.clientVersion;
+    if (!sessionVersion) return streamUrl;
 
-    return this.visitorDataPromise;
-  }
+    /*
+     * String surgery rather than URL/URLSearchParams: re-serialising the query re-encodes values
+     * that are already percent-exact — `xpc=EgVo2aDSNQ==` would come back as `%3D%3D` — and a
+     * signed URL does not survive being normalised.
+     */
+    const rewritten = streamUrl.replace(
+      /([?&]cver=)[^&]*/,
+      `$1${encodeURIComponent(sessionVersion)}`,
+    );
+    if (rewritten === streamUrl) return streamUrl;
 
-  /** Session options plus the attestation youtubei.js needs to stamp `pot=` onto stream URLs. */
-  private async getAttestedSessionOptions(retrievePlayer: boolean) {
-    const visitorData = await this.getVisitorData();
-    return {
-      ...this.getSessionOptions(retrievePlayer),
-      visitor_data: visitorData,
-      po_token: await mintPoToken(visitorData ?? ""),
-    };
+    logInternalInfo("YouTubeMusicDataSource.cver rewritten", {
+      from: streamUrl.match(/[?&]cver=([^&]*)/)?.[1] ?? null,
+      to: sessionVersion,
+    });
+    return rewritten;
   }
 
   private async createMusicClient(retrievePlayer = true): Promise<Innertube> {
     const client = await Innertube.create({
-      ...(await this.getAttestedSessionOptions(retrievePlayer)),
+      ...this.getSessionOptions(retrievePlayer),
       client_type: ClientType.MUSIC,
     });
     await this.refreshMusicClientMetadata(client);
@@ -384,15 +388,86 @@ export class YouTubeMusicDataSource extends DataSource {
       logInternalInfo("YouTubeMusicDataSource.getWebClient creating client");
       // No player needed: this client only enumerates accounts and resolves like endpoints,
       // neither of which touches stream URLs, and retrieving it downloads the player script.
-      this.webClientPromise = this.getAttestedSessionOptions(false).then((options) =>
-        Innertube.create({ ...options, client_type: ClientType.WEB }),
-      );
+      this.webClientPromise = Innertube.create({
+        ...this.getSessionOptions(false),
+        client_type: ClientType.WEB,
+      });
     }
 
     return this.webClientPromise;
   }
 
+  /**
+   * The client used to mint download URLs.
+   *
+   * googlevideo serves the first 1 MiB of an unattested session's URL and refuses every byte
+   * past it with a bare 403 — measured directly: `range=0-1048575` returns 200 while
+   * `range=2000000-3000000` and `range=0-3000000` both return 403 on the same fresh URL. No
+   * chunking, ranging or header change reaches byte 1,048,576, and swapping clients does not
+   * help either: IOS, MWEB and WEB_REMIX are all gated identically, while ANDROID, WEB and
+   * TVHTML5 return SABR-only data with no direct URL at all. Only a PO token YouTube accepts
+   * lifts the gate.
+   *
+   * So this session is built to be exactly what a token can be bound to, and nothing more:
+   *
+   * - **Anonymous.** Cookies change nothing here — an authenticated session is gated just the
+   *   same — and a download needs the user's bytes, not their identity.
+   * - **A real visitor ID.** `generate_session_locally` fabricates one, which describes a
+   *   session Google never issued, and nothing about it validates.
+   *
+   * The token itself is *not* set here, because it is bound per track: see attestForTrack.
+   */
+  private getDownloadClient(): Promise<Innertube> {
+    if (!this.downloadClientPromise) {
+      logInternalInfo("YouTubeMusicDataSource.getDownloadClient creating client");
+      this.downloadClientPromise = (async () => {
+        const bootstrap = await Innertube.create({
+          fetch: tauriFetch,
+          retrieve_player: false,
+          generate_session_locally: false,
+        });
+
+        return Innertube.create({
+          fetch: tauriFetch,
+          retrieve_player: true,
+          generate_session_locally: false,
+          visitor_data: bootstrap.session.context.client.visitorData,
+          client_type: ClientType.MUSIC,
+        });
+      })();
+    }
+
+    return this.downloadClientPromise;
+  }
+
+  /**
+   * Binds a fresh PO token to one track and arms the client with it.
+   *
+   * The binding is the **video ID**, which is the only one of the four plausible candidates that
+   * actually works. Measured, because reasoning got it wrong three times: with the same session
+   * and the same track, a token bound to the visitor ID, to the account's Data Sync ID, or to
+   * the visitor ID of an authenticated session all left the URL refusing every byte past 1 MiB,
+   * while a video-bound token served the whole file.
+   *
+   * Set in two places for two different reasons — `session.po_token` is what the /player call
+   * carries, and `player.po_token` is what gets stamped onto the URL as `pot`. The URL is only
+   * ungated when the call that minted it was attested, so the first is the one that matters and
+   * the second keeps the URL self-consistent.
+   *
+   * Cheap per track: minting is local arithmetic against an integrity token that is fetched once
+   * and cached for its full twelve hours.
+   */
+  private async attestForTrack(client: Innertube, trackId: string): Promise<string | undefined> {
+    const poToken = await mintPoToken(trackId);
+    if (!poToken) return undefined;
+
+    client.session.po_token = poToken;
+    if (client.session.player) client.session.player.po_token = poToken;
+    return poToken;
+  }
+
   private async getClient(label: ClientLabel): Promise<Innertube> {
+    if (label === "download") return this.getDownloadClient();
     return label === "music" ? this.getMusicClient() : this.getWebClient();
   }
 
@@ -4448,7 +4523,7 @@ export class YouTubeMusicDataSource extends DataSource {
         // Already deciphered — getStreamingData runs decipher internally and assigns the result
         // to format.url, so `pot` and the transformed `n` are on it. Deciphering again would
         // re-transform an already-transformed `n` and earn a 403.
-        const url = (format as any).url as string;
+        const url = this.withSessionClientVersion((format as any).url as string, yt);
 
         if (!url) {
           throw new Error("YouTube.js returned an empty stream URL.");
@@ -4494,10 +4569,21 @@ export class YouTubeMusicDataSource extends DataSource {
     let streamUrl: string | null = null;
     let streamMimeType = "audio/mp4";
 
-    for (const label of ["music", "web"] as ClientLabel[]) {
+    /*
+     * Ungated clients first, unlike playback's music-then-web walk. This is the byte-fetching
+     * path: its URL is handed to Rust and pulled over plain HTTP, and a web URL cannot serve
+     * more than its first 1 MiB. Music and web remain as fallbacks for tracks the others cannot
+     * see, which is real for Music-exclusive content — a 1 MiB-capped URL is still better than
+     * no URL, and the length check downstream will reject the truncated result honestly.
+     */
+    for (const label of ["download", "music", "web"] as ClientLabel[]) {
       try {
         const yt = await this.getClient(label);
-        const info = await yt.getBasicInfo(track.id);
+        // Only the download client is attested; music and web are fallbacks whose URLs are
+        // gated at 1 MiB regardless, and minting for them would just be wasted work.
+        const poToken =
+          label === "download" ? await this.attestForTrack(yt, track.id) : undefined;
+        const info = await yt.getBasicInfo(track.id, poToken ? { po_token: poToken } : undefined);
         /*
          * MP4 preferred, any audio accepted.
          *
@@ -4537,7 +4623,7 @@ export class YouTubeMusicDataSource extends DataSource {
          * still carries an untransformed throttling `n` and no `pot`. Taking it as-is is why
          * downloads 403'd while playback — which goes through getStreamingData — worked.
          */
-        streamUrl = await format.decipher(yt.session.player);
+        streamUrl = this.withSessionClientVersion(await format.decipher(yt.session.player), yt);
         if (!streamUrl) {
           throw new Error("YouTube returned an empty MP4 audio URL.");
         }

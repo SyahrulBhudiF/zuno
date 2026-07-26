@@ -87,3 +87,4 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
  */
 syncLocalAudioWatcher();
 void listen("local-audio-changed", () => notifyLocalPlaylistsChanged());
+
