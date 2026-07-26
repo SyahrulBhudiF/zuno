@@ -235,6 +235,10 @@ export function ArtistView({
         onPlay={togglePlayCollection}
         onShuffle={playShuffled}
         onAddToQueue={() => playerController.addTracksToQueue(page?.allSongs ?? [])}
+        onAddToPlaylist={() => {
+          const songs = page?.allSongs ?? [];
+          if (songs.length > 0) openPlaylistPicker(songs[0], songs);
+        }}
         actions={
           <button
             className="flex items-center gap-2 rounded-full bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -281,6 +285,7 @@ export function ArtistView({
                       </span>
                     }
                     onSelect={() => void playerController.playTrackById(track.id, page.allSongs)}
+                    showDownload
                     onQuickAddToQueue={() => playerController.addToQueue(track)}
                     onQuickAdd={() => openPlaylistPicker(track)}
                     onContextMenu={(event) => openTrackMenu(event, track)}

@@ -6,7 +6,14 @@ import {
 } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
-import { ListIcon, PlaylistAddIcon, PlayActiveIcon } from "@/ui/icons";
+import { CheckActiveIcon, CheckIcon, DownloadIcon, ListIcon, PlaylistAddIcon, PlayActiveIcon } from "@/ui/icons";
+import { Loader } from "@/components/motion/loader";
+import {
+  getOfflineStatus,
+  queueDownload,
+  removeDownload,
+  useOfflineState,
+} from "../../player/offlineStore";
 import type { Track } from "../../datasource/types";
 import { ArtistLinks } from "./ArtistLinks";
 import { TrackArtwork } from "./TrackArtwork";
@@ -18,7 +25,7 @@ import { TrackArtwork } from "./TrackArtwork";
  */
 type PassthroughButtonProps = Omit<
   ComponentPropsWithoutRef<"button">,
-  "onClick" | "onContextMenu" | "children" | "className" | "type"
+  "onClick" | "onContextMenu" | "onSelect" | "children" | "className" | "type"
 >;
 
 interface TrackRowProps extends PassthroughButtonProps {
@@ -29,12 +36,19 @@ interface TrackRowProps extends PassthroughButtonProps {
   isCurrent: boolean;
   /** Current *and* actually playing — drives the level meter over the static glyph. */
   isPlaying: boolean;
-  onSelect: () => void;
+  onSelect: (event: MouseEvent<HTMLElement>) => void;
   onContextMenu?: (event: MouseEvent<HTMLElement>) => void;
   /** Shows a quick "add to playlist" affordance on hover. Omit to hide it. */
   onQuickAdd?: () => void;
   /** Shows a quick "add to queue" affordance on hover. Omit to hide it. */
   onQuickAddToQueue?: () => void;
+  /** Shows a download-for-offline toggle. Omit on rows where it makes no sense. */
+  showDownload?: boolean;
+  /** Part of a multi-selection. Swaps the index column for a checkbox. */
+  isSelected?: boolean;
+  /** True while any row in the list is selected, so every row shows its checkbox. */
+  isSelectionActive?: boolean;
+  onToggleSelected?: () => void;
   /** Album pages repeat one cover on every row, so they opt out. */
   showArtwork?: boolean;
   /** Hides the artist whose page we are already on. */
@@ -44,6 +58,79 @@ interface TrackRowProps extends PassthroughButtonProps {
   className?: string;
   /** Rendered inside the row: drag indicators and the like. */
   children?: ReactNode;
+}
+
+/**
+ * Download-for-offline toggle.
+ *
+ * Unlike the other hover actions this one stays visible once a track is downloaded — that is
+ * state you need to see without hovering, the same reasoning as the queue's stop marker.
+ */
+function DownloadAction({ track }: { track: Track }) {
+  // Subscribing here rather than in TrackRow keeps download churn from re-rendering the
+  // whole row, which matters on a 500-row playlist while a queue is draining.
+  const offline = useOfflineState();
+  const status = getOfflineStatus(track.id);
+  const isDownloading = status === "downloading";
+
+  if (track.source === "local") return null;
+
+  const label = status === "ready"
+    ? `Remove ${track.title} from downloads`
+    : `Download ${track.title}`;
+
+  return (
+    <Tooltip content={status === "ready" ? "Downloaded — click to remove" : "Download"}>
+      <span
+        role="button"
+        tabIndex={0}
+        aria-label={label}
+        aria-pressed={status === "ready"}
+        className={cn(
+          "grid shrink-0 place-items-center rounded-full transition",
+          // The percent readout needs more room than a glyph, so the slot widens only while
+          // it is showing rather than reserving the space on every row forever.
+          isDownloading ? "h-8 w-12" : "size-8",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          status === "ready"
+            ? "text-primary opacity-100"
+            : "text-muted-foreground opacity-0 hover:bg-background hover:text-foreground group-hover/row:opacity-100 focus:opacity-100",
+          (status === "queued" || status === "downloading") && "opacity-100",
+          status === "failed" && "text-destructive opacity-100",
+        )}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (status === "ready") void removeDownload(track.id);
+          else queueDownload(track);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (status === "ready") void removeDownload(track.id);
+          else queueDownload(track);
+        }}
+      >
+        {isDownloading ? (
+          /* Fed by the real byte count streamed from Rust. When the response has no
+             Content-Length the store reports null and this falls back to the sweeping
+             animation, which is honest about not knowing. */
+          <Loader
+            variant="percent"
+            size={18}
+            value={offline.progress ?? undefined}
+            label={`Downloading ${track.title}`}
+          />
+        ) : status === "queued" ? (
+          <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+        ) : status === "ready" ? (
+          <CheckActiveIcon size={16} aria-hidden="true" />
+        ) : (
+          <DownloadIcon size={16} aria-hidden="true" />
+        )}
+      </span>
+    </Tooltip>
+  );
 }
 
 /**
@@ -115,6 +202,10 @@ export const TrackRow = memo(function TrackRow({
   onContextMenu,
   onQuickAdd,
   onQuickAddToQueue,
+  showDownload = false,
+  isSelected = false,
+  isSelectionActive = false,
+  onToggleSelected,
   showArtwork = true,
   suppressArtistId,
   trailing,
@@ -134,14 +225,45 @@ export const TrackRow = memo(function TrackRow({
         "transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2",
         "focus-visible:ring-inset focus-visible:ring-ring",
         isCurrent && "bg-primary/5",
+        isSelected && "bg-primary/10",
         className,
       )}
     >
       {children}
 
-      {/* The position number is only useful until you have decided to act on the row, so it
+      {/* While a selection is open the index column becomes a checkbox. It replaces the
+          number rather than sitting beside it so the row width never changes — a list that
+          reflows the moment you select something is unusable for range-selecting. */}
+      {isSelectionActive && onToggleSelected ? (
+        <span
+          role="checkbox"
+          aria-checked={isSelected}
+          tabIndex={0}
+          aria-label={`Select ${track.title}`}
+          className={cn(
+            "grid size-6 shrink-0 place-items-center rounded-md border transition-colors",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            isSelected
+              ? "border-primary bg-primary text-primary-foreground"
+              : "border-border text-transparent hover:border-muted-foreground",
+          )}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleSelected();
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            event.stopPropagation();
+            onToggleSelected();
+          }}
+        >
+          <CheckIcon size={14} aria-hidden="true" />
+        </span>
+      ) : (
+      /* The position number is only useful until you have decided to act on the row, so it
           gives way to a play glyph on hover — and to a level meter once this row is the one
-          playing. All three share the slot, so the row never reflows between states. */}
+          playing. All three share the slot, so the row never reflows between states. */
       <span className="relative w-6 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
         <span
           className={cn(
@@ -176,6 +298,7 @@ export const TrackRow = memo(function TrackRow({
           </span>
         )}
       </span>
+      )}
 
       {showArtwork ? (
         <TrackArtwork
@@ -204,6 +327,8 @@ export const TrackRow = memo(function TrackRow({
 
       {/* Hover actions. The row itself is a <button>, so these cannot be buttons — see
           QuickAction. They sit before `trailing` so durations stay hard against the edge. */}
+      {showDownload && <DownloadAction track={track} />}
+
       {(onQuickAddToQueue || onQuickAdd) && (
         <span className="flex shrink-0 items-center">
           {onQuickAddToQueue && (

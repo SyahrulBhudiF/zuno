@@ -8,7 +8,11 @@ import type { PlayerControllerActions } from "../../player/playerStore";
 import { markPlaylistPlayed } from "../../player/recentPlaylists";
 import { shuffleTracks } from "../../player/shuffleTracks";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
-import { isLocalPlaylist, reorderLocalPlaylistTracks } from "../../player/localPlaylists";
+import { isLocalPlaylist } from "../../player/localPlaylists";
+import { logInternalError } from "../../internal/logging";
+import { SelectionBar } from "../components/SelectionBar";
+import { useTrackSelection } from "../hooks/useTrackSelection";
+import { queueDownloads } from "../../player/offlineStore";
 import { usePlaylistContextMenu } from "../components/PlaylistContextMenu";
 import { formatCollectionMeta, MediaHeader } from "../components/MediaHeader";
 import { isLikedSongsId, likedSongsCover } from "../likedSongsArtwork";
@@ -129,6 +133,15 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   tracksRef.current = tracks;
 
   const isLocalPlaylistView = playlist ? isLocalPlaylist(playlist) : false;
+  /*
+   * Reordering now reaches YouTube too, not just local playlists. Liked Songs is excluded
+   * because it has no user-defined order to persist.
+   */
+  const canReorderTracks = Boolean(
+    playlist
+      && (isLocalPlaylistView
+        || (playlist.isEditable !== false && !isLikedSongsId(playlist.id, playlist.kind))),
+  );
 
   useEffect(() => {
     if (!playlist) return;
@@ -261,9 +274,15 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     ].some((value) => value?.toLocaleLowerCase().includes(query)));
   }, [playlistSearchQuery, sortedTracks]);
 
-  // Drag to reorder for local playlists
+  /*
+   * Drag to reorder.
+   *
+   * Rows are keyed by playlistItemId where there is one, because YouTube addresses a playlist
+   * entry by the row it sits in — the same song can appear twice, and keying on the video id
+   * would move whichever copy came first.
+   */
   useEffect(() => {
-    if (!isLocalPlaylistView) return;
+    if (!canReorderTracks) return;
 
     const handlePointerMove = (event: PointerEvent) => {
       const drag = pointerDragRef.current;
@@ -308,8 +327,9 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
         }
 
         const sorted = sortedTracksRef.current;
-        const fromIndex = sorted.findIndex((t) => (t.localPath ?? t.id) === fromPath);
-        const toIndex = sorted.findIndex((t) => (t.localPath ?? t.id) === toPath);
+        const rowKey = (t: Track) => t.localPath ?? t.playlistItemId ?? t.id;
+        const fromIndex = sorted.findIndex((item) => rowKey(item) === fromPath);
+        const toIndex = sorted.findIndex((item) => rowKey(item) === toPath);
         if (fromIndex < 0 || toIndex < 0) return;
 
         const clampedToIndex = dropTargetRef.current.insertAfter
@@ -320,13 +340,28 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
           : clampedToIndex;
 
         if (fromIndex !== insertIndex) {
-          reorderLocalPlaylistTracks(playlist.id, fromIndex, clampedToIndex);
-          setTracks((current) => {
-            const next = [...current];
-            const [moved] = next.splice(fromIndex, 1);
-            next.splice(insertIndex, 0, moved);
-            return next;
-          });
+          const movedTrack = sorted[fromIndex];
+          const reordered = [...sorted];
+          reordered.splice(fromIndex, 1);
+          reordered.splice(insertIndex, 0, movedTrack);
+          // YouTube positions a row *after* another one, so it needs the new neighbour above.
+          const predecessorTrack = insertIndex > 0 ? reordered[insertIndex - 1] : null;
+          const previousTracks = sorted;
+
+          setTracks(reordered);
+          void libraryController
+            .reorderPlaylistTracks(playlist, movedTrack, predecessorTrack, {
+              from: fromIndex,
+              to: clampedToIndex,
+            })
+            .catch((error: unknown) => {
+              // Snapping back is the honest outcome: the row is not where it looks.
+              logInternalError("PlaylistView.reorder failed", error, {
+                playlistId: playlist.id,
+                trackId: movedTrack.id,
+              });
+              setTracks(previousTracks);
+            });
         }
       }
 
@@ -349,7 +384,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
     };
-  }, [isLocalPlaylistView, playlist]);
+  }, [canReorderTracks, libraryController, playlist]);
 
   if (!playlist) return null;
 
@@ -406,6 +441,8 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     if (started) markPlaylistPlayed(playlist.id);
   };
 
+  const selection = useTrackSelection(visibleTracks);
+
   const removeTrackFromList = (removedTrack: Track) => {
     setTracks((current) => current.filter((item) =>
       playlist.kind === "liked-songs" || playlist.id === "LM"
@@ -432,10 +469,10 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   };
 
   const handlePointerDown = (event: React.PointerEvent, track: Track) => {
-    if (!isLocalPlaylistView || event.button !== 0) return;
+    if (!canReorderTracks || event.button !== 0) return;
     pointerDragRef.current = {
       pointerId: event.pointerId,
-      localPath: track.localPath ?? track.id,
+      localPath: track.localPath ?? track.playlistItemId ?? track.id,
       startY: event.clientY,
       isDragging: false,
     };
@@ -466,6 +503,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
           onPlayInLoop={() => void playInLoop()}
           isLooping={isCurrentCollection && playbackOrderMode === "repeat-all"}
           onAddToQueue={() => playerController.addTracksToQueue(tracks)}
+          onAddToPlaylist={() => openPlaylistPicker(tracks[0], tracks)}
         />
       </div>
       {isLoading && <PlaylistLoadingSpinner label="Loading songs" />}
@@ -545,7 +583,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
           ) : (
           <div className="flex flex-col gap-0.5">
             {visibleTracks.map((track, index) => {
-              const trackPath = track.localPath ?? track.id;
+              const trackPath = track.localPath ?? track.playlistItemId ?? track.id;
               /*
                * Match on the *player's* current track rather than a row index: the same
                * track can appear more than once, and the queue can be reordered or shuffled
@@ -569,13 +607,19 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
                   isPlaying={isCurrentPlaying}
                   data-playlist-track-path={trackPath}
                   className={cn(isDragged && "opacity-40")}
-                  onSelect={() => {
+                  isSelected={selection.isSelected(track.id)}
+                  isSelectionActive={selection.isActive}
+                  onToggleSelected={() => selection.toggle(track.id, index)}
+                  onSelect={(event) => {
+                    // A drag that ended on this row must not also count as a click.
                     if (suppressClickRef.current) {
                       suppressClickRef.current = false;
                       return;
                     }
+                    if (selection.handleRowClick(event, index)) return;
                     void playPlaylistTrack(track);
                   }}
+                  showDownload
                   onQuickAddToQueue={() => playerController.addToQueue(track)}
                   onQuickAdd={() => openPlaylistPicker(track)}
                   onContextMenu={(event) => openTrackMenu(event, track, {
@@ -609,6 +653,39 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
           </div>
         </>
       )}
+      <SelectionBar
+        selection={selection}
+        removeLabel="Remove"
+        onAddToQueue={(selected) => {
+          playerController.addTracksToQueue(selected);
+          selection.clear();
+        }}
+        onAddToPlaylist={(selected) => {
+          openPlaylistPicker(selected[0], selected);
+          selection.clear();
+        }}
+        onDownload={(selected) => {
+          queueDownloads(selected);
+          selection.clear();
+        }}
+        onRemove={async (selected) => {
+          // Sequential for the same reason batch-add is: YouTube rejects rapid bursts of
+          // playlist edits, and a half-applied removal is worse than a slow one.
+          for (const item of selected) {
+            try {
+              await libraryController.removeTrackFromPlaylist(item, playlist);
+              removeTrackFromList(item);
+            } catch (error) {
+              logInternalError("PlaylistView.batchRemove failed", error, {
+                trackId: item.id,
+                playlistId: playlist.id,
+              });
+            }
+          }
+          selection.clear();
+        }}
+      />
+
     </div>
   );
 }

@@ -285,6 +285,230 @@ fn local_audio_scan(paths: Vec<String>) -> Result<Vec<LocalAudioFile>, CommandEr
     Ok(files)
 }
 
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct LocalAudioTags {
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    album_artist: Option<String>,
+    genre: Option<String>,
+    track_number: Option<u32>,
+    year: Option<u32>,
+}
+
+/// Reads real tags from a file.
+///
+/// The scanner falls back to the filename and parent folder, which is fine for a quick list
+/// but wrong often enough that an editor needs the actual values — otherwise "save" would
+/// write the guessed name back into the file as if it were the truth.
+/// Reads a user-chosen text file. Used for playlist import.
+///
+/// Size-capped: the picker lets someone choose any file at all, and reading a multi-gigabyte
+/// one into a string to discover it is not a playlist would take the app down with it.
+#[tauri::command]
+fn read_text_file(path: String) -> Result<String, CommandError> {
+    const MAX_IMPORT_BYTES: u64 = 16 * 1024 * 1024;
+
+    let path = PathBuf::from(path);
+    let metadata = fs::metadata(&path)
+        .map_err(|error| cache_error(format!("file read failed: {error}")))?;
+    if metadata.len() > MAX_IMPORT_BYTES {
+        return Err(cache_error("that file is too large to be a playlist"));
+    }
+
+    fs::read_to_string(&path).map_err(|error| cache_error(format!("file read failed: {error}")))
+}
+
+/// Writes a user-chosen text file. Used for playlist export.
+#[tauri::command]
+fn write_text_file(path: String, contents: String) -> Result<(), CommandError> {
+    let path = PathBuf::from(path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| cache_error(format!("directory creation failed: {error}")))?;
+    }
+    fs::write(&path, contents).map_err(|error| cache_error(format!("file write failed: {error}")))
+}
+
+#[tauri::command]
+fn local_audio_read_tags(path: String) -> Result<LocalAudioTags, CommandError> {
+    use lofty::file::TaggedFileExt;
+    use lofty::tag::Accessor;
+
+    let path = PathBuf::from(path);
+    if !path.is_file() || !is_local_audio_file(&path) {
+        return Err(cache_error("local audio file is unavailable."));
+    }
+
+    let tagged = lofty::read_from_path(&path)
+        .map_err(|error| cache_error(format!("tag read failed: {error}")))?;
+    let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) else {
+        return Ok(LocalAudioTags::default());
+    };
+
+    Ok(LocalAudioTags {
+        title: tag.title().map(|value| value.to_string()),
+        artist: tag.artist().map(|value| value.to_string()),
+        album: tag.album().map(|value| value.to_string()),
+        album_artist: tag
+            .get_string(lofty::tag::ItemKey::AlbumArtist)
+            .map(|value| value.to_string()),
+        genre: tag.genre().map(|value| value.to_string()),
+        track_number: tag.track(),
+        // Year lives under a plain item key rather than an Accessor method in lofty 0.24.
+        year: tag
+            .get_string(lofty::tag::ItemKey::Year)
+            .and_then(|value| value.trim().get(..4).and_then(|text| text.parse().ok())),
+    })
+}
+
+#[tauri::command]
+fn local_audio_write_tags(path: String, tags: LocalAudioTags) -> Result<(), CommandError> {
+    use lofty::config::WriteOptions;
+    use lofty::file::{AudioFile, TaggedFileExt};
+    use lofty::tag::{Accessor, ItemKey, Tag};
+
+    let path = PathBuf::from(path);
+    if !path.is_file() || !is_local_audio_file(&path) {
+        return Err(cache_error("local audio file is unavailable."));
+    }
+
+    let mut tagged = lofty::read_from_path(&path)
+        .map_err(|error| cache_error(format!("tag read failed: {error}")))?;
+
+    // A file with no tag at all still needs somewhere to put these, so one is created in the
+    // format that file type expects rather than failing the edit.
+    let tag_type = tagged.primary_tag_type();
+    if tagged.primary_tag().is_none() {
+        tagged.insert_tag(Tag::new(tag_type));
+    }
+    let Some(tag) = tagged.primary_tag_mut() else {
+        return Err(cache_error("this file cannot store tags"));
+    };
+
+    fn apply(tag: &mut Tag, key: ItemKey, value: Option<&String>) {
+        match value.map(|text| text.trim()).filter(|text| !text.is_empty()) {
+            // An empty field is an instruction to clear the tag, not to leave it alone.
+            Some(text) => {
+                let _ = tag.insert_text(key, text.to_string());
+            }
+            None => {
+                let _ = tag.remove_key(key);
+            }
+        }
+    }
+
+    apply(tag, ItemKey::TrackTitle, tags.title.as_ref());
+    apply(tag, ItemKey::TrackArtist, tags.artist.as_ref());
+    apply(tag, ItemKey::AlbumTitle, tags.album.as_ref());
+    apply(tag, ItemKey::AlbumArtist, tags.album_artist.as_ref());
+    apply(tag, ItemKey::Genre, tags.genre.as_ref());
+
+    match tags.track_number {
+        Some(number) => tag.set_track(number),
+        None => tag.remove_track(),
+    }
+    match tags.year {
+        Some(year) => {
+            let _ = tag.insert_text(ItemKey::Year, year.to_string());
+        }
+        None => {
+            let _ = tag.remove_key(ItemKey::Year);
+        }
+    }
+
+    tagged
+        .save_to_path(&path, WriteOptions::default())
+        .map_err(|error| cache_error(format!("tag write failed: {error}")))?;
+
+    eprintln!(
+        "[internal][tauri][info] local_audio_write_tags path={}",
+        path.display()
+    );
+    Ok(())
+}
+
+/// Holds the active folder watcher. Replaced wholesale whenever the watched set changes.
+struct LocalAudioWatcher(Mutex<Option<notify::RecommendedWatcher>>);
+
+/// Watches folders for changes and tells the frontend to rescan.
+///
+/// Deliberately coarse: it emits one debounced "something changed" event rather than a diff.
+/// The scan is cheap, and a precise change feed would have to model renames, temp files and
+/// editors that write-then-replace — all of which produce the same user-visible outcome.
+#[tauri::command]
+fn local_audio_watch(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, LocalAudioWatcher>,
+    paths: Vec<String>,
+) -> Result<(), CommandError> {
+    use notify::{RecursiveMode, Watcher};
+
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|_| cache_error("watcher lock unavailable"))?;
+    // Dropping the previous watcher unregisters every path it held.
+    *guard = None;
+
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let emitter = app.clone();
+    let last_emit = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(60)));
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        let Ok(event) = event else { return };
+        if !matches!(
+            event.kind,
+            notify::EventKind::Create(_) | notify::EventKind::Remove(_) | notify::EventKind::Modify(_)
+        ) {
+            return;
+        }
+
+        // A single save can fire several events; one rescan per second is plenty.
+        if let Ok(mut last) = last_emit.lock() {
+            if last.elapsed() < Duration::from_millis(1000) {
+                return;
+            }
+            *last = Instant::now();
+        }
+        let _ = emitter.emit("local-audio-changed", ());
+    })
+    .map_err(|error| cache_error(format!("watcher creation failed: {error}")))?;
+
+    for path in &paths {
+        let candidate = Path::new(path.trim());
+        if !candidate.exists() {
+            continue;
+        }
+        if let Err(error) = watcher.watch(candidate, RecursiveMode::Recursive) {
+            eprintln!(
+                "[internal][tauri][warn] local_audio_watch failed path={} error={}",
+                path, error
+            );
+        }
+    }
+
+    *guard = Some(watcher);
+    eprintln!(
+        "[internal][tauri][info] local_audio_watch watching {} paths",
+        paths.len()
+    );
+    Ok(())
+}
+
+#[tauri::command]
+fn local_audio_unwatch(state: tauri::State<'_, LocalAudioWatcher>) -> Result<(), CommandError> {
+    let mut guard = state
+        .0
+        .lock()
+        .map_err(|_| cache_error("watcher lock unavailable"))?;
+    *guard = None;
+    Ok(())
+}
+
 #[tauri::command]
 fn local_audio_read(path: String) -> Result<AudioPayload, CommandError> {
     let path = PathBuf::from(path);
@@ -1517,7 +1741,11 @@ fn parse_media_range(range_header: Option<&str>, total_len: usize) -> Option<(&'
 }
 
 #[tauri::command]
-async fn fetch_audio_bytes(url: String, track_id: String) -> Result<Vec<u8>, CommandError> {
+async fn fetch_audio_bytes(
+    url: String,
+    track_id: String,
+    cookie: Option<String>,
+) -> Result<Vec<u8>, CommandError> {
     let started_at = Instant::now();
     eprintln!(
         "[internal][tauri][info] fetch_audio_bytes start url={} track_id={}",
@@ -1537,40 +1765,12 @@ async fn fetch_audio_bytes(url: String, track_id: String) -> Result<Vec<u8>, Com
     let client = client_builder.build().map_err(|error| CommandError {
         message: format!("audio HTTP client creation failed: {error}"),
     })?;
-    let response = client
-        .get(&url)
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-        .header("Accept", "*/*")
-        .header("Accept-Language", "en-US,en;q=0.9")
-        .header("Accept-Encoding", "identity;q=1, *;q=0")
-        .header("Range", "bytes=0-")
-        .header("Origin", "https://www.youtube.com")
-        .header("Referer", &format!("https://www.youtube.com/watch?v={}", track_id))
-        .header("Sec-Fetch-Dest", "audio")
-        .header("Sec-Fetch-Mode", "no-cors")
-        .header("Sec-Fetch-Site", "cross-site")
-        .send()
-        .await
-        .map_err(|error| {
-            eprintln!(
-                "[internal][tauri][error] fetch_audio_bytes request failed url={} error={}",
-                url, error
-            );
-            CommandError {
-                message: format!("request failed: {error}"),
-            }
-        })?;
-
-    if !response.status().is_success() {
-        eprintln!(
-            "[internal][tauri][warn] fetch_audio_bytes non-success url={} status={}",
-            url,
-            response.status()
-        );
-        return Err(CommandError {
-            message: format!("request returned {}", response.status()),
-        });
-    }
+    let (response, style) =
+        send_audio_request(&client, &url, cookie.as_deref(), "bytes=0-").await?;
+    eprintln!(
+        "[internal][tauri][info] fetch_audio_bytes accepted style={:?} track_id={}",
+        style, track_id
+    );
 
     let body = response.bytes().await.map_err(|error| {
         eprintln!(
@@ -1592,13 +1792,620 @@ async fn fetch_audio_bytes(url: String, track_id: String) -> Result<Vec<u8>, Com
     Ok(body.to_vec())
 }
 
+/// Where downloaded audio lives. Separate from the metadata cache on purpose: that one is
+/// JSON and size-capped for throwaway data, whereas these files are the user's explicit
+/// "keep this" and must survive a cache clear.
+fn offline_dir(app: &tauri::AppHandle) -> Result<PathBuf, CommandError> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join("offline-audio-v1"))
+        .map_err(|error| cache_error(format!("offline directory unavailable: {error}")))
+}
+
+/// Track ids come from YouTube and are already filename-safe, but a hostile id must not be
+/// able to escape the directory.
+fn offline_entry_path(app: &tauri::AppHandle, track_id: &str) -> Result<PathBuf, CommandError> {
+    let unsafe_char = track_id
+        .chars()
+        .any(|value| value == '/' || value == '\\' || value == ':' || value == '\0');
+    if track_id.is_empty() || unsafe_char || track_id.contains("..") {
+        return Err(cache_error("invalid offline track id"));
+    }
+    Ok(offline_dir(app)?.join(format!("{track_id}.bin")))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OfflineEntryInfo {
+    track_id: String,
+    byte_length: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OfflineStats {
+    entry_count: u64,
+    used_bytes: u64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OfflineProgress {
+    track_id: String,
+    received_bytes: u64,
+    total_bytes: u64,
+    percent: u8,
+}
+
+/// Bytes per range request. Large enough that per-request overhead is negligible, small
+/// enough that several are in flight at once on an ordinary connection.
+const OFFLINE_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Range requests in flight at once.
+///
+/// googlevideo throttles a single sequential stream hard — that is the documented behaviour
+/// media downloaders work around, and it is why downloading a track took far longer than
+/// streaming the same track takes to buffer. Several ranges in parallel side-step it. Kept
+/// modest so a download does not starve playback of the same connection.
+const OFFLINE_CHUNK_CONCURRENCY: usize = 6;
+
+fn offline_http_client(request_url: &url::Url) -> Result<reqwest::Client, CommandError> {
+    let mut client_builder = reqwest::Client::builder();
+    if let Some(local_address) = signed_googlevideo_local_address(request_url) {
+        client_builder = client_builder.local_address(local_address);
+    }
+    client_builder
+        .build()
+        .map_err(|error| cache_error(format!("audio HTTP client creation failed: {error}")))
+}
+
+/// How a googlevideo media request is dressed.
+///
+/// Two hypotheses were in play for the 403s and both were reasonable: too little session
+/// context (no cookie, wrong origin), or too much invented context (Origin/Referer/Sec-Fetch
+/// values a real client would not send for this URL). Rather than pick one and hope, the
+/// request is attempted plainly first and escalated only if that is refused — and the log
+/// records which variant actually worked, so the guessing ends after one real download.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AudioRequestStyle {
+    /// A bare signed-URL fetch. A signed CDN URL is meant to stand on its own, and extra
+    /// headers can only ever add ways to be rejected.
+    Plain,
+    /// The full authenticated dress: the session cookie plus the origin the URL was issued
+    /// to. Needed if googlevideo ties the URL to the /player session that minted it.
+    Authenticated,
+}
+
+const AUDIO_REQUEST_STYLES: [AudioRequestStyle; 2] =
+    [AudioRequestStyle::Plain, AudioRequestStyle::Authenticated];
+
+fn googlevideo_audio_request(
+    client: &reqwest::Client,
+    url: &str,
+    cookie: Option<&str>,
+    style: AudioRequestStyle,
+) -> reqwest::RequestBuilder {
+    let request = client
+        .get(url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        .header("Accept", "*/*")
+        // identity so the CDN does not gzip audio that is already compressed; the length
+        // check downstream depends on Content-Length meaning what it says.
+        .header("Accept-Encoding", "identity;q=1, *;q=0");
+
+    match style {
+        AudioRequestStyle::Plain => request,
+        AudioRequestStyle::Authenticated => {
+            let request = request
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .header("Origin", "https://music.youtube.com")
+                .header("Referer", "https://music.youtube.com/");
+            match cookie.filter(|value| !value.trim().is_empty()) {
+                Some(cookie) => request.header("Cookie", cookie),
+                None => request,
+            }
+        }
+    }
+}
+
+/// Fetches a signed audio URL, escalating request style until one is accepted.
+///
+/// Returns the response and the style that worked so the caller can log it.
+async fn send_audio_request(
+    client: &reqwest::Client,
+    url: &str,
+    cookie: Option<&str>,
+    range: &str,
+) -> Result<(reqwest::Response, AudioRequestStyle), CommandError> {
+    let mut last_status: Option<reqwest::StatusCode> = None;
+
+    for style in AUDIO_REQUEST_STYLES {
+        let response = googlevideo_audio_request(client, url, cookie, style)
+            .header("Range", range)
+            .send()
+            .await
+            .map_err(|error| cache_error(format!("audio request failed: {error}")))?;
+
+        if response.status().is_success() {
+            if style != AudioRequestStyle::Plain {
+                eprintln!(
+                    "[internal][tauri][info] googlevideo accepted style={:?} after {:?} was refused",
+                    style, last_status
+                );
+            }
+            return Ok((response, style));
+        }
+
+        last_status = Some(response.status());
+        eprintln!(
+            "[internal][tauri][warn] googlevideo refused style={:?} status={}",
+            style,
+            response.status()
+        );
+    }
+
+    Err(cache_error(format!(
+        "request returned {}",
+        last_status.map(|status| status.to_string()).unwrap_or_else(|| "no response".into())
+    )))
+}
+
+fn emit_offline_progress(
+    app: &tauri::AppHandle,
+    track_id: &str,
+    received: u64,
+    total: u64,
+    last_percent: &mut u8,
+) {
+    if total == 0 {
+        return;
+    }
+    let percent = ((received * 100) / total).min(100) as u8;
+    // One event per whole percent; a chunk-rate feed would flood the webview.
+    if percent > *last_percent {
+        *last_percent = percent;
+        let _ = app.emit(
+            "offline-download-progress",
+            OfflineProgress {
+                track_id: track_id.to_string(),
+                received_bytes: received,
+                total_bytes: total,
+                percent,
+            },
+        );
+    }
+}
+
+/// Downloads a track to the offline store, reporting real progress as it goes.
+///
+/// Tries parallel range requests first and falls back to a single stream when the server
+/// answers 200 instead of 206 — a server that ignores Range would otherwise hand back the
+/// whole body for every chunk and the pieces would be spliced into nonsense.
+#[tauri::command]
+async fn offline_audio_save(
+    app: tauri::AppHandle,
+    url: String,
+    track_id: String,
+    cookie: Option<String>,
+) -> Result<u64, CommandError> {
+    use futures_util::stream::StreamExt;
+
+    let request_url = url::Url::parse(&url)
+        .map_err(|error| cache_error(format!("audio URL parse failed: {error}")))?;
+    let client = offline_http_client(&request_url)?;
+    let started_at = Instant::now();
+
+    /*
+     * The googlevideo request itself, not the /player call that produced it. A signed URL is
+     * useless without its query string, so the parameter names are logged (never the values —
+     * `sig` and `pot` are credentials) to prove nothing upstream trimmed them.
+     */
+    let query_keys: Vec<&str> = request_url.query_pairs().map(|(key, _)| key).collect::<Vec<_>>()
+        .iter()
+        .map(|key| match key.as_ref() {
+            "expire" => "expire", "ei" => "ei", "ip" => "ip", "id" => "id",
+            "itag" => "itag", "source" => "source", "sig" => "sig", "lsig" => "lsig",
+            "pot" => "pot", "n" => "n", "mime" => "mime", "clen" => "clen",
+            _ => "other",
+        })
+        .collect();
+    /*
+     * Two ways a structurally complete URL is still dead on arrival, both invisible in the key
+     * list above and both answered with a bare 403:
+     *   - the throttling `n` failed to transform, in which case youtubei.js writes the marker
+     *     `enhanced_except_*` into the URL rather than throwing;
+     *   - `expire` has passed.
+     * Logged as a verdict, not a value, since `n` is part of the signature.
+     */
+    let nsig_failed = request_url
+        .query_pairs()
+        .find(|(key, _)| key == "n")
+        .is_some_and(|(_, value)| value.starts_with("enhanced_except"));
+    /*
+     * Each signed URL embeds the IP the /player call was seen from, and googlevideo refuses a
+     * request arriving from any other address. If that value *changes between downloads* then
+     * this machine's egress address is rotating (a CGNAT pool, or IPv6 temporary addresses),
+     * which would refuse every download whose URL was signed for a since-abandoned address and
+     * let through only the occasional one that still matches.
+     *
+     * Compared against the previous request rather than printed: the value is the user's own
+     * public IP, and "did it change" is the entire question.
+     */
+    static LAST_SIGNED_IP: std::sync::Mutex<Option<IpAddr>> = std::sync::Mutex::new(None);
+    let signed_ip = request_url.query_pairs().find_map(|(key, value)| {
+        (key == "ip").then(|| value.parse::<IpAddr>().ok()).flatten()
+    });
+    let signed_ip_changed = match LAST_SIGNED_IP.lock() {
+        Ok(mut last) => {
+            let changed = last.is_some() && *last != signed_ip;
+            *last = signed_ip;
+            Some(changed)
+        }
+        Err(_) => None,
+    };
+
+    let expires_in = request_url
+        .query_pairs()
+        .find(|(key, _)| key == "expire")
+        .and_then(|(_, value)| value.parse::<i64>().ok())
+        .map(|expire| {
+            expire
+                - std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_secs() as i64)
+                    .unwrap_or(0)
+        });
+
+    eprintln!(
+        "[internal][tauri][info] offline_audio_save request host={} path={} query_params={} nsig_failed={} expires_in_s={:?} signed_ip_v6={} signed_ip_changed={:?} keys={:?}",
+        request_url.host_str().unwrap_or("?"),
+        request_url.path(),
+        request_url.query_pairs().count(),
+        nsig_failed,
+        expires_in,
+        signed_ip.is_some_and(|ip| ip.is_ipv6()),
+        signed_ip_changed,
+        query_keys
+    );
+
+    // Probe with a range: the response tells us both the total size and whether ranges are
+    // honoured, in one request whose body we keep either way.
+    let probe_result = send_audio_request(
+        &client,
+        &url,
+        cookie.as_deref(),
+        &format!("bytes=0-{}", OFFLINE_CHUNK_BYTES - 1),
+    )
+    .await;
+
+    /*
+     * A bounded Range is refused by some googlevideo edges with a bare 403, while the open
+     * `bytes=0-` that playback sends is accepted for the very same signed URL — which is exactly
+     * why one track saves and the next four do not. Rather than guess which edge does what, fall
+     * back to the request playback already makes: it is the one path proven to work, so a
+     * download can never fail where playback succeeds.
+     *
+     * The cost is losing chunk parallelism and byte-level progress for that track. A slower
+     * download that completes beats a fast one that 403s.
+     */
+    let (probe, style) = match probe_result {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!(
+                "[internal][tauri][warn] offline_audio_save ranged probe rejected ({}) falling back to open range",
+                error.message
+            );
+            let whole = fetch_audio_bytes(url.clone(), track_id.clone(), cookie.clone()).await?;
+            if whole.is_empty() {
+                return Err(cache_error("audio download returned no data"));
+            }
+            let total = whole.len() as u64;
+            emit_offline_progress(&app, &track_id, total, total, &mut 0);
+            return write_offline_entry(&app, &track_id, &whole, started_at, false);
+        }
+    };
+
+    let supports_ranges = probe.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+    let total_bytes = if supports_ranges {
+        probe
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.rsplit('/').next().map(|size| size.to_string()))
+            .and_then(|size| size.parse::<u64>().ok())
+            .unwrap_or(0)
+    } else {
+        probe.content_length().unwrap_or(0)
+    };
+
+    let mut last_percent: u8 = 0;
+    let mut bytes: Vec<u8>;
+
+    if supports_ranges && total_bytes > OFFLINE_CHUNK_BYTES {
+        let first = probe
+            .bytes()
+            .await
+            .map_err(|error| cache_error(format!("audio read failed: {error}")))?;
+        let mut received = first.len() as u64;
+        emit_offline_progress(&app, &track_id, received, total_bytes, &mut last_percent);
+
+        let mut ranges = Vec::new();
+        let mut start = first.len() as u64;
+        while start < total_bytes {
+            let end = (start + OFFLINE_CHUNK_BYTES - 1).min(total_bytes - 1);
+            ranges.push((start, end));
+            start = end + 1;
+        }
+
+        let mut chunks: Vec<(u64, Vec<u8>)> = Vec::with_capacity(ranges.len());
+        let mut stream = futures_util::stream::iter(ranges.into_iter().map(|(start, end)| {
+            let client = client.clone();
+            let url = url.clone();
+            let cookie = cookie.clone();
+            let style = style;
+            async move {
+                // Reuses the style the probe proved, rather than re-running the ladder on
+                // every chunk and paying a refused request each time.
+                let response = googlevideo_audio_request(&client, &url, cookie.as_deref(), style)
+                    .header("Range", format!("bytes={start}-{end}"))
+                    .send()
+                    .await
+                    .map_err(|error| cache_error(format!("audio range request failed: {error}")))?;
+                if !response.status().is_success() {
+                    return Err(cache_error(format!("range returned {}", response.status())));
+                }
+                let body = response
+                    .bytes()
+                    .await
+                    .map_err(|error| cache_error(format!("audio range read failed: {error}")))?;
+                Ok::<(u64, Vec<u8>), CommandError>((start, body.to_vec()))
+            }
+        }))
+        .buffer_unordered(OFFLINE_CHUNK_CONCURRENCY);
+
+        let mut chunk_error: Option<CommandError> = None;
+        while let Some(result) = stream.next().await {
+            let (start, body) = match result {
+                Ok(value) => value,
+                Err(error) => {
+                    chunk_error = Some(error);
+                    break;
+                }
+            };
+            received += body.len() as u64;
+            emit_offline_progress(&app, &track_id, received, total_bytes, &mut last_percent);
+            chunks.push((start, body));
+        }
+
+        // One refused chunk invalidates the whole assembly, so restart on the proven path
+        // instead of writing a file with a hole in it.
+        if let Some(error) = chunk_error {
+            eprintln!(
+                "[internal][tauri][warn] offline_audio_save chunk failed ({}) falling back",
+                error.message
+            );
+            let whole = fetch_audio_bytes(url.clone(), track_id.clone(), cookie.clone()).await?;
+            if whole.is_empty() {
+                return Err(cache_error("audio download returned no data"));
+            }
+            return write_offline_entry(&app, &track_id, &whole, started_at, false);
+        }
+
+        // Ranges complete out of order, so the file is reassembled by offset.
+        chunks.sort_by_key(|(start, _)| *start);
+        bytes = Vec::with_capacity(total_bytes as usize);
+        bytes.extend_from_slice(&first);
+        for (_, body) in chunks {
+            bytes.extend_from_slice(&body);
+        }
+    } else {
+        // Single stream: either the file fits in one chunk, or the server ignored Range.
+        let mut body = probe.bytes_stream();
+        bytes = Vec::with_capacity(total_bytes as usize);
+        while let Some(chunk) = body.next().await {
+            let chunk =
+                chunk.map_err(|error| cache_error(format!("audio stream failed: {error}")))?;
+            bytes.extend_from_slice(&chunk);
+            emit_offline_progress(
+                &app,
+                &track_id,
+                bytes.len() as u64,
+                total_bytes,
+                &mut last_percent,
+            );
+        }
+    }
+
+    if bytes.is_empty() {
+        return Err(cache_error("audio download returned no data"));
+    }
+    if total_bytes > 0 && (bytes.len() as u64) != total_bytes {
+        return Err(cache_error(format!(
+            "audio download was incomplete: {} of {} bytes",
+            bytes.len(),
+            total_bytes
+        )));
+    }
+
+    write_offline_entry(&app, &track_id, &bytes, started_at, supports_ranges)
+}
+
+/// Commits a completed download to the offline store.
+///
+/// Shared by the ranged and fallback paths so the temp-file-then-rename guarantee holds for
+/// both: an interrupted write must never leave a truncated file that looks complete and then
+/// fails to play.
+fn write_offline_entry(
+    app: &tauri::AppHandle,
+    track_id: &str,
+    bytes: &[u8],
+    started_at: Instant,
+    ranged: bool,
+) -> Result<u64, CommandError> {
+    let path = offline_entry_path(app, track_id)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| cache_error(format!("offline directory creation failed: {error}")))?;
+    }
+    let temp_path = path.with_extension("part");
+    fs::write(&temp_path, bytes)
+        .map_err(|error| cache_error(format!("offline write failed: {error}")))?;
+    fs::rename(&temp_path, &path)
+        .map_err(|error| cache_error(format!("offline rename failed: {error}")))?;
+
+    eprintln!(
+        "[internal][tauri][info] offline_audio_save track_id={} bytes={} ranged={} duration_ms={}",
+        track_id,
+        bytes.len(),
+        ranged,
+        started_at.elapsed().as_millis()
+    );
+    Ok(bytes.len() as u64)
+}
+
+/// Serves an already-downloaded track through the same local media server the online path
+/// uses, so playback needs no special case for offline sources.
+#[tauri::command]
+fn offline_audio_source(
+    app: tauri::AppHandle,
+    track_id: String,
+    mime_type: String,
+) -> Result<AudioSourcePayload, CommandError> {
+    let path = offline_entry_path(&app, &track_id)?;
+    let bytes =
+        fs::read(&path).map_err(|error| cache_error(format!("offline read failed: {error}")))?;
+    let byte_length = bytes.len();
+
+    let server = media_server()?;
+    let key = format!("offline-{track_id}");
+    {
+        let mut items = server.items.lock().map_err(|_| CommandError {
+            message: "media server cache lock poisoned".into(),
+        })?;
+        items.insert(
+            key.clone(),
+            MediaItem {
+                bytes: Arc::new(bytes),
+                mime_type: mime_type.clone(),
+            },
+        );
+    }
+
+    Ok(AudioSourcePayload {
+        url: format!("{}/audio/{}", server.origin, key),
+        mime_type,
+        byte_length,
+    })
+}
+
+#[tauri::command]
+fn offline_audio_has(app: tauri::AppHandle, track_id: String) -> Result<bool, CommandError> {
+    Ok(offline_entry_path(&app, &track_id)?.exists())
+}
+
+#[tauri::command]
+fn offline_audio_remove(app: tauri::AppHandle, track_id: String) -> Result<(), CommandError> {
+    let path = offline_entry_path(&app, &track_id)?;
+    if path.exists() {
+        fs::remove_file(&path)
+            .map_err(|error| cache_error(format!("offline delete failed: {error}")))?;
+    }
+    Ok(())
+}
+
+/// The source of truth for what is downloaded. The frontend keeps its own manifest for track
+/// metadata, but this is what reconciles it when the two disagree.
+#[tauri::command]
+fn offline_audio_list(app: tauri::AppHandle) -> Result<Vec<OfflineEntryInfo>, CommandError> {
+    let dir = offline_dir(&app)?;
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries = Vec::new();
+    let read_dir = fs::read_dir(&dir)
+        .map_err(|error| cache_error(format!("offline listing failed: {error}")))?;
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("bin") {
+            continue;
+        }
+        let Some(track_id) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        entries.push(OfflineEntryInfo {
+            track_id: track_id.to_string(),
+            byte_length: entry.metadata().map(|meta| meta.len()).unwrap_or(0),
+        });
+    }
+    Ok(entries)
+}
+
+#[tauri::command]
+fn offline_audio_stats(app: tauri::AppHandle) -> Result<OfflineStats, CommandError> {
+    let entries = offline_audio_list(app)?;
+    Ok(OfflineStats {
+        entry_count: entries.len() as u64,
+        used_bytes: entries.iter().map(|entry| entry.byte_length).sum(),
+    })
+}
+
+/// Deletes least-recently-*modified* entries until the store fits `max_bytes`.
+///
+/// Modification time rather than access time: access times are unreliable on Windows and
+/// playing a track does not rewrite the file, so mtime is effectively "when it was
+/// downloaded" -- a blunt but stable ordering.
+#[tauri::command]
+fn offline_audio_prune(app: tauri::AppHandle, max_bytes: u64) -> Result<OfflineStats, CommandError> {
+    let dir = offline_dir(&app)?;
+    if !dir.exists() {
+        return Ok(OfflineStats {
+            entry_count: 0,
+            used_bytes: 0,
+        });
+    }
+
+    let mut files: Vec<(PathBuf, u64, SystemTime)> = fs::read_dir(&dir)
+        .map_err(|error| cache_error(format!("offline listing failed: {error}")))?
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("bin") {
+                return None;
+            }
+            let meta = entry.metadata().ok()?;
+            Some((path, meta.len(), meta.modified().unwrap_or(UNIX_EPOCH)))
+        })
+        .collect();
+
+    files.sort_by_key(|(_, _, modified)| *modified);
+    let mut used_bytes: u64 = files.iter().map(|(_, size, _)| *size).sum();
+    let mut entry_count = files.len() as u64;
+
+    for (path, size, _) in &files {
+        if used_bytes <= max_bytes {
+            break;
+        }
+        if fs::remove_file(path).is_ok() {
+            used_bytes = used_bytes.saturating_sub(*size);
+            entry_count = entry_count.saturating_sub(1);
+        }
+    }
+
+    Ok(OfflineStats {
+        entry_count,
+        used_bytes,
+    })
+}
+
 #[tauri::command]
 async fn fetch_audio_source(
     url: String,
     track_id: String,
     mime_type: String,
+    cookie: Option<String>,
 ) -> Result<AudioSourcePayload, CommandError> {
-    let bytes = fetch_audio_bytes(url, track_id.clone()).await?;
+    let bytes = fetch_audio_bytes(url, track_id.clone(), cookie).await?;
     if bytes.len() >= 12 && &bytes[4..8] != b"ftyp" {
         let preview = String::from_utf8_lossy(&bytes[..bytes.len().min(120)]).replace('\n', " ");
         return Err(CommandError {
@@ -2388,6 +3195,7 @@ pub fn run() {
     let builder = builder.manage(macos_media::MacosMediaSession::new());
 
     builder
+        .manage(LocalAudioWatcher(Mutex::new(None)))
         .setup(|app| {
             // Before the log is initialised, so a first run after the rename still logs to
             // the directory the user's settings were just restored into.
@@ -2466,6 +3274,13 @@ pub fn run() {
             open_current_log,
             fetch_audio_bytes,
             fetch_audio_source,
+            offline_audio_save,
+            offline_audio_source,
+            offline_audio_has,
+            offline_audio_remove,
+            offline_audio_list,
+            offline_audio_stats,
+            offline_audio_prune,
             fetch_youtube_music_audio,
             proxy_http_request,
             save_youtube_credentials,
@@ -2481,6 +3296,12 @@ pub fn run() {
             cache_clear,
             local_audio_scan,
             local_audio_read,
+            read_text_file,
+            write_text_file,
+            local_audio_read_tags,
+            local_audio_write_tags,
+            local_audio_watch,
+            local_audio_unwatch,
             lastfm::lastfm_auth_token,
             lastfm::lastfm_complete_auth,
             lastfm::lastfm_disconnect,

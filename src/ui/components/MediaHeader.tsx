@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
-import { ListIcon, PauseActiveIcon, PlayActiveIcon, RepeatActiveIcon, ShuffleActiveIcon } from "@/ui/icons";
+import { ListIcon, PauseActiveIcon, PlayActiveIcon, PlaylistAddIcon, RepeatActiveIcon, ShuffleActiveIcon } from "@/ui/icons";
 import { SpinnerSteps } from "@/components/motion/loader";
 import { TrackArtwork } from "./TrackArtwork";
 import { setAmbientArtwork } from "../stores/ambientArtworkStore";
@@ -59,6 +59,8 @@ interface MediaHeaderProps {
   onShuffle?: () => void;
   /** Queues every track in this collection behind what is already hand-picked. */
   onAddToQueue?: () => void;
+  /** Adds every track in this collection to a playlist, via the usual picker. */
+  onAddToPlaylist?: () => void;
   /** Plays from the top with repeat-all on, so the collection restarts instead of ending. */
   onPlayInLoop?: () => void;
   /** Reflects repeat-all being active for this collection. */
@@ -96,6 +98,7 @@ export function MediaHeader({
   isLoading = false,
   onShuffle,
   onAddToQueue,
+  onAddToPlaylist,
   onPlayInLoop,
   isLooping = false,
   actionsDisabled = false,
@@ -201,6 +204,20 @@ export function MediaHeader({
               >
                 <RepeatActiveIcon size={18} aria-hidden="true" />
                 Loop
+              </button>
+            </Tooltip>
+          ) : null}
+
+          {onAddToPlaylist ? (
+            <Tooltip content="Add every song here to a playlist">
+              <button
+                type="button"
+                disabled={actionsDisabled}
+                onClick={onAddToPlaylist}
+                aria-label="Add to playlist"
+                className="flex size-11 items-center justify-center rounded-full bg-card text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <PlaylistAddIcon size={18} aria-hidden="true" />
               </button>
             </Tooltip>
           ) : null}

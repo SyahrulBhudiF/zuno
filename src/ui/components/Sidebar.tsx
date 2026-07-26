@@ -1,8 +1,10 @@
-import { useState, useRef, useEffect, useMemo, useSyncExternalStore, type ReactElement } from "react";
+import { useState, useRef, useEffect, useMemo, useSyncExternalStore, type ReactElement,
+} from "react";
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
 import { FloatingPanel } from "./FloatingPanel";
+import { importPlaylistFile } from "../../player/playlistTransfer";
 import { isLikedSongsId, likedSongsCover } from "../likedSongsArtwork";
 import {
   AlbumIcon,
@@ -17,9 +19,8 @@ import {
   subscribeToRecentPlaylists,
 } from "../../player/recentPlaylists";
 import {
-  createLocalPlaylist,
+  addLocalPlaylistPath,
   getLocalPlaylistItems,
-  localPlaylistToPlaylist,
   subscribeToLocalPlaylists,
 } from "../../player/localPlaylists";
 import { getAppSetting, setAppSetting } from "../../internal/appSettings";
@@ -168,15 +169,31 @@ const RETRY_BUTTON =
  */
 function CreatePlaylistButton({
   collapsed,
+  canCreateRemote,
   onCreated,
 }: {
   collapsed: boolean;
+  /** Signed in, so a YouTube Music playlist is a real option. */
+  canCreateRemote: boolean;
   onCreated: (playlist: Playlist) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  /*
+   * Defaults to YouTube Music whenever that is possible. A local playlist is the narrower
+   * choice — it cannot hold anything you have not downloaded — so it should be the one you
+   * opt into, not the one you get by default.
+   */
+  const [destination, setDestination] = useState<"youtube" | "local">(
+    canCreateRemote ? "youtube" : "local",
+  );
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!canCreateRemote) setDestination("local");
+  }, [canCreateRemote]);
 
   // Focus the field once the panel has finished unfolding, not while it animates.
   useEffect(() => {
@@ -185,22 +202,65 @@ function CreatePlaylistButton({
     return () => window.clearTimeout(timer);
   }, [open]);
 
-  const submit = () => {
+  /**
+   * Creates a playlist from a file and fills it.
+   *
+   * The name comes from the file, so import is one step rather than "choose a file, then name
+   * the thing you just chose". Local imports go to a local playlist because their tracks are
+   * paths — sending those to YouTube would create an empty playlist.
+   */
+  const importFromFile = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const imported = await importPlaylistFile();
+      if (!imported) return;
+
+      const isLocalImport = imported.tracks.every((track) => Boolean(track.localPath));
+      const created = await libraryController.createPlaylist(imported.title, {
+        local: isLocalImport || !canCreateRemote,
+      });
+
+      if (isLocalImport) {
+        for (const track of imported.tracks) {
+          if (track.localPath) addLocalPlaylistPath(created.id, track.localPath);
+        }
+      } else {
+        await libraryController.addTracksToPlaylist(imported.tracks, created);
+      }
+
+      setOpen(false);
+      onCreated(created);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not import that playlist.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async () => {
     const trimmed = name.trim();
     if (!trimmed) {
       setError("Give the playlist a name.");
       inputRef.current?.focus();
       return;
     }
+    if (busy) return;
 
+    setBusy(true);
     try {
-      const created = createLocalPlaylist(trimmed);
+      const created = await libraryController.createPlaylist(trimmed, {
+        local: destination === "local",
+      });
       setName("");
       setError(null);
       setOpen(false);
-      onCreated(localPlaylistToPlaylist(created));
+      onCreated(created);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not create the playlist.");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -217,25 +277,66 @@ function CreatePlaylistButton({
           type="button"
           aria-label="New playlist"
           size="icon"
-          variant='outline'
+          variant="ghost"
           aria-expanded={open}
           onClick={() => setOpen(!open)}
           className={cn(
-            "mx-2 mb-1 flex shrink-0 group items-center self-center  justify-center gap-1.5 rounded-full  bg-foreground/90 dark:bg-foreground/30  py-2",
-            "text-sm text-muted-foreground transition-colors hover:bg-primary hover:text-foreground",
+            /*
+             * Dashed outline rather than a filled pill. It is an *affordance to create*, not a
+             * destination, and as a solid block it was the loudest element in a rail whose
+             * whole job is to show your playlists. The dashed edge is the long-standing
+             * convention for "add one of these" and reads that way at 36px with no label.
+             */
+            "my-2 flex shrink-0 items-center justify-center gap-2 rounded-xl border border-dashed transition-colors",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            open && "bg-primary text-foreground",
+            collapsed ? "mx-auto size-9" : "mx-2 h-9 px-3 text-sm font-medium",
+            open
+              ? "border-primary bg-primary/10 text-primary"
+              : "border-border text-muted-foreground hover:border-muted-foreground hover:text-foreground",
           )}
         >
-          <AddCircleIcon size={22} aria-hidden="true" className=" text-white group-hover:text-white" />
+          <AddCircleIcon size={18} aria-hidden="true" />
           {!collapsed && <span>New playlist</span>}
         </Button>
       }
     >
       <div className="flex flex-col gap-2">
-        <span className="text-sm font-medium text-foreground">New local playlist</span>
+        <span className="text-sm font-medium text-foreground">New playlist</span>
+
+        {/* Segmented control rather than a checkbox: these are two destinations, not a
+            modifier, and the description below changes with the choice so the consequence is
+            visible before you commit. */}
+        {canCreateRemote ? (
+          <div
+            className="mt-0.5 flex rounded-lg bg-card p-0.5"
+            role="radiogroup"
+            aria-label="Where to create the playlist"
+          >
+            {(["youtube", "local"] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={destination === value}
+                onClick={() => setDestination(value)}
+                className={cn(
+                  "flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                  destination === value
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {value === "youtube" ? "YouTube Music" : "This computer"}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
         <span className="text-xs text-muted-foreground">
-          Build a playlist from folders on this computer.
+          {destination === "youtube"
+            ? "Saved to your account, so it syncs everywhere."
+            : "Built from folders on this computer."}
         </span>
         <input
           ref={inputRef}
@@ -248,7 +349,7 @@ function CreatePlaylistButton({
             if (error) setError(null);
           }}
           onKeyDown={(event) => {
-            if (event.key === "Enter") submit();
+            if (event.key === "Enter") void submit();
             if (event.key === "Escape") setOpen(false);
           }}
         />
@@ -256,14 +357,35 @@ function CreatePlaylistButton({
         <button
           type="button"
           className="mt-1 rounded-full bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-transform hover:scale-[1.02] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={submit}
+          disabled={busy}
+          onClick={() => void submit()}
         >
-          Create playlist
+          {busy ? "Creating..." : "Create playlist"}
+        </button>
+
+        <button
+          type="button"
+          disabled={busy}
+          className="rounded-full px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={() => void importFromFile()}
+        >
+          Import from file...
         </button>
       </div>
     </FloatingPanel>
   );
 }
+
+/** The list filter's options. One place to add a third without touching the markup. */
+const LIBRARY_VIEWS: Array<{
+  value: "playlists" | "albums";
+  label: string;
+  hint: string;
+  icon: typeof PlaylistIcon;
+}> = [
+  { value: "playlists", label: "Playlists", hint: "Your playlists", icon: PlaylistIcon },
+  { value: "albums", label: "Albums", hint: "Saved albums", icon: AlbumIcon },
+];
 
 const ARTWORK_TILE = "size-10 shrink-0 rounded object-cover";
 const ARTWORK_FALLBACK =
@@ -811,12 +933,6 @@ export function Sidebar({
       "after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-primary",
   );
 
-  const toggleButtonClasses = (isActive: boolean) => cn(
-    "relative flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors",
-    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-    isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground",
-  );
-
   return (
     <div
       ref={sidebarRef}
@@ -830,55 +946,61 @@ export function Sidebar({
       */}
 
       <div className="flex min-h-0 flex-1 flex-col">
+        {/*
+          The list filter. Deliberately quieter than the destinations above: it does not
+          change the page, only what the list below shows, and styling it identically was
+          what made "Albums the destination" and "Albums the filter" indistinguishable.
+        */}
         <div
           className={cn(
-            "m-2 flex shrink-0 items-center gap-1 rounded-lg bg-card/20   p-2",
-            shouldHideText && "flex-col",
+            "flex shrink-0 items-center gap-0.5 rounded-full bg-card/40 p-0.5",
+            shouldHideText ? "mx-auto flex-col" : "mx-2",
           )}
           role="group"
           aria-label="Library view"
         >
-          <SidebarItemTooltip enabled={shouldHideText} title="Playlists" subtitle="Your playlists">
-          <button
-            type="button"
-            className={toggleButtonClasses(libraryView === "playlists")}
-            aria-pressed={libraryView === "playlists"}
-            aria-label="User playlists"
-            onClick={() => setLibraryView("playlists")}
-          >
-            {libraryView === "playlists" && (
-              <motion.span
-                layoutId="sidebar-library-view"
-                transition={{ type: "spring", stiffness: 520, damping: 42 }}
-                className="absolute inset-0 -z-10 rounded-md bg-card"
-              />
-            )}
-            <PlaylistIcon size={17} aria-hidden="true" />
-            {!shouldHideText && <span>Playlists</span>}
-          </button>
-          </SidebarItemTooltip>
-          <SidebarItemTooltip enabled={shouldHideText} title="Albums" subtitle="Saved albums">
-          <button
-            type="button"
-            className={toggleButtonClasses(libraryView === "albums")}
-            aria-pressed={libraryView === "albums"}
-            aria-label="Albums"
-            onClick={() => setLibraryView("albums")}
-          >
-            {libraryView === "albums" && (
-              <motion.span
-                layoutId="sidebar-library-view"
-                transition={{ type: "spring", stiffness: 520, damping: 42 }}
-                className="absolute inset-0 -z-10 rounded-md bg-card"
-              />
-            )}
-            <AlbumIcon size={17} aria-hidden="true" />
-            {!shouldHideText && <span>Albums</span>}
-          </button>
-          </SidebarItemTooltip>
+          {LIBRARY_VIEWS.map((view) => {
+            const isActive = libraryView === view.value;
+            return (
+              <SidebarItemTooltip
+                key={view.value}
+                enabled={shouldHideText}
+                title={view.label}
+                subtitle={view.hint}
+              >
+                <button
+                  type="button"
+                  className={cn(
+                    "relative flex items-center justify-center gap-1.5 rounded-full transition-colors",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    shouldHideText ? "size-9" : "flex-1 px-2.5 py-1.5 text-xs font-medium",
+                    isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                  aria-pressed={isActive}
+                  aria-label={view.label}
+                  onClick={() => setLibraryView(view.value)}
+                >
+                  {isActive && (
+                    <motion.span
+                      layoutId="sidebar-library-view"
+                      transition={{ type: "spring", stiffness: 520, damping: 42 }}
+                      /* `bg-card`, not `bg-background`: card is the lighter token in dark
+                         mode and the darker one in light, so the active pill reads as raised
+                         in both. Against `bg-background` it went *darker* than its own track
+                         in dark mode, which reads as disabled rather than selected. */
+                      className="absolute inset-0 -z-10 rounded-full bg-card shadow-sm ring-1 ring-inset ring-border/60"
+                    />
+                  )}
+                  <view.icon size={16} aria-hidden="true" />
+                  {!shouldHideText && <span>{view.label}</span>}
+                </button>
+              </SidebarItemTooltip>
+            );
+          })}
         </div>
 
         <CreatePlaylistButton
+          canCreateRemote={libraryState.status === "ready"}
           collapsed={shouldHideText}
           onCreated={(playlist) => {
             setLibraryView("playlists");

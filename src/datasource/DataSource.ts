@@ -1,5 +1,7 @@
 import type {
   AccountOption,
+  BrowsePage,
+  BrowseTarget,
   Album,
   ArtistPage,
   AuthPrompt,
@@ -43,6 +45,15 @@ export abstract class DataSource {
     onUpdate?: (page: TrackPage) => void,
   ): Promise<TrackPage>;
   setPlaylistSaved?(playlist: Playlist, saved: boolean): Promise<void>;
+  createPlaylist?(title: string, trackIds?: string[]): Promise<Playlist>;
+  renamePlaylist?(playlist: Playlist, title: string): Promise<void>;
+  deletePlaylist?(playlist: Playlist): Promise<void>;
+  /** Moves `movedTrack` to sit after `predecessorTrack`, or to the front when it is null. */
+  reorderPlaylistTracks?(
+    playlist: Playlist,
+    movedTrack: Track,
+    predecessorTrack: Track | null,
+  ): Promise<void>;
   addTrackToPlaylist?(
     track: Track,
     playlist: Playlist,
@@ -50,5 +61,6 @@ export abstract class DataSource {
   removeTrackFromPlaylist?(track: Track, playlist: Playlist): Promise<void>;
   setTrackLiked?(track: Track, liked: boolean): Promise<void>;
   getRecommendations?(seed: Track, onUpdate?: (tracks: Track[]) => void): Promise<Track[]>;
+  getBrowsePage?(target: BrowseTarget): Promise<BrowsePage>;
   getLyrics?(track: Track): Promise<Lyrics | null>;
 }

@@ -10,6 +10,7 @@ import { DiceCard } from "../components/DiceCard";
 import { PickCard } from "../components/PickCard";
 import { TrackArtwork } from "../components/TrackArtwork";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
+import { HomeDestinations, type HomeDestinationHandlers } from "../components/HomeDestinations";
 import { ArtistLinks } from "../components/ArtistLinks";
 
 const FALLBACK_QUERIES = [
@@ -56,6 +57,7 @@ interface HomePageProps {
   libraryState: LibraryState;
   searchController: SearchController;
   onSignIn: () => Promise<void>;
+  destinations: HomeDestinationHandlers;
 }
 
 function shuffle<T>(items: readonly T[]): T[] {
@@ -78,6 +80,7 @@ export function HomePage({
   libraryState,
   searchController,
   onSignIn,
+  destinations,
 }: HomePageProps) {
   const { openTrackMenu } = useTrackContextMenu();
   const [suggestions, setSuggestions] = useState<Track[]>(
@@ -263,6 +266,10 @@ export function HomePage({
       )}
 
       {!isLoadingSuggestions && madeForYouSection}
+
+      {/* Directly under the carousel: the picks are what you came for, these are where you
+          go when none of them appeal. */}
+      <HomeDestinations {...destinations} />
 
       {compactRecent.length > 0 && (
         <section className="flex flex-col gap-3">

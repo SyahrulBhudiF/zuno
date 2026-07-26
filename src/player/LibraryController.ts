@@ -2,6 +2,8 @@ import type { DataSource } from "../datasource/DataSource";
 import type {
   AccountOption,
   Album,
+  BrowsePage,
+  BrowseTarget,
   Artist,
   ArtistPage,
   AuthPrompt,
@@ -15,7 +17,12 @@ import { forgetTrackInPlaylist, rememberTrackInPlaylist } from "./playlistMember
 import {
   addLocalPlaylistPath,
   addLocalTrackToPlaylist,
+  createLocalPlaylist,
+  deleteLocalPlaylist,
   getLocalPlaylist,
+  localPlaylistToPlaylist,
+  renameLocalPlaylist,
+  reorderLocalPlaylistTracks,
   getLocalPlaylistTrackPage,
   getLocalTracksForPlaylist,
   isLocalPlaylist,
@@ -154,6 +161,13 @@ export class LibraryController {
     } catch (error) {
       this.setFailure("Unable to sign out.", error);
     }
+  }
+
+  getBrowsePage(target: BrowseTarget): Promise<BrowsePage> {
+    if (!this.dataSource.getBrowsePage) {
+      return Promise.resolve({ title: "", shelves: [] });
+    }
+    return this.dataSource.getBrowsePage(target);
   }
 
   listAccounts(): Promise<AccountOption[]> {
@@ -387,6 +401,46 @@ export class LibraryController {
     return result;
   }
 
+  /**
+   * Adds several tracks to a playlist, reporting progress as it goes.
+   *
+   * Sequential rather than parallel: YouTube rejects rapid bursts of playlist edits, and a
+   * partially-applied batch is far more confusing than a slow one. Failures are collected
+   * rather than thrown so one bad track cannot abandon the rest.
+   */
+  async addTracksToPlaylist(
+    tracks: Track[],
+    playlist: Playlist,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<{ added: number; alreadyPresent: number; failed: number }> {
+    let added = 0;
+    let alreadyPresent = 0;
+    let failed = 0;
+
+    for (const [index, track] of tracks.entries()) {
+      try {
+        const result = await this.addTrackToPlaylist(track, playlist);
+        if (result === "added") added += 1;
+        else alreadyPresent += 1;
+      } catch (error) {
+        failed += 1;
+        logInternalError("LibraryController.addTracksToPlaylist item failed", error, {
+          trackId: track.id,
+          playlistId: playlist.id,
+        });
+      }
+      onProgress?.(index + 1, tracks.length);
+    }
+
+    logInternalInfo("LibraryController.addTracksToPlaylist", {
+      playlistId: playlist.id,
+      added,
+      alreadyPresent,
+      failed,
+    });
+    return { added, alreadyPresent, failed };
+  }
+
   async removeTrackFromPlaylist(track: Track, playlist: Playlist): Promise<void> {
     forgetTrackInPlaylist(track, playlist);
     if (track.source === "local") {
@@ -416,6 +470,120 @@ export class LibraryController {
     return this.state.library?.playlists.some(
       (playlist) => playlist.id.replace(/^VL/, "") === normalizedId,
     ) ?? false;
+  }
+
+  /**
+   * Creates a playlist on YouTube Music, or on disk when `local` is set.
+   *
+   * The two used to be the same button doing only the local half, which is why "Add to
+   * playlist" could never target anything you had not already made on the web.
+   */
+  async createPlaylist(
+    title: string,
+    options: { local?: boolean; trackIds?: string[] } = {},
+  ): Promise<Playlist> {
+    const trimmed = title.trim();
+    if (!trimmed) throw new Error("Give the playlist a name.");
+
+    if (options.local) {
+      return localPlaylistToPlaylist(createLocalPlaylist(trimmed));
+    }
+    if (!this.dataSource.createPlaylist) {
+      throw new Error("Creating playlists is unavailable.");
+    }
+    if (this.state.status === "signed-out" || !this.state.library) {
+      throw new Error("Sign in to YouTube Music to create playlists.");
+    }
+
+    const created = await this.dataSource.createPlaylist(trimmed, options.trackIds);
+    // Shown immediately, then reconciled — a new playlist that takes a full library sync to
+    // appear reads as a failure.
+    const library = this.state.library;
+    this.setState({ library: { ...library, playlists: [created, ...library.playlists] } });
+    void this.refresh();
+    return created;
+  }
+
+  async renamePlaylist(playlist: Playlist, title: string): Promise<void> {
+    const trimmed = title.trim();
+    if (!trimmed || trimmed === playlist.title) return;
+
+    if (isLocalPlaylist(playlist)) {
+      renameLocalPlaylist(playlist.id, trimmed);
+      return;
+    }
+    if (!this.dataSource.renamePlaylist) {
+      throw new Error("Renaming playlists is unavailable.");
+    }
+
+    const previousLibrary = this.state.library;
+    if (previousLibrary) {
+      this.setState({
+        library: {
+          ...previousLibrary,
+          playlists: previousLibrary.playlists.map((item) =>
+            item.id === playlist.id ? { ...item, title: trimmed } : item,
+          ),
+        },
+      });
+    }
+
+    try {
+      await this.dataSource.renamePlaylist(playlist, trimmed);
+    } catch (error) {
+      if (previousLibrary) this.setState({ library: previousLibrary });
+      throw error;
+    }
+  }
+
+  async deletePlaylist(playlist: Playlist): Promise<void> {
+    if (isLocalPlaylist(playlist)) {
+      deleteLocalPlaylist(playlist.id);
+      return;
+    }
+    if (!this.dataSource.deletePlaylist) {
+      throw new Error("Deleting playlists is unavailable.");
+    }
+
+    const previousLibrary = this.state.library;
+    if (previousLibrary) {
+      this.setState({
+        library: {
+          ...previousLibrary,
+          playlists: previousLibrary.playlists.filter((item) => item.id !== playlist.id),
+        },
+      });
+    }
+
+    try {
+      await this.dataSource.deletePlaylist(playlist);
+    } catch (error) {
+      if (previousLibrary) this.setState({ library: previousLibrary });
+      throw error;
+    }
+  }
+
+  /**
+   * Persists a drag-reorder.
+   *
+   * Local playlists keep their order on disk; YouTube ones are addressed by the row the track
+   * sits in, so the caller passes the track that should end up before it — null meaning the
+   * top of the list.
+   */
+  async reorderPlaylistTracks(
+    playlist: Playlist,
+    movedTrack: Track,
+    predecessorTrack: Track | null,
+    localIndices?: { from: number; to: number },
+  ): Promise<void> {
+    if (isLocalPlaylist(playlist)) {
+      if (localIndices) {
+        reorderLocalPlaylistTracks(playlist.id, localIndices.from, localIndices.to);
+      }
+      return;
+    }
+    if (!this.dataSource.reorderPlaylistTracks) return;
+    await this.dataSource.reorderPlaylistTracks(playlist, movedTrack, predecessorTrack);
   }
 
   async setPlaylistSaved(playlist: Playlist, saved: boolean): Promise<void> {

@@ -5,6 +5,8 @@ type YouTubePlayerEvent = {
 };
 
 type YouTubePlayer = {
+  /** Optional: present on the IFrame API, absent in older embeds. */
+  setPlaybackRate?(rate: number): void;
   cueVideoById(videoId: string): void;
   loadVideoById(videoId: string): void;
   playVideo(): void;
@@ -126,6 +128,7 @@ export class AudioEngine {
   private currentVideoId: string | null = null;
   private volume = 1;
   private muted = false;
+  private playbackRate = 1;
   private onEnded: (() => void) | null = null;
   private loadRequestId = 0;
   private stateWaiters = new Set<{
@@ -460,6 +463,29 @@ export class AudioEngine {
     if (!this.audio) return;
     this.audio.volume = this.muted ? 0 : this.volume;
     this.audio.muted = this.muted;
+    this.audio.playbackRate = this.playbackRate;
+    /*
+     * Pitch correction on. Without it a speed change transposes the music, which is fine for
+     * a podcast and unacceptable for a song. The property is prefixed on WebKit and absent in
+     * older engines, so it is set defensively rather than assumed.
+     */
+    const pitchPreserving = this.audio as HTMLAudioElement & {
+      preservesPitch?: boolean;
+      webkitPreservesPitch?: boolean;
+    };
+    if ("preservesPitch" in pitchPreserving) pitchPreserving.preservesPitch = true;
+    if ("webkitPreservesPitch" in pitchPreserving) pitchPreserving.webkitPreservesPitch = true;
+  }
+
+  /** 1 is normal speed. Applies to whichever backend is currently playing. */
+  setPlaybackRate(rate: number): void {
+    this.playbackRate = Math.min(4, Math.max(0.25, rate));
+    this.applyNativeAudioSettings();
+    this.player?.setPlaybackRate?.(this.playbackRate);
+  }
+
+  getPlaybackRate(): number {
+    return this.playbackRate;
   }
 
   private applyOutputVolume(): void {

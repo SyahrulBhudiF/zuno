@@ -3,6 +3,8 @@ import type { Lyrics, Track } from "../datasource/types";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../internal/logging";
 import { AudioEngine } from "./AudioEngine";
 import { Queue } from "./Queue";
+import { recordPlay } from "./playHistory";
+import { getOfflineTrack, isTrackDownloaded } from "./offlineStore";
 import { DiscordRpcService } from "./DiscordRPC";
 import {
   readPlaybackSettings,
@@ -43,6 +45,8 @@ export interface PlayerSession {
 
 type Listener = () => void;
 const DISCORD_ASSET_URL_LIMIT = 256;
+/** How long the sleep timer spends fading out before it pauses. */
+const SLEEP_FADE_MS = 20_000;
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -123,6 +127,11 @@ export class PlayerController {
    * clicked. It is dropped on restore, since JSON round-tripping breaks identity.
    */
   private stopAfterTrack: Track | null = null;
+  /** Wall-clock ms at which the sleep timer fires, or null when it is off. */
+  private sleepTimerDeadline: number | null = null;
+  private sleepTimerId: number | null = null;
+  /** Fade the last few seconds, so sleep does not end on an abrupt cut. */
+  private sleepFadeId: number | null = null;
   private navigationRequest: Promise<void> = Promise.resolve();
   private playbackOrderMode: PlaybackOrderMode = "in-order";
   private isPlaylistMode = false;
@@ -212,6 +221,9 @@ export class PlayerController {
   applyPlaybackSettings(settings: PlaybackSettings, persist = true): void {
     this.audioEngine.setVolume(settings.volume);
     this.audioEngine.setMuted(settings.muted);
+    if (settings.playbackRate !== undefined) {
+      this.audioEngine.setPlaybackRate(settings.playbackRate);
+    }
     this.state = {
       ...this.state,
       volume: this.audioEngine.getVolume(),
@@ -271,9 +283,31 @@ export class PlayerController {
 
       const queuedTrack = playbackQueue?.find((item) => item.id === videoId)
         ?? this.queue.all.find((item) => item.id === videoId);
-      const fetchedTrack = queuedTrack?.source === "local"
-        ? queuedTrack
-        : await this.dataSource.getTrack(videoId);
+      /*
+       * Metadata is a refresh, not a prerequisite.
+       *
+       * This used to await getTrack unconditionally for anything non-local, so with no
+       * network every play failed here — including downloaded songs whose audio was sitting
+       * on disk and whose title and artist were already in the offline manifest. Whenever a
+       * track is already known, a failed lookup falls back to what we have instead of
+       * abandoning playback.
+       */
+      const knownTrack = queuedTrack ?? getOfflineTrack(videoId);
+      let fetchedTrack: Track;
+      if (queuedTrack?.source === "local") {
+        fetchedTrack = queuedTrack;
+      } else {
+        try {
+          fetchedTrack = await this.dataSource.getTrack(videoId);
+        } catch (error) {
+          if (!knownTrack) throw error;
+          logInternalWarn("PlayerController.playTrackById metadata unavailable", {
+            videoId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          fetchedTrack = knownTrack;
+        }
+      }
       if (requestId !== this.playTrackRequestId) return false;
       const track = queuedTrack
         ? {
@@ -460,6 +494,76 @@ export class PlayerController {
     if (!track) return false;
     this.emit();
     return this.playTrackById(track.id);
+  }
+
+  setPlaybackRate(rate: number): void {
+    this.audioEngine.setPlaybackRate(rate);
+    savePlaybackSettings({
+      volume: this.state.volume,
+      muted: this.state.muted,
+      playbackRate: this.audioEngine.getPlaybackRate(),
+    });
+    this.emit();
+  }
+
+  getPlaybackRate(): number {
+    return this.audioEngine.getPlaybackRate();
+  }
+
+  /**
+   * Pauses playback after `minutes`, or cancels a running timer when passed null.
+   *
+   * The last stretch fades the volume down rather than cutting out mid-bar, and the volume is
+   * restored afterwards so the next session does not start silent — the usual way a naive
+   * sleep timer ruins the following morning.
+   */
+  setSleepTimer(minutes: number | null): void {
+    this.clearSleepTimer();
+    if (minutes === null || minutes <= 0) {
+      this.emit();
+      return;
+    }
+
+    const durationMs = minutes * 60_000;
+    this.sleepTimerDeadline = Date.now() + durationMs;
+    const restoreVolume = this.audioEngine.getVolume();
+
+    if (durationMs > SLEEP_FADE_MS) {
+      this.sleepFadeId = globalThis.setTimeout(() => {
+        const startedAt = Date.now();
+        const step = () => {
+          const progress = Math.min(1, (Date.now() - startedAt) / SLEEP_FADE_MS);
+          this.audioEngine.setVolume(restoreVolume * (1 - progress));
+          if (progress < 1) this.sleepFadeId = globalThis.setTimeout(step, 250);
+        };
+        step();
+      }, durationMs - SLEEP_FADE_MS) as unknown as number;
+    }
+
+    this.sleepTimerId = globalThis.setTimeout(() => {
+      this.pause();
+      this.audioEngine.setVolume(restoreVolume);
+      this.clearSleepTimer();
+      logInternalInfo("PlayerController.sleepTimer fired");
+      this.emit();
+    }, durationMs) as unknown as number;
+
+    logInternalInfo("PlayerController.setSleepTimer", { minutes });
+    this.emit();
+  }
+
+  /** Remaining milliseconds, or null when no timer is running. */
+  getSleepTimerRemainingMs(): number | null {
+    if (this.sleepTimerDeadline === null) return null;
+    return Math.max(0, this.sleepTimerDeadline - Date.now());
+  }
+
+  private clearSleepTimer(): void {
+    if (this.sleepTimerId !== null) globalThis.clearTimeout(this.sleepTimerId);
+    if (this.sleepFadeId !== null) globalThis.clearTimeout(this.sleepFadeId);
+    this.sleepTimerId = null;
+    this.sleepFadeId = null;
+    this.sleepTimerDeadline = null;
   }
 
   /** Queues a whole album or playlist behind whatever is already hand-picked. */
@@ -839,18 +943,39 @@ export class PlayerController {
         });
         return;
       }
-      const audioData = this.audioEngine.usesNativeAudio()
+      /*
+       * A downloaded track always takes the native path.
+       *
+       * shouldUseNativeAudio() is false everywhere because the *download* path can answer 403
+       * for remote streams — but a file already on disk has no download and no 403 to hit.
+       * Without this the iframe player is used for every YouTube track, which needs the
+       * network, so downloads were unplayable offline and getStreamData's offline branch was
+       * never reached at all.
+       */
+      const isDownloaded = isTrackDownloaded(track.id);
+      const useNativeAudio = this.audioEngine.usesNativeAudio() || isDownloaded;
+      const audioData = useNativeAudio
         ? await this.dataSource.getStreamData?.(track)
         : undefined;
-      if (this.audioEngine.usesNativeAudio() && !audioData) {
+      if (useNativeAudio && !audioData) {
         throw new Error("The data source does not support native audio playback.");
       }
-      await this.audioEngine.loadTrack(
-        track.id,
-        audioData?.bytes,
-        audioData?.mimeType,
-        audioData?.sourceUrl,
-      );
+
+      if (isDownloaded && audioData) {
+        await this.audioEngine.loadNativeFallback(
+          track.id,
+          audioData.bytes,
+          audioData.mimeType,
+          audioData.sourceUrl,
+        );
+      } else {
+        await this.audioEngine.loadTrack(
+          track.id,
+          audioData?.bytes,
+          audioData?.mimeType,
+          audioData?.sourceUrl,
+        );
+      }
 
       this.loadedTrackId = track.id;
       if (this.pendingSeekTime !== null) {
@@ -889,6 +1014,10 @@ export class PlayerController {
   }
 
   private appendHistory(track: Track): Track[] {
+    // The timestamped log is what the History page reads; this array stays untouched because
+    // skip-back and recommendation filtering both walk it.
+    recordPlay(track);
+
     if (this.state.history[this.state.history.length - 1]?.id === track.id) {
       return this.state.history;
     }

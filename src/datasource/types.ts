@@ -6,6 +6,8 @@ export interface ArtistReference {
 }
 
 export interface Track {
+  /** Set once a track has been downloaded, so the offline copy is served with the right type. */
+  mimeType?: string;
   id: string;
   source: TrackSource;
   title: string;
@@ -68,6 +70,34 @@ export interface ArtistPage {
   releases: Album[];
   playlists: Playlist[];
 }
+
+/** A category chip that leads to another browse feed. */
+export interface BrowseLink {
+  title: string;
+  browseId: string;
+}
+
+/** One titled row on a browse page. Contents are whatever that row actually holds. */
+export interface BrowseShelf {
+  title: string;
+  tracks: Track[];
+  albums: Album[];
+  playlists: Playlist[];
+  artists: Artist[];
+  /** Mood and genre chips, which lead to further feeds rather than to content. */
+  links: BrowseLink[];
+}
+
+export interface BrowsePage {
+  title: string;
+  shelves: BrowseShelf[];
+}
+
+/** Either a named surface or an explicit feed reached by following a chip. */
+export type BrowseTarget = BrowseSurface | { browseId: string; title: string };
+
+/** The browse destinations Zuno knows how to open. */
+export type BrowseSurface = "explore" | "charts" | "moods" | "podcasts";
 
 export interface SearchResults {
   artists: Artist[];

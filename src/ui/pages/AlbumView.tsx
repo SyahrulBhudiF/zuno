@@ -9,6 +9,9 @@ import type { LibraryController } from "../../player/LibraryController";
 import type { PlayerControllerActions } from "../../player/playerStore";
 import { shuffleTracks } from "../../player/shuffleTracks";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
+import { SelectionBar } from "../components/SelectionBar";
+import { useTrackSelection } from "../hooks/useTrackSelection";
+import { queueDownloads } from "../../player/offlineStore";
 import { ArtistLinks } from "../components/ArtistLinks";
 import { formatCollectionMeta, MediaHeader } from "../components/MediaHeader";
 import { useKeyboardShortcuts } from "../settings/keyboardShortcuts";
@@ -137,6 +140,8 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
    * Order is set before playback starts, not after: playTrackById resolves asynchronously,
    * and a mode applied afterwards can lose a race with a track that ends almost immediately.
    */
+  const selection = useTrackSelection(visibleTracks);
+
   const playInLoop = () => {
     const firstTrack = tracks[0];
     if (!firstTrack) return;
@@ -173,6 +178,7 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
         onPlayInLoop={playInLoop}
         isLooping={isCurrentCollection && playbackOrderMode === "repeat-all"}
         onAddToQueue={() => playerController.addTracksToQueue(tracks)}
+        onAddToPlaylist={() => openPlaylistPicker(tracks[0], tracks)}
       />
       {isLoading && <AlbumLoadingSpinner label="Loading songs" />}
       {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}
@@ -229,7 +235,14 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
                     index={index}
                     isCurrent={isCurrent}
                     isPlaying={isCurrent && isPlaying}
-                    onSelect={() => void playerController.playTrackById(track.id, visibleTracks)}
+                    isSelected={selection.isSelected(track.id)}
+                    isSelectionActive={selection.isActive}
+                    onToggleSelected={() => selection.toggle(track.id, index)}
+                    onSelect={(event) => {
+                      if (selection.handleRowClick(event, index)) return;
+                      void playerController.playTrackById(track.id, visibleTracks);
+                    }}
+                    showDownload
                     onQuickAddToQueue={() => playerController.addToQueue(track)}
                     onQuickAdd={() => openPlaylistPicker(track)}
                     onContextMenu={(event) => openTrackMenu(event, track)}
@@ -240,6 +253,22 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
           )}
         </>
       )}
+      <SelectionBar
+        selection={selection}
+        onAddToQueue={(selected) => {
+          playerController.addTracksToQueue(selected);
+          selection.clear();
+        }}
+        onAddToPlaylist={(selected) => {
+          openPlaylistPicker(selected[0], selected);
+          selection.clear();
+        }}
+        onDownload={(selected) => {
+          queueDownloads(selected);
+          selection.clear();
+        }}
+      />
+
     </div>
   );
 }

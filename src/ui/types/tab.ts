@@ -1,6 +1,6 @@
 import type { Album, Artist, Playlist, SearchResults, Track } from "../../datasource/types";
 
-export type TabView = "home" | "album" | "artist" | "playlist" | "search" | "settings";
+export type TabView = "home" | "album" | "artist" | "playlist" | "search" | "history" | "browse" | "library" | "settings";
 export type NavigableTabView = Exclude<TabView, "settings">;
 
 export interface TabViewState {
@@ -22,6 +22,8 @@ export interface TabNavigationHistory {
 
 export interface Tab {
   id: string;
+  /** Which Browse tab to open on. Only meaningful when `view` is "browse". */
+  browseTab?: string;
   title?: string;
   view: TabView;
   album?: Album;

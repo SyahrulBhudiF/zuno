@@ -20,6 +20,15 @@ const PlaylistView = lazy(() =>
   import("./pages/PlaylistView").then((m) => ({ default: m.PlaylistView })));
 const SearchResultsPage = lazy(() =>
   import("./pages/SearchResultsPage").then((m) => ({ default: m.SearchResultsPage })));
+const LibraryPage = lazy(() =>
+  import("./pages/LibraryPage").then((m) => ({ default: m.LibraryPage })),
+);
+const BrowsePage = lazy(() =>
+  import("./pages/BrowsePage").then((m) => ({ default: m.BrowsePage })),
+);
+const HistoryPage = lazy(() =>
+  import("./pages/HistoryPage").then((m) => ({ default: m.HistoryPage })),
+);
 const SettingsPage = lazy(() =>
   import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const LyricsView = lazy(() => import("./pages/LyricsView").then((m) => ({ default: m.LyricsView })));
@@ -153,6 +162,12 @@ function getNavigationKey(state: TabViewState): string {
       return `search:${state.searchQuery ?? ""}`;
     case "home":
       return "home";
+    case "history":
+      return "history";
+    case "browse":
+      return "browse";
+    case "library":
+      return "library";
   }
 }
 
@@ -953,6 +968,59 @@ export default function App() {
     setNextTabId((currentId) => currentId + 1);
   };
 
+  /* Reuses an open History tab the way Settings does — it is a single destination, not
+     something you want three copies of. */
+  const handleOpenHistory = () => {
+    playerUIStore.setLyricsOpen(false);
+    const historyTab = tabs.find((tab) => tab.view === "history");
+    if (historyTab) {
+      setActiveTabId(historyTab.id);
+      return;
+    }
+
+    const newId = nextTabId.toString();
+    setTabs((prevTabs) => [...prevTabs, { id: newId, view: "history", title: "History" }]);
+    setActiveTabId(newId);
+    setNextTabId((currentId) => currentId + 1);
+  };
+
+  const handleOpenLibrary = () => {
+    playerUIStore.setLyricsOpen(false);
+    const libraryTab = tabs.find((tab) => tab.view === "library");
+    if (libraryTab) {
+      setActiveTabId(libraryTab.id);
+      return;
+    }
+
+    const newId = nextTabId.toString();
+    setTabs((prevTabs) => [...prevTabs, { id: newId, view: "library", title: "Library" }]);
+    setActiveTabId(newId);
+    setNextTabId((currentId) => currentId + 1);
+  };
+
+  const handleOpenBrowse = (browseTab?: string) => {
+    playerUIStore.setLyricsOpen(false);
+    const existing = tabs.find((tab) => tab.view === "browse");
+    if (existing) {
+      // Reusing the tab must still honour the requested section, or "Downloads" would land
+      // on whatever the Browse tab happened to be showing.
+      if (browseTab && existing.browseTab !== browseTab) {
+        setTabs((prevTabs) =>
+          prevTabs.map((tab) => (tab.id === existing.id ? { ...tab, browseTab } : tab)));
+      }
+      setActiveTabId(existing.id);
+      return;
+    }
+
+    const newId = nextTabId.toString();
+    setTabs((prevTabs) => [
+      ...prevTabs,
+      { id: newId, view: "browse", title: "Browse", browseTab },
+    ]);
+    setActiveTabId(newId);
+    setNextTabId((currentId) => currentId + 1);
+  };
+
   const handleCloseTab = (tabId: string) => {
     playerUIStore.setLyricsOpen(false);
     if (tabs.length === 1) return;
@@ -1716,6 +1784,12 @@ useEffect(() => {
                 libraryState={libraryState}
                 searchController={searchController}
                 onSignIn={handleSignIn}
+                destinations={{
+                  onOpenLibrary: handleOpenLibrary,
+                  onOpenBrowse: () => handleOpenBrowse(),
+                  onOpenHistory: handleOpenHistory,
+                  onOpenDownloads: () => handleOpenBrowse("downloads"),
+                }}
               />
             )}
             {activeTab?.view === "album" && (
@@ -1757,6 +1831,29 @@ useEffect(() => {
                 onOpenAlbum={handleNavigateAlbum}
                 onOpenPlaylist={handleNavigatePlaylist}
                 />
+            )}
+            {activeTab?.view === "library" && (
+              <LibraryPage
+                libraryState={libraryState}
+                playerController={playerController}
+                onOpenAlbum={handleNavigateAlbum}
+                onOpenArtist={(artist) => handleNavigateArtist(artist)}
+                onOpenPlaylist={handleNavigatePlaylist}
+              />
+            )}
+            {activeTab?.view === "browse" && (
+              <BrowsePage
+                key={activeTab.browseTab ?? "explore"}
+                initialTab={(activeTab.browseTab ?? "explore") as never}
+                playerController={playerController}
+                libraryController={libraryController}
+                onOpenAlbum={handleNavigateAlbum}
+                onOpenArtist={(artist) => handleNavigateArtist(artist)}
+                onOpenPlaylist={handleNavigatePlaylist}
+              />
+            )}
+            {activeTab?.view === "history" && (
+              <HistoryPage playerController={playerController} />
             )}
             {activeTab?.view === "settings" && (
               <SettingsPage

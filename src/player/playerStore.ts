@@ -6,11 +6,33 @@ import { PlayerController } from "./PlayerController";
 import { SearchController } from "./SearchController";
 import { TabManager } from "./TabManager";
 import { loadAppSession } from "./appSession";
+import {
+  hydrateOfflineStore,
+  setOfflineStreamResolver,
+  startOfflineProgressFeed,
+} from "./offlineStore";
 
 const dataSource = new YouTubeMusicDataSource();
 
 export const libraryController = new LibraryController(dataSource);
 export const searchController = new SearchController(dataSource);
+/*
+ * The offline queue needs a stream URL but must not depend on any particular data source, so
+ * the source is injected here where both are already in scope.
+ */
+setOfflineStreamResolver((track, quality) => {
+  const resolver = (dataSource as {
+    resolveStreamUrl?: (
+      t: typeof track,
+      q: typeof quality,
+    ) => Promise<{ url: string; mimeType: string; cookie?: string }>;
+  }).resolveStreamUrl;
+  if (!resolver) throw new Error("Downloads are unavailable for this source.");
+  return resolver.call(dataSource, track, quality);
+});
+void hydrateOfflineStore();
+startOfflineProgressFeed();
+
 export const tabManager = new TabManager(dataSource);
 const restoredSession = loadAppSession();
 if (restoredSession) {
@@ -40,6 +62,10 @@ type PlayerControllerMethod =
   | "getPlaybackOrderMode"
   | "cyclePlaybackOrderMode"
   | "setPlaybackOrderMode"
+  | "setPlaybackRate"
+  | "getPlaybackRate"
+  | "setSleepTimer"
+  | "getSleepTimerRemainingMs"
   | "getLyrics"
   | "getPlayerSession"
   | "removeFromQueueAt"
@@ -118,6 +144,12 @@ class ActivePlayerController implements PlayerControllerActions {
   cyclePlaybackOrderMode = () => tabManager.getActivePlayer().cyclePlaybackOrderMode();
   setPlaybackOrderMode = (mode: Parameters<PlayerController["setPlaybackOrderMode"]>[0]) =>
     tabManager.getActivePlayer().setPlaybackOrderMode(mode);
+  setPlaybackRate = (rate: number) => tabManager.getActivePlayer().setPlaybackRate(rate);
+  getPlaybackRate = () => tabManager.getActivePlayer().getPlaybackRate();
+  setSleepTimer = (minutes: number | null) =>
+    tabManager.getActivePlayer().setSleepTimer(minutes);
+  getSleepTimerRemainingMs = () =>
+    tabManager.getActivePlayer().getSleepTimerRemainingMs();
   getLyrics = (track: Parameters<PlayerController["getLyrics"]>[0]) =>
     tabManager.getActivePlayer().getLyrics(track);
   getPlayerSession = () => tabManager.getActivePlayer().exportSession();

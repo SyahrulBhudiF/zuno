@@ -7,6 +7,8 @@ import { tauriFetch } from "../../../datasource/youtube/tauriFetch";
 import { TrackInfo } from "./TrackInfo";
 import { PlaybackControls } from "./PlaybackControls";
 import { SeekBar } from "./SeekBar";
+import { DownloadIndicator } from "./DownloadIndicator";
+import { PlaybackOptions } from "./PlaybackOptions";
 import { VolumeControl } from "./VolumeControl";
 import { LyricsButton } from "./LyricsButton";
 import {
@@ -147,14 +149,14 @@ export function PlayerBar({ onToggleLyrics, onToggleQueue, isQueueOpen, onConnec
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="flex shrink-0 items-center justify-center gap-3 overflow-hidden bg-destructive/15 px-4 py-2 text-sm text-foreground"
+            className="flex shrink-0 items-center justify-center gap-3 overflow-hidden bg-muted px-2 py-1  text-sm text-foreground"
             role="status"
             aria-live="polite"
           >
             <span>You don't have an internet connection</span>
             <button
               type="button"
-              className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-sm transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex items-center gap-1.5 rounded px-2.5 py-1 text-xs transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => void reconnect()}
               disabled={isCheckingConnection}
               aria-label="Reconnect to the internet"
@@ -219,6 +221,8 @@ export function PlayerBar({ onToggleLyrics, onToggleQueue, isQueueOpen, onConnec
               </button>
             </div>
 
+            <DownloadIndicator />
+            <PlaybackOptions />
             <VolumeControl />
           </div>
         </div>

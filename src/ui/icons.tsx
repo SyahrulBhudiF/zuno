@@ -71,6 +71,7 @@ export { Home2Icon as HomeIcon } from "@solar-icons/react/linear/home-2";
 export { Home2Icon as HomeActiveIcon } from "@solar-icons/react/bold/home-2";
 export { SidebarMinimalisticIcon as QueuePanelIcon } from "@solar-icons/react/linear/sidebar-minimalistic";
 export { MagnifierIcon as SearchIcon } from "@solar-icons/react/linear/magnifier";
+export { CompassIcon } from "@solar-icons/react/linear/compass";
 export { PaletteIcon } from "@solar-icons/react/linear/palette";
 export { PaletteIcon as PaletteActiveIcon } from "@solar-icons/react/bold/palette";
 export { SettingsIcon } from "@solar-icons/react/linear/settings";
@@ -82,8 +83,10 @@ export { AddCircleIcon as PlusIcon } from "@solar-icons/react/linear/add-circle"
 export { CheckCircleIcon as CheckIcon } from "@solar-icons/react/linear/check-circle";
 export { CheckCircleIcon as CheckActiveIcon } from "@solar-icons/react/bold/check-circle";
 export { RefreshIcon } from "@solar-icons/react/linear/refresh";
+export { DownloadMinimalisticIcon as DownloadIcon } from "@solar-icons/react/linear/download-minimalistic";
 export { TrashBinTrashIcon as TrashIcon } from "@solar-icons/react/linear/trash-bin-trash";
 export { CopyIcon } from "@solar-icons/react/linear/copy";
+export { PenIcon as PencilIcon } from "@solar-icons/react/linear/pen";
 export { LinkIcon } from "@solar-icons/react/linear/link";
 
 /* ── Arrows ────────────────────────────────────────────────────────── */
@@ -102,6 +105,7 @@ export { Logout2Icon as LogoutIcon } from "@solar-icons/react/linear/logout-2";
 export { KeyIcon } from "@solar-icons/react/linear/key";
 export { BugIcon } from "@solar-icons/react/linear/bug";
 export { ClockCircleIcon as ClockIcon } from "@solar-icons/react/linear/clock-circle";
+export { SpeedometerMaxIcon as SpeedIcon } from "@solar-icons/react/linear/speedometer-max";
 export { CupHotIcon as CoffeeIcon } from "@solar-icons/react/linear/cup-hot";
 export { MagicWandIcon as DiceIcon } from "@solar-icons/react/linear/magic-wand";
 export { MagicWandIcon as DiceActiveIcon } from "@solar-icons/react/bold/magic-wand";

@@ -25,7 +25,7 @@ tauri-plugin-localhost = "2"
 portpicker = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "deflate"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "deflate", "stream"] }
 base64 = "0.22"
 url = "2.5"
 keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service"] }
@@ -34,6 +34,9 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"
 md5 = "0.8.0"
+lofty = "0.24.0"
+notify = "8.2.0"
+futures-util = "0.3.33"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 aes-gcm = "0.10"

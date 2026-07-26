@@ -43,6 +43,13 @@ export interface LoaderProps {
   speed?: number;
   /** Accessible label announced to screen readers. */
   label?: string;
+  /**
+   * Drives the "percent" variant from real progress (0-100).
+   *
+   * Left undefined the variant sweeps 0-100 on a timer, which is fine as decoration but
+   * misleading over a real transfer — it would sit at 100% while bytes were still arriving.
+   */
+  value?: number;
   className?: string;
 }
 
@@ -57,6 +64,7 @@ export function Loader({
   size = 32,
   speed = 1,
   label = "Loading",
+  value,
   className,
 }: LoaderProps) {
   const reduce = useReducedMotion() ?? false;
@@ -91,7 +99,7 @@ export function Loader({
       {variant === "newton" && <Newton size={size} speed={speed} reduce={reduce} />}
       {variant === "helix" && <Helix size={size} speed={speed} reduce={reduce} />}
       {variant === "percent" && (
-        <Percent size={size} speed={speed} reduce={reduce} />
+        <Percent size={size} speed={speed} reduce={reduce} value={value} />
       )}
       <span className="sr-only">{label}</span>
     </span>
@@ -500,9 +508,14 @@ function Helix({ size, speed, reduce }: PartProps) {
   );
 }
 
-function Percent({ size, speed, reduce }: PartProps) {
+function Percent({ size, speed, reduce, value }: PartProps & { value?: number }) {
   const [p, setP] = useState(0);
+  const isControlled = value !== undefined;
+
   useEffect(() => {
+    // No timer at all when a real value is supplied, so the two cannot fight over the number.
+    if (isControlled) return;
+
     const dur = (reduce ? speed * 2 : speed) * 1000;
     const start = { t: 0 };
     const tickMs = 40;
@@ -513,7 +526,9 @@ function Percent({ size, speed, reduce }: PartProps) {
       if (next >= 100) start.t = 0;
     }, tickMs);
     return () => clearInterval(id);
-  }, [speed, reduce]);
+  }, [speed, reduce, isControlled]);
+
+  const shown = isControlled ? Math.min(100, Math.max(0, Math.round(value))) : p;
 
   return (
     <span
@@ -524,7 +539,7 @@ function Percent({ size, speed, reduce }: PartProps) {
         className="font-mono font-medium tabular-nums"
         style={{ fontSize: size * 0.42, lineHeight: 1 }}
       >
-        {p}%
+        {shown}%
       </span>
       <span
         className="w-full overflow-hidden rounded-full bg-current/15"
@@ -532,7 +547,7 @@ function Percent({ size, speed, reduce }: PartProps) {
       >
         <span
           className="block h-full rounded-full bg-current"
-          style={{ width: `${p}%` }}
+          style={{ width: `${shown}%` }}
         />
       </span>
     </span>

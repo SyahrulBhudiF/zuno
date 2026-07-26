@@ -13,6 +13,9 @@ import { hydrateMiniPlayerSettings } from "./ui/settings/miniPlayer";
 import { hydratePlayerControlSettings } from "./ui/settings/playerControls";
 import { hydrateQueuePanelSettings } from "./ui/settings/queuePanel";
 import { hydrateTraySettings } from "./ui/settings/tray";
+import { hydrateAudioQualitySettings } from "./internal/audioQuality";
+import { notifyLocalPlaylistsChanged, syncLocalAudioWatcher } from "./player/localPlaylists";
+import { listen } from "@tauri-apps/api/event";
 import { hydrateLastFmSettings } from "./ui/settings/lastfm";
 import { hydrateKeyboardShortcuts } from "./ui/settings/keyboardShortcuts";
 import {
@@ -41,6 +44,7 @@ void Promise.all([
   hydratePlayerControlSettings(),
   hydrateQueuePanelSettings(),
   hydrateTraySettings(),
+  hydrateAudioQualitySettings(),
   hydrateLastFmSettings(),
   hydrateKeyboardShortcuts(),
   hydratePlaybackSettings(),
@@ -75,3 +79,11 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <App />
   </React.StrictMode>,
 );
+
+/*
+ * Local folders are watched for the whole session. The event carries no detail on purpose —
+ * a rescan is cheap and precisely diffing renames, temp files and write-then-replace editors
+ * would be far more code for the same visible result.
+ */
+syncLocalAudioWatcher();
+void listen("local-audio-changed", () => notifyLocalPlaylistsChanged());

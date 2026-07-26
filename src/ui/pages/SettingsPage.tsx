@@ -115,6 +115,20 @@ import {
 import { isLinux } from "../platform";
 import { GITHUB_NEW_ISSUE_URL, GITHUB_REPOSITORY_URL } from "../links";
 import { AccountAvatar, AccountSwitcher } from "../components/AccountSwitcher";
+import {
+  AUDIO_QUALITY_LABELS,
+  setDownloadQuality,
+  setStreamingQuality,
+  useDownloadQuality,
+  useStreamingQuality,
+  type AudioQuality,
+} from "../../internal/audioQuality";
+import {
+  getOfflineMaxBytes,
+  removeAllDownloads,
+  setOfflineMaxBytes,
+  useOfflineState,
+} from "../../player/offlineStore";
 
 const KOFI_URL = "https://ko-fi.com/totally2late";
 
@@ -340,6 +354,13 @@ export function SettingsPage({
   const nativeWindowControls = useNativeWindowControls();
   const mainWindowGeometryPersistenceEnabled = useMainWindowGeometryPersistenceEnabled();
   const minimizeToTray = useMinimizeToTray();
+  const offlineState = useOfflineState();
+  const streamingQuality = useStreamingQuality();
+  const downloadQuality = useDownloadQuality();
+  const [offlineMaxGb, setOfflineMaxGb] = useState(
+    () => getOfflineMaxBytes() / 1024 ** 3,
+  );
+  const [clearingDownloads, setClearingDownloads] = useState(false);
   const lastFmScrobblingEnabled = useLastFmScrobblingEnabled();
   const localPlaylists = useSyncExternalStore(
     subscribeToLocalPlaylists,
@@ -968,6 +989,107 @@ export function SettingsPage({
               />
 
               {autostartError && <p className="text-sm text-destructive">{autostartError}</p>}
+
+              <SettingRow
+                title="Streaming quality"
+                description="Applies to songs played over the network. Lower uses less data."
+              >
+                {(labelId) => (
+                  <Select
+                    className="w-52"
+                    value={streamingQuality}
+                    onValueChange={(value) => setStreamingQuality(value as AudioQuality)}
+                  >
+                    <SelectTrigger aria-labelledby={labelId}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(Object.keys(AUDIO_QUALITY_LABELS) as AudioQuality[]).map((quality) => (
+                        <SelectItem key={quality} value={quality}>
+                          {AUDIO_QUALITY_LABELS[quality]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </SettingRow>
+
+              <SettingRow
+                title="Download quality"
+                description="Applies to songs saved for offline. Higher sounds better and uses more disk."
+              >
+                {(labelId) => (
+                  <Select
+                    className="w-52"
+                    value={downloadQuality}
+                    onValueChange={(value) => setDownloadQuality(value as AudioQuality)}
+                  >
+                    <SelectTrigger aria-labelledby={labelId}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(Object.keys(AUDIO_QUALITY_LABELS) as AudioQuality[]).map((quality) => (
+                        <SelectItem key={quality} value={quality}>
+                          {AUDIO_QUALITY_LABELS[quality]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </SettingRow>
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className={cn(SETTING_LABEL, "min-w-0 flex-1")}>
+                  <strong>Downloads</strong>
+                  <span>
+                    {offlineState.usedBytes > 0 || Object.keys(offlineState.entries).length > 0
+                      ? `${Object.keys(offlineState.entries).length} songs · ${formatBytes(offlineState.usedBytes)}`
+                      : "No songs downloaded yet."}
+                    {offlineState.downloadingId
+                      ? offlineState.progress !== null
+                        ? ` · downloading ${offlineState.progress}%`
+                        : " · downloading"
+                      : ""}
+                    {offlineState.queued.length > 0
+                      ? ` · ${offlineState.queued.length} queued`
+                      : ""}
+                  </span>
+                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                    Maximum size
+                    <span className="flex w-28 items-center gap-1.5 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring/60">
+                      <input
+                        className="w-full min-w-0 bg-transparent outline-none"
+                        type="number"
+                        min={1}
+                        max={512}
+                        value={Math.round(offlineMaxGb)}
+                        onChange={(event) => {
+                          const next = Number(event.target.value);
+                          if (!Number.isFinite(next)) return;
+                          setOfflineMaxGb(next);
+                          setOfflineMaxBytes(Math.max(1, next) * 1024 ** 3);
+                        }}
+                        aria-label="Maximum download size in gigabytes"
+                      />
+                      <span className="shrink-0 text-xs text-muted-foreground">GB</span>
+                    </span>
+                  </label>
+                  <button
+                    className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    type="button"
+                    disabled={clearingDownloads || Object.keys(offlineState.entries).length === 0}
+                    onClick={() => {
+                      setClearingDownloads(true);
+                      void removeAllDownloads().finally(() => setClearingDownloads(false));
+                    }}
+                  >
+                    <TrashIcon size={18} />
+                    {clearingDownloads ? "Removing..." : "Remove all"}
+                  </button>
+                </div>
+              </div>
 
               <SettingToggle
                 title="Minimize to tray"

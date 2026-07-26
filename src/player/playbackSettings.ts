@@ -5,6 +5,8 @@ const STORAGE_KEY = "playback-settings";
 export interface PlaybackSettings {
   volume: number;
   muted: boolean;
+  /** 1 is normal speed. Optional so settings written before this existed still load. */
+  playbackRate?: number;
 }
 
 function isPlaybackSettings(value: unknown): value is PlaybackSettings {
@@ -26,13 +28,14 @@ export function readPlaybackSettings(): PlaybackSettings {
     // Defaults below keep playback usable if local storage is unavailable.
   }
 
-  return { volume: 1, muted: false };
+  return { volume: 1, muted: false, playbackRate: 1 };
 }
 
 export function savePlaybackSettings(settings: PlaybackSettings): void {
   const normalizedSettings = {
     volume: Math.min(1, Math.max(0, settings.volume)),
     muted: settings.muted,
+    playbackRate: Math.min(4, Math.max(0.25, settings.playbackRate ?? 1)),
   };
 
   try {

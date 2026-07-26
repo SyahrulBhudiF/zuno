@@ -74,6 +74,7 @@ function readLocalPlaylists(): LocalPlaylist[] {
 }
 
 function writeLocalPlaylists(playlists: LocalPlaylist[]): void {
+  queueMicrotask(syncLocalAudioWatcher);
   if (typeof window === "undefined") return;
   const raw = JSON.stringify(playlists);
   writeLocalStorageJson(STORAGE_KEY, playlists);
@@ -301,6 +302,16 @@ export function createLocalPlaylist(name: string): LocalPlaylist {
   return playlist;
 }
 
+export function renameLocalPlaylist(id: string, name: string): void {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const playlists = readLocalPlaylists();
+  const next = playlists.map((playlist) =>
+    playlist.id === id ? { ...playlist, name: trimmed } : playlist,
+  );
+  writeLocalPlaylists(next);
+}
+
 export function deleteLocalPlaylist(id: string): void {
   const playlists = readLocalPlaylists().filter((playlist) => playlist.id !== id);
   writeLocalPlaylists(playlists);
@@ -340,6 +351,27 @@ export function localPlaylistToPlaylist(playlist: LocalPlaylist): Playlist {
     isEditable: true,
     localPaths: playlist.paths,
   };
+}
+
+/**
+ * Keeps the OS watching every folder that feeds a local playlist.
+ *
+ * Re-registered whenever the set of folders changes: the Rust side replaces its watcher
+ * wholesale on each call, so this is idempotent and there is nothing to unregister first.
+ */
+/** Forces every local-playlist subscriber to re-read, e.g. after the watcher reports a change. */
+export function notifyLocalPlaylistsChanged(): void {
+  // Dropping the cache is what makes the next read hit disk instead of returning stale items.
+  cachedRaw = null;
+  cachedPlaylistItemsRaw = null;
+  listeners.forEach((listener) => listener());
+}
+
+export function syncLocalAudioWatcher(): void {
+  const paths = Array.from(new Set(readLocalPlaylists().flatMap((playlist) => playlist.paths)));
+  void invoke("local_audio_watch", { paths }).catch(() => {
+    // Watching is a convenience; a failure must not stop playlists from working.
+  });
 }
 
 export function getLocalPlaylistItems(): Playlist[] {

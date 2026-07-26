@@ -10,7 +10,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { CheckIcon, CloseIcon, HeartActiveIcon, HeartIcon, LinkIcon, ListIcon, PlaylistAddIcon, PlaylistIcon, SearchIcon, SkipNextIcon, TrashIcon } from "@/ui/icons";
+import { CheckIcon, CloseIcon, HeartActiveIcon, HeartIcon, LinkIcon, ListIcon, PencilIcon, PlaylistAddIcon, PlaylistIcon, SearchIcon, SkipNextIcon, TrashIcon } from "@/ui/icons";
 import type { Playlist, Track } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
 import { logInternalError } from "../../internal/logging";
@@ -36,6 +36,7 @@ import {
 } from "../../player/localPlaylists";
 import { isTrackKnownInPlaylist } from "../../player/playlistMembership";
 import { ArtistLinks } from "./ArtistLinks";
+import { TagEditor } from "./TagEditor";
 
 interface MenuPosition {
   x: number;
@@ -51,7 +52,8 @@ interface TrackContextMenuValue {
       onRemove?: (track: Track) => void;
     },
   ) => void;
-  openPlaylistPicker: (track: Track) => void;
+  /** Pass `batch` to add several tracks at once; `track` is what the header shows. */
+  openPlaylistPicker: (track: Track, batch?: Track[]) => void;
   toggleTrackLike: (track: Track) => Promise<void>;
 }
 
@@ -93,6 +95,9 @@ export function TrackContextMenuProvider({
   const [isRemovingTrack, setIsRemovingTrack] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [editingTagsFor, setEditingTagsFor] = useState<Track | null>(null);
+  /** Non-null when the picker is acting on a multi-selection rather than one song. */
+  const [batchTracks, setBatchTracks] = useState<Track[] | null>(null);
 
   const localPlaylists = useSyncExternalStore(
     subscribeToLocalPlaylists,
@@ -225,6 +230,7 @@ export function TrackContextMenuProvider({
     event.preventDefault();
     event.stopPropagation();
     setTrack(selectedTrack);
+    setBatchTracks(null);
     setMenuContext(context ?? null);
     setIsPickerOpen(false);
     setError(null);
@@ -279,9 +285,10 @@ export function TrackContextMenuProvider({
   };
 
   /** Opens the picker straight away, for callers with no context menu in between. */
-  const openPlaylistPicker = (selectedTrack: Track) => {
+  const openPlaylistPicker = (selectedTrack: Track, batch?: Track[]) => {
     if (addingPlaylistId) return;
     setTrack(selectedTrack);
+    setBatchTracks(batch && batch.length > 1 ? batch : null);
     setMenuContext(null);
     openPicker();
   };
@@ -355,17 +362,34 @@ export function TrackContextMenuProvider({
   const addToPlaylist = async (playlist: Playlist) => {
     if (!track || addingPlaylistId) return;
     const selectedTrack = track;
+    const batch = batchTracks;
     setAddingPlaylistId(playlist.id);
     setError(null);
     setIsPickerOpen(false);
-    showPersistentToast("Adding...");
+
     try {
-      const result = await libraryController.addTrackToPlaylist(selectedTrack, playlist);
-      showToast(
-        result === "already-present"
-          ? "Already in playlist"
-          : `Added to ${playlist.title}`,
-      );
+      if (batch) {
+        showPersistentToast(`Adding 0 of ${batch.length}...`);
+        const result = await libraryController.addTracksToPlaylist(
+          batch,
+          playlist,
+          (done, total) => {
+            showPersistentToast(`Adding ${done} of ${total}...`);
+          },
+        );
+        // Reports what actually happened rather than a flat "done": with a batch, some
+        // already being present or failing is normal and worth knowing about.
+        const parts = [`Added ${result.added} to ${playlist.title}`];
+        if (result.alreadyPresent > 0) parts.push(`${result.alreadyPresent} already there`);
+        if (result.failed > 0) parts.push(`${result.failed} failed`);
+        showToast(parts.join(" · "), 5000);
+      } else {
+        showPersistentToast("Adding...");
+        const result = await libraryController.addTrackToPlaylist(selectedTrack, playlist);
+        showToast(
+          result === "already-present" ? "Already in playlist" : `Added to ${playlist.title}`,
+        );
+      }
     } catch (addError) {
       showToast(
         addError instanceof Error ? addError.message : "Unable to add this song.",
@@ -373,6 +397,7 @@ export function TrackContextMenuProvider({
       );
     } finally {
       setAddingPlaylistId(null);
+      setBatchTracks(null);
     }
   };
 
@@ -456,6 +481,22 @@ export function TrackContextMenuProvider({
               <span className="flex-1">
                 {selectedTrackIsLiked ? "Remove like" : "Like song"}
               </span>
+            </button>
+          )}
+          {/* Only for files we can actually write to — a YouTube track has no tags to edit. */}
+          {track?.source === "local" && track.localPath && (
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              onClick={() => {
+                const selected = track;
+                setMenuPosition(null);
+                setEditingTagsFor(selected);
+              }}
+            >
+              <PencilIcon size={18} aria-hidden="true" />
+              <span className="flex-1">Edit tags</span>
             </button>
           )}
           {canCopySelectedTrackLink && (
@@ -585,6 +626,14 @@ export function TrackContextMenuProvider({
             </div>
           </section>
         </div>
+      )}
+
+      {editingTagsFor && (
+        <TagEditor
+          track={editingTagsFor}
+          onClose={() => setEditingTagsFor(null)}
+          onSaved={() => showToast("Tags saved")}
+        />
       )}
 
       {toast && (

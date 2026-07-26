@@ -2,12 +2,17 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
 import {
+  CheckIcon,
   ClockIcon,
   DiceIcon,
   PauseIcon,
+  PlaylistAddIcon,
   ShuffleIcon,
   TrashIcon,
 } from "@/ui/icons";
+import { Loader } from "@/components/motion/loader";
+import { libraryController } from "../../../player/playerStore";
+import { logInternalError } from "../../../internal/logging";
 import type { Track } from "../../../datasource/types";
 import { usePlayerSession, playerController, usePlayerState } from "../../../player/playerStore";
 import {
@@ -264,6 +269,9 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
   const stopAfterQueueIndex = playerSession?.stopAfterQueueIndex ?? null;
   // Generating hits the network, so the row it was started from shows it is working.
   const [generatingIndex, setGeneratingIndex] = useState<number | null>(null);
+  /* null = idle, string = the draft name being edited. */
+  const [saveDraft, setSaveDraft] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
 
   /*
    * One flat pass over the upcoming tracks, tagged with everything a row needs. The old panel
@@ -297,6 +305,34 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
 
   const handleRemove = (absoluteIndex: number) => {
     playerController.removeFromQueueAt(absoluteIndex);
+  };
+
+  /*
+   * Saves what is *upcoming* plus the track playing now — the queue as you see it. Tracks
+   * already behind the playhead are history, and silently including them would produce a
+   * playlist that does not match the panel it was made from.
+   */
+  const handleSaveQueue = async () => {
+    if (saveDraft === null || saveState === "saving") return;
+    const title = saveDraft.trim();
+    if (!title) return;
+
+    const trackIds = [
+      ...(currentTrack ? [currentTrack.id] : []),
+      ...manual.map((entry) => entry.track.id),
+      ...automatic.map((entry) => entry.track.id),
+    ].filter((id) => !id.startsWith("local:"));
+
+    setSaveState("saving");
+    try {
+      await libraryController.createPlaylist(title, { trackIds });
+      setSaveDraft(null);
+      setSaveState("saved");
+      window.setTimeout(() => setSaveState("idle"), 2000);
+    } catch (error) {
+      logInternalError("QueuePanel.saveQueueAsPlaylist failed", error);
+      setSaveState("idle");
+    }
   };
 
   const handleStopAfter = (absoluteIndex: number) => {
@@ -549,6 +585,23 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
                 <span className="sr-only">Shuffle what's next</span>
               </button>
             </Tooltip>
+            <Tooltip content="Save the queue as a playlist">
+              <button
+                type="button"
+                className={cn(ICON_BUTTON, saveState === "saved" && "text-primary")}
+                onClick={() => setSaveDraft((draft) => (draft === null ? "My queue" : null))}
+                aria-expanded={saveDraft !== null}
+              >
+                {saveState === "saving" ? (
+                  <Loader variant="spinner" size={15} />
+                ) : saveState === "saved" ? (
+                  <CheckIcon size={16} aria-hidden="true" />
+                ) : (
+                  <PlaylistAddIcon size={16} aria-hidden="true" />
+                )}
+                <span className="sr-only">Save the queue as a playlist</span>
+              </button>
+            </Tooltip>
             <Tooltip content="Clear the queue">
               <button
                 type="button"
@@ -562,6 +615,45 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
           </>
         )}
       </header>
+
+      {/* Opens under the header so the queue it is about stays in view. */}
+      {!collapsed && saveDraft !== null && (
+        <div className="mx-2 mb-1 flex shrink-0 flex-col gap-2 rounded-xl bg-card p-2">
+          <input
+            autoFocus
+            value={saveDraft}
+            onChange={(event) => setSaveDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void handleSaveQueue();
+              if (event.key === "Escape") setSaveDraft(null);
+            }}
+            aria-label="New playlist name"
+            className="w-full min-w-0 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-inset focus:ring-border"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-muted-foreground">
+              {upcomingCount + (currentTrack ? 1 : 0)} songs
+            </span>
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                className="rounded-full px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => setSaveDraft(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={saveState === "saving" || !saveDraft.trim()}
+                className="rounded-full bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-transform hover:scale-[1.02] active:scale-95 disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => void handleSaveQueue()}
+              >
+                {saveState === "saving" ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* The track playing right now, pinned above the list. Without it the panel opens on a
           list of songs with no anchor — you can see what is next but not what it follows. */}

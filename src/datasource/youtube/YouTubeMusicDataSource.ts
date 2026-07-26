@@ -2,9 +2,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { ClientType, Innertube, Platform, Types, YTNodes } from "youtubei.js";
 import { clearCache, getCachedJson, setCachedJson } from "../../internal/cache";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../../internal/logging";
+import { mintPoToken } from "./poToken";
 import { DataSource, type StreamData } from "../DataSource";
 import type {
   AccountOption,
+  BrowseLink,
+  BrowsePage,
+  BrowseShelf,
+  BrowseSurface,
+  BrowseTarget,
   Album,
   Artist,
   ArtistPage,
@@ -18,6 +24,12 @@ import type {
   Track,
 } from "../types";
 import { collectArtworkCandidates, getVideoArtworkFallback, selectArtworkUrl } from "./artwork";
+import { isTrackDownloaded } from "../../player/offlineStore";
+import {
+  getStreamingQuality,
+  selectFormatForQuality,
+  type AudioQuality,
+} from "../../internal/audioQuality";
 import { tauriFetch } from "./tauriFetch";
 
 type ClientLabel = "music" | "web";
@@ -246,6 +258,8 @@ type LibraryResponses = {
 };
 
 const LIKED_SONGS_PLAYLIST_ID = "LM";
+/** Everything a browse shelf can meaningfully hold. */
+const BROWSE_ITEM_TYPES = new Set(["song", "video", "album", "playlist", "artist"]);
 const LIBRARY_CACHE_KEY = "youtube-music:library:v5";
 /** The account the user picked by hand, which outranks the automatic probe. */
 const SELECTED_ACCOUNT_STORAGE_KEY = "youtube-music:selected-account";
@@ -265,6 +279,7 @@ class YouTubeMusicAuthError extends Error {
 export class YouTubeMusicDataSource extends DataSource {
   private musicClientPromise: Promise<Innertube> | null = null;
   private webClientPromise: Promise<Innertube> | null = null;
+  private visitorDataPromise: Promise<string | undefined> | null = null;
   private musicCookie: string | null = null;
   private musicAccountIndex = 0;
   private musicOnBehalfOfUser: string | null = null;
@@ -314,9 +329,40 @@ export class YouTubeMusicDataSource extends DataSource {
     } as const;
   }
 
+  /**
+   * The visitor ID every client in this data source shares.
+   *
+   * A PO token is bound to one visitor ID, so the music and web clients cannot each generate
+   * their own — a token minted for one would not validate the other, which is what the logs
+   * showed before this existed. `generate_session_locally` means the ID is produced offline, so
+   * this throwaway client costs no network round trip.
+   */
+  private async getVisitorData(): Promise<string | undefined> {
+    if (!this.visitorDataPromise) {
+      this.visitorDataPromise = Innertube.create({
+        ...this.getSessionOptions(false),
+        client_type: ClientType.MUSIC,
+      })
+        .then((client) => client.session.context.client.visitorData)
+        .catch(() => undefined);
+    }
+
+    return this.visitorDataPromise;
+  }
+
+  /** Session options plus the attestation youtubei.js needs to stamp `pot=` onto stream URLs. */
+  private async getAttestedSessionOptions(retrievePlayer: boolean) {
+    const visitorData = await this.getVisitorData();
+    return {
+      ...this.getSessionOptions(retrievePlayer),
+      visitor_data: visitorData,
+      po_token: await mintPoToken(visitorData ?? ""),
+    };
+  }
+
   private async createMusicClient(retrievePlayer = true): Promise<Innertube> {
     const client = await Innertube.create({
-      ...this.getSessionOptions(retrievePlayer),
+      ...(await this.getAttestedSessionOptions(retrievePlayer)),
       client_type: ClientType.MUSIC,
     });
     await this.refreshMusicClientMetadata(client);
@@ -338,10 +384,9 @@ export class YouTubeMusicDataSource extends DataSource {
       logInternalInfo("YouTubeMusicDataSource.getWebClient creating client");
       // No player needed: this client only enumerates accounts and resolves like endpoints,
       // neither of which touches stream URLs, and retrieving it downloads the player script.
-      this.webClientPromise = Innertube.create({
-        ...this.getSessionOptions(false),
-        client_type: ClientType.WEB,
-      });
+      this.webClientPromise = this.getAttestedSessionOptions(false).then((options) =>
+        Innertube.create({ ...options, client_type: ClientType.WEB }),
+      );
     }
 
     return this.webClientPromise;
@@ -3130,6 +3175,96 @@ export class YouTubeMusicDataSource extends DataSource {
     return this.collectPlaylistTracksWithEmptyRetries(client, playlist.id, "fresh-load");
   }
 
+  /**
+   * The id the write APIs accept.
+   *
+   * Browse ids are prefixed "VL" and the mutation endpoints reject them, so every write has to
+   * strip it. This was already being done inline at the one call site that needed it; with
+   * five writers it belongs in one place.
+   */
+  private editablePlaylistId(playlistId: string): string {
+    return playlistId.startsWith("VL") ? playlistId.slice(2) : playlistId;
+  }
+
+  async createPlaylist(title: string, trackIds: string[] = []): Promise<Playlist> {
+    if (!this.musicCookie) {
+      throw new Error("Sign in to YouTube Music before creating playlists.");
+    }
+
+    const client = await this.getMusicClient();
+    const result = await client.playlist.create(title, trackIds);
+    if (!result.success || !result.playlist_id) {
+      throw new Error("YouTube Music would not create that playlist.");
+    }
+
+    logInternalInfo("YouTubeMusicDataSource.createPlaylist", {
+      playlistId: result.playlist_id,
+      trackCount: trackIds.length,
+    });
+
+    return {
+      id: result.playlist_id,
+      title,
+      owner: this.musicAccountName,
+      isEditable: true,
+      isSaved: true,
+    };
+  }
+
+  async renamePlaylist(playlist: Playlist, title: string): Promise<void> {
+    if (!this.musicCookie) {
+      throw new Error("Sign in to YouTube Music before renaming playlists.");
+    }
+
+    const client = await this.getMusicClient();
+    await client.playlist.setName(this.editablePlaylistId(playlist.id), title);
+    logInternalInfo("YouTubeMusicDataSource.renamePlaylist", { playlistId: playlist.id });
+  }
+
+  async deletePlaylist(playlist: Playlist): Promise<void> {
+    if (!this.musicCookie) {
+      throw new Error("Sign in to YouTube Music before deleting playlists.");
+    }
+
+    const client = await this.getMusicClient();
+    await client.playlist.delete(this.editablePlaylistId(playlist.id));
+    await setCachedJson(this.getPlaylistTrackCacheKey(playlist.id), []);
+    logInternalInfo("YouTubeMusicDataSource.deletePlaylist", { playlistId: playlist.id });
+  }
+
+  /**
+   * Moves a track to sit directly after `predecessorTrack`, or to the front when it is null.
+   *
+   * YouTube addresses playlist entries by *set video id* — the id of the row, not of the song —
+   * because the same song can appear twice. `playlistItemId` is where that is kept, so a
+   * reorder that used the track id would move the wrong row in a playlist with duplicates.
+   */
+  async reorderPlaylistTracks(
+    playlist: Playlist,
+    movedTrack: Track,
+    predecessorTrack: Track | null,
+  ): Promise<void> {
+    if (!this.musicCookie) {
+      throw new Error("Sign in to YouTube Music before reordering playlists.");
+    }
+    const movedId = movedTrack.playlistItemId;
+    if (!movedId) {
+      throw new Error("This song cannot be moved in the playlist.");
+    }
+
+    const client = await this.getMusicClient();
+    await client.playlist.moveVideo(
+      this.editablePlaylistId(playlist.id),
+      movedId,
+      predecessorTrack?.playlistItemId ?? "",
+    );
+    logInternalInfo("YouTubeMusicDataSource.reorderPlaylistTracks", {
+      playlistId: playlist.id,
+      movedTrackId: movedTrack.id,
+      toFront: !predecessorTrack,
+    });
+  }
+
   async addTrackToPlaylist(
     track: Track,
     playlist: Playlist,
@@ -3159,10 +3294,7 @@ export class YouTubeMusicDataSource extends DataSource {
         return "already-present";
       }
 
-      const editablePlaylistId = playlist.id.startsWith("VL")
-        ? playlist.id.slice(2)
-        : playlist.id;
-      await client.playlist.addVideos(editablePlaylistId, [track.id]);
+      await client.playlist.addVideos(this.editablePlaylistId(playlist.id), [track.id]);
 
       let confirmedTracks: Track[] | null = null;
       for (const delayMs of [0, 500, 1500]) {
@@ -4313,9 +4445,10 @@ export class YouTubeMusicDataSource extends DataSource {
       try {
         const yt = await this.getClient(label);
         const format = await yt.getStreamingData(track.id, { type: "audio", quality: "best" });
-        const url = typeof (format as any).url === "string"
-          ? (format as any).url
-          : await format.decipher(yt.session.player);
+        // Already deciphered — getStreamingData runs decipher internally and assigns the result
+        // to format.url, so `pot` and the transformed `n` are on it. Deciphering again would
+        // re-transform an already-transformed `n` and earn a 403.
+        const url = (format as any).url as string;
 
         if (!url) {
           throw new Error("YouTube.js returned an empty stream URL.");
@@ -4347,6 +4480,364 @@ export class YouTubeMusicDataSource extends DataSource {
     throw new Error("Unable to resolve a playable YouTube audio stream.");
   }
 
+  /**
+   * Finds a playable MP4 audio URL without downloading it.
+   *
+   * Split out of getStreamData so the offline download queue can reuse exactly the same
+   * client walk and format ranking — a download that picked a different format from playback
+   * would produce offline copies that sound different from the stream they replace.
+   */
+  async resolveStreamUrl(
+    track: Track,
+    quality: AudioQuality = getStreamingQuality(),
+  ): Promise<{ url: string; mimeType: string; cookie?: string }> {
+    let streamUrl: string | null = null;
+    let streamMimeType = "audio/mp4";
+
+    for (const label of ["music", "web"] as ClientLabel[]) {
+      try {
+        const yt = await this.getClient(label);
+        const info = await yt.getBasicInfo(track.id);
+        /*
+         * MP4 preferred, any audio accepted.
+         *
+         * Filtering to audio/mp4 alone is why some songs refused to download while playing
+         * perfectly: YouTube serves Opus-in-WebM as the *only* audio for a large share of
+         * tracks, and playback never noticed because it goes through the iframe player rather
+         * than this resolver. The offline store serves files back with their recorded mime
+         * type and the webview decodes WebM natively, so there is nothing to gain by
+         * insisting on MP4 — only tracks to lose.
+         */
+        const audioFormats = (info.streaming_data?.adaptive_formats ?? []).filter(
+          (candidate: any) => typeof candidate.mime_type === "string"
+            && candidate.mime_type.startsWith("audio/"),
+        );
+        const mp4Formats = audioFormats.filter(
+          (candidate: any) => candidate.mime_type.includes("audio/mp4"),
+        );
+        const candidates = mp4Formats.length > 0 ? mp4Formats : audioFormats;
+        const format = selectFormatForQuality(candidates as Array<{ bitrate?: number }>, quality) as
+          | (typeof candidates)[number]
+          | undefined;
+        if (!format) {
+          // Names what was actually on offer, so a future failure is diagnosable from the log
+          // instead of needing another round trip.
+          const offered = (info.streaming_data?.adaptive_formats ?? [])
+            .map((candidate: any) => candidate.mime_type)
+            .filter(Boolean)
+            .slice(0, 8);
+          throw new Error(
+            `YouTube returned no playable audio format. Offered: ${offered.join(", ") || "none"}`,
+          );
+        }
+
+        /*
+         * Unconditionally deciphered, unlike the getStreamingData path above. These formats come
+         * raw off getBasicInfo and nothing has touched them yet, so a plain `format.url` here
+         * still carries an untransformed throttling `n` and no `pot`. Taking it as-is is why
+         * downloads 403'd while playback — which goes through getStreamingData — worked.
+         */
+        streamUrl = await format.decipher(yt.session.player);
+        if (!streamUrl) {
+          throw new Error("YouTube returned an empty MP4 audio URL.");
+        }
+
+        streamMimeType = (format as any).mime_type ?? "audio/mp4";
+        logInternalInfo("YouTubeMusicDataSource.getStreamData format selected", {
+          trackId: track.id,
+          client: label,
+          quality,
+          itag: (format as any).itag ?? null,
+          mimeType: streamMimeType,
+          bitrate: (format as any).bitrate ?? null,
+        });
+        break;
+      } catch (error) {
+        logInternalWarn("YouTubeMusicDataSource.getStreamData client failed", {
+          trackId: track.id,
+          client: label,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (!streamUrl) {
+      throw new Error("Unable to resolve a Linux-compatible MP4 audio stream.");
+    }
+
+    return {
+      url: streamUrl,
+      mimeType: streamMimeType,
+      cookie: this.musicCookie ?? undefined,
+    };
+  }
+
+  /**
+   * Browse ids for the surfaces Zuno exposes.
+   *
+   * These are stable YouTube Music feed ids rather than anything we construct, which is why
+   * they are literals: there is no endpoint that enumerates them.
+   */
+  private static readonly BROWSE_IDS: Record<BrowseSurface, { ids: string[]; title: string }> = {
+    explore: { ids: ["FEmusic_explore"], title: "Explore" },
+    charts: { ids: ["FEmusic_charts"], title: "Charts" },
+    moods: { ids: ["FEmusic_moods_and_genres"], title: "Moods & genres" },
+    // Podcast feeds have moved around and some accounts get none of them; each is tried in
+    // turn rather than assuming one, because a wrong id answers 404 rather than empty.
+    podcasts: {
+      ids: [
+        "FEmusic_non_music_audio",
+        "FEmusic_podcasts",
+        "FEmusic_library_non_music_audio_list",
+      ],
+      title: "Podcasts",
+    },
+  };
+
+  /**
+   * Reads a browse feed into titled shelves.
+   *
+   * Shelf contents are deliberately untyped up front — a YouTube Music feed mixes albums,
+   * playlists, videos and artists inside one row, and which appears where changes without
+   * notice. Rather than model each surface separately, every shelf is walked with the same
+   * collector the library uses and sorted into buckets by what came back.
+   */
+  async getBrowsePage(target: BrowseTarget): Promise<BrowsePage> {
+    const surface = target;
+    const cacheKey = typeof surface === "string"
+      ? `youtube-music:browse:v2:${surface}`
+      : `youtube-music:browse:v2:id:${surface.browseId}`;
+    const cached = await getCachedJson<BrowsePage>(cacheKey);
+    if (cached?.shelves.length) {
+      void this.refreshBrowsePage(surface, cacheKey).catch(() => {});
+      return cached;
+    }
+    return this.refreshBrowsePage(surface, cacheKey);
+  }
+
+  private async refreshBrowsePage(
+    surface: BrowseTarget,
+    cacheKey: string,
+  ): Promise<BrowsePage> {
+    const target = typeof surface === "string"
+      ? YouTubeMusicDataSource.BROWSE_IDS[surface]
+      : { ids: [surface.browseId], title: surface.title };
+    const client = await this.getMusicClient();
+    let response: unknown = null;
+    let usedBrowseId: string | null = null;
+    let lastError: unknown = null;
+
+    for (const browseId of target.ids) {
+      try {
+        response = await this.executeMusicBrowse(client, { browseId });
+        usedBrowseId = browseId;
+        break;
+      } catch (error) {
+        lastError = error;
+        logInternalWarn("YouTubeMusicDataSource.refreshBrowsePage candidate failed", {
+          surface,
+          browseId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (!response) {
+      throw lastError instanceof Error
+        ? lastError
+        : new Error("YouTube Music did not return this feed.");
+    }
+
+    const sections = this.collectBrowseSections(response);
+    logInternalInfo("YouTubeMusicDataSource.refreshBrowsePage response", {
+      surface,
+      browseId: usedBrowseId,
+      responseKeys: response && typeof response === "object"
+        ? Object.keys(response).slice(0, 25)
+        : typeof response,
+      sectionCount: sections.length,
+      sectionTitles: sections.slice(0, 25).map((section) => section.title),
+      totalItemsSeen: this.collectMusicItems(response, BROWSE_ITEM_TYPES).length,
+    });
+
+    const shelves: BrowseShelf[] = [];
+    const seenTitles = new Set<string>();
+
+    for (const [index, section] of sections.entries()) {
+      const title = section.title?.trim() || `More ${index + 1}`;
+      if (seenTitles.has(title)) continue;
+
+      const items = this.collectMusicItems(section.node, BROWSE_ITEM_TYPES);
+      const shelf: BrowseShelf = {
+        title,
+        tracks: [],
+        albums: [],
+        playlists: [],
+        artists: [],
+        links: this.collectBrowseLinks(section.node),
+      };
+
+      for (const item of items) {
+        switch (item.item_type) {
+          case "song":
+          case "video": {
+            const track = this.toTrack(item);
+            if (track) shelf.tracks.push(track);
+            break;
+          }
+          case "album": {
+            const album = this.toAlbum(item);
+            if (album) shelf.albums.push(album);
+            break;
+          }
+          case "playlist": {
+            const playlist = this.toPlaylist(item);
+            if (playlist) shelf.playlists.push(playlist);
+            break;
+          }
+          case "artist": {
+            const artist = this.toArtist(item);
+            if (artist) shelf.artists.push(artist);
+            break;
+          }
+          default:
+            break;
+        }
+      }
+
+      const total = shelf.tracks.length + shelf.albums.length
+        + shelf.playlists.length + shelf.artists.length + shelf.links.length;
+      if (total === 0) continue;
+
+      seenTitles.add(title);
+      shelves.push(shelf);
+    }
+
+    /*
+     * The shelf walk depends on a response shape that YouTube changes freely. When it finds
+     * nothing but the response demonstrably contains music, everything is collected into a
+     * single shelf — a flat list is a far better answer than an empty page.
+     */
+    if (shelves.length === 0) {
+      const loose = this.collectMusicItems(response, BROWSE_ITEM_TYPES);
+      if (loose.length > 0) {
+        const shelf: BrowseShelf = {
+          title: target.title,
+          tracks: [],
+          albums: [],
+          playlists: [],
+          artists: [],
+          links: [],
+        };
+        for (const item of loose) {
+          const track = item.item_type === "song" || item.item_type === "video"
+            ? this.toTrack(item)
+            : null;
+          if (track) {
+            shelf.tracks.push(track);
+            continue;
+          }
+          const album = item.item_type === "album" ? this.toAlbum(item) : null;
+          if (album) {
+            shelf.albums.push(album);
+            continue;
+          }
+          const playlist = item.item_type === "playlist" ? this.toPlaylist(item) : null;
+          if (playlist) {
+            shelf.playlists.push(playlist);
+            continue;
+          }
+          const artist = item.item_type === "artist" ? this.toArtist(item) : null;
+          if (artist) shelf.artists.push(artist);
+        }
+        shelves.push(shelf);
+        logInternalWarn("YouTubeMusicDataSource.refreshBrowsePage using flat fallback", {
+          surface,
+          itemCount: loose.length,
+        });
+      }
+    }
+
+    const page: BrowsePage = { title: target.title, shelves };
+    if (shelves.length > 0) await setCachedJson(cacheKey, page);
+
+    logInternalInfo("YouTubeMusicDataSource.getBrowsePage", {
+      surface,
+      shelfCount: shelves.length,
+    });
+    return page;
+  }
+
+  /**
+   * Mood and genre chips inside a shelf.
+   *
+   * These are navigation, not content: a shelf made entirely of them yields no tracks and was
+   * therefore being dropped, which left the whole Moods & genres surface blank.
+   */
+  private collectBrowseLinks(node: unknown): BrowseLink[] {
+    if (!Array.isArray(node)) return [];
+    const links: BrowseLink[] = [];
+
+    for (const entry of node) {
+      const candidate = entry as {
+        type?: string;
+        button_text?: unknown;
+        endpoint?: unknown;
+      };
+      if (candidate?.type !== "MusicNavigationButton") continue;
+
+      const title = String(candidate.button_text ?? "").trim();
+      const browseId = this.findBrowseId(candidate.endpoint);
+      if (title && browseId) links.push({ title, browseId });
+    }
+
+    return links;
+  }
+
+  /**
+   * Finds the shelves in a browse response.
+   *
+   * Goes through the parser's memo rather than walking the tree. youtubei.js exposes parsed
+   * contents behind accessors rather than plain fields, so `Object.entries` sees nothing —
+   * a tree walk found zero containers on a response that demonstrably held 24 items. The
+   * memo is a flat index of every parsed node and is the only reliable way in; it is what
+   * collectMusicItems already uses for the same reason.
+   */
+  private collectBrowseSections(root: unknown): Array<{ title?: string; node: unknown }> {
+    const response = root as ParsedMusicResponse;
+    const sections: Array<{ title?: string; node: unknown }> = [];
+
+    const readTitle = (value: unknown): string | undefined => {
+      if (!value) return undefined;
+      if (typeof value === "string") return value.trim() || undefined;
+      const text = (value as { toString?: () => string }).toString?.();
+      return text && text !== "[object Object]" ? text.trim() || undefined : undefined;
+    };
+
+    for (const memo of [response.contents_memo, response.continuation_contents_memo]) {
+      if (!memo) continue;
+
+      // Carousels are the horizontal rows; MusicShelf is the vertical list form. Both carry
+      // a title and their own contents.
+      // The memo is typed loosely here (it indexes every node kind), so the two shelf shapes
+      // are narrowed locally rather than widening MusicItem for nodes that are not items.
+      type ShelfNode = {
+        title?: unknown;
+        header?: { title?: unknown } | null;
+        contents?: unknown;
+      };
+
+      for (const shelf of memo.getType(YTNodes.MusicCarouselShelf) as unknown as ShelfNode[]) {
+        sections.push({ title: readTitle(shelf.header?.title), node: shelf.contents });
+      }
+      for (const shelf of memo.getType(YTNodes.MusicShelf) as unknown as ShelfNode[]) {
+        sections.push({ title: readTitle(shelf.title), node: shelf.contents });
+      }
+    }
+
+    return sections;
+  }
+
   async getStreamData(track: Track): Promise<StreamData> {
     if (track.source === "local") {
       if (!track.localPath) {
@@ -4368,48 +4859,33 @@ export class YouTubeMusicDataSource extends DataSource {
       };
     }
 
-    let streamUrl: string | null = null;
-    let streamMimeType = "audio/mp4";
-
-    for (const label of ["music", "web"] as ClientLabel[]) {
+    /*
+     * A downloaded copy short-circuits everything below — no stream resolution, no network.
+     * Checked here rather than in the player so every caller of getStreamData benefits, and
+     * so an offline track behaves identically to an online one from the engine's point of
+     * view: both end up as a URL served by the local media server.
+     */
+    if (isTrackDownloaded(track.id)) {
       try {
-        const yt = await this.getClient(label);
-        const info = await yt.getBasicInfo(track.id);
-        const format = info.streaming_data?.adaptive_formats
-          ?.filter((candidate: any) => candidate.mime_type?.includes("audio/mp4"))
-          .sort((left: any, right: any) => (right.bitrate ?? 0) - (left.bitrate ?? 0))[0];
-        if (!format) {
-          throw new Error("YouTube returned no MP4 audio format.");
-        }
-
-        streamUrl = typeof (format as any).url === "string"
-          ? (format as any).url
-          : await format.decipher(yt.session.player);
-        if (!streamUrl) {
-          throw new Error("YouTube returned an empty MP4 audio URL.");
-        }
-
-        streamMimeType = (format as any).mime_type ?? "audio/mp4";
-        logInternalInfo("YouTubeMusicDataSource.getStreamData format selected", {
+        const payload = await invoke<NativeAudioSourcePayload>("offline_audio_source", {
           trackId: track.id,
-          client: label,
-          itag: (format as any).itag ?? null,
-          mimeType: streamMimeType,
-          bitrate: (format as any).bitrate ?? null,
+          mimeType: track.mimeType ?? "audio/mp4",
         });
-        break;
-      } catch (error) {
-        logInternalWarn("YouTubeMusicDataSource.getStreamData client failed", {
+        logInternalInfo("YouTubeMusicDataSource.getStreamData offline hit", {
           trackId: track.id,
-          client: label,
+          byteLength: payload.byteLength,
+        });
+        return { mimeType: payload.mimeType, sourceUrl: payload.url };
+      } catch (error) {
+        // The manifest and disk have drifted. Fall through to the network rather than fail.
+        logInternalWarn("YouTubeMusicDataSource.getStreamData offline miss", {
+          trackId: track.id,
           error: error instanceof Error ? error.message : String(error),
         });
       }
     }
 
-    if (!streamUrl) {
-      throw new Error("Unable to resolve a Linux-compatible MP4 audio stream.");
-    }
+    const { url: streamUrl, mimeType: streamMimeType } = await this.resolveStreamUrl(track);
 
     logInternalInfo("YouTubeMusicDataSource.getStreamData download start", {
       trackId: track.id,
@@ -4419,6 +4895,9 @@ export class YouTubeMusicDataSource extends DataSource {
       url: streamUrl,
       trackId: track.id,
       mimeType: streamMimeType,
+      // The signed URL belongs to this authenticated session; without the cookie the media
+      // request is anonymous and googlevideo refuses it.
+      cookie: this.musicCookie,
     });
     if (payload.byteLength === 0) {
       throw new Error("Audio download returned no data.");

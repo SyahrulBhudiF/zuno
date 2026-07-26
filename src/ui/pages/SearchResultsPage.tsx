@@ -1,4 +1,5 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cn } from "@/lib/utils";
 import { Loader } from "@/components/motion/loader";
 import { PlayActiveIcon } from "@/ui/icons";
 import type {
@@ -29,6 +30,16 @@ type SelectableItem =
   | { kind: "track"; track: Track }
   | { kind: "album"; album: Album }
   | { kind: "playlist"; playlist: Playlist };
+
+type SearchScope = "all" | "songs" | "artists" | "albums" | "playlists";
+
+const SCOPES: Array<{ value: SearchScope; label: string; field: keyof SearchResults }> = [
+  { value: "all", label: "All", field: "tracks" },
+  { value: "songs", label: "Songs", field: "tracks" },
+  { value: "artists", label: "Artists", field: "artists" },
+  { value: "albums", label: "Albums", field: "albums" },
+  { value: "playlists", label: "Playlists", field: "playlists" },
+];
 
 function buildFlatItems(results: SearchResults, songsFirst: boolean): SelectableItem[] {
   const items: SelectableItem[] = [];
@@ -73,27 +84,55 @@ export function SearchResultsPage({
 }) {
   const { openTrackMenu } = useTrackContextMenu();
   const { openPlaylistMenu, openAlbumMenu } = usePlaylistContextMenu();
-  const hasResults = results.artists.length
-    + results.tracks.length
-    + results.albums.length
-    + results.playlists.length > 0;
+  const [scope, setScope] = useState<SearchScope>("all");
+
+  // A scope from the previous query is meaningless against the next one, and silently hiding
+  // results the new search did find is the worst outcome.
+  useEffect(() => setScope("all"), [query]);
+
+  /*
+   * Scoping filters the results *before* anything else reads them, so the flat list that
+   * drives keyboard selection contains exactly what is on screen. Filtering only at render
+   * would leave arrow-down walking through hidden entries.
+   */
+  const scopedResults = useMemo<SearchResults>(() => {
+    if (scope === "all") return results;
+    return {
+      artists: scope === "artists" ? results.artists : [],
+      tracks: scope === "songs" ? results.tracks : [],
+      albums: scope === "albums" ? results.albums : [],
+      playlists: scope === "playlists" ? results.playlists : [],
+    };
+  }, [results, scope]);
+
+  const availableScopes = useMemo(
+    () => SCOPES.filter(
+      (item) => item.value === "all" || results[item.field].length > 0,
+    ),
+    [results],
+  );
+
+  const hasResults = scopedResults.artists.length
+    + scopedResults.tracks.length
+    + scopedResults.albums.length
+    + scopedResults.playlists.length > 0;
   const normalizedQuery = normalizeSearchKey(query);
-  const hasExactArtist = results.artists.some(
+  const hasExactArtist = scopedResults.artists.some(
     (artist) => normalizeSearchKey(artist.name) === normalizedQuery,
   );
-  const hasExactTrack = results.tracks.some(
+  const hasExactTrack = scopedResults.tracks.some(
     (track) => normalizeSearchKey(track.title) === normalizedQuery,
   );
   const songsFirst = hasExactTrack && !hasExactArtist;
 
   const playTrack = useCallback((track: Track) => {
     if (onPlayTrack) void onPlayTrack(track);
-    else void playerController.playTrackById(track.id, results.tracks, true);
-  }, [onPlayTrack, playerController, results.tracks]);
+    else void playerController.playTrackById(track.id, scopedResults.tracks, true);
+  }, [onPlayTrack, playerController, scopedResults.tracks]);
 
   const flatItems = useMemo(
-    () => buildFlatItems(results, songsFirst),
-    [results, songsFirst],
+    () => buildFlatItems(scopedResults, songsFirst),
+    [scopedResults, songsFirst],
   );
 
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -208,9 +247,41 @@ export function SearchResultsPage({
 
   return (
     <div className="flex flex-col gap-8">
-      <header>
-        <p className="text-lg font-semibold text-foreground">Search results</p>
-        <h1>{query}</h1>
+      <header className="flex flex-col gap-3">
+        <div>
+          <p className="text-lg font-semibold text-foreground">Search results</p>
+          <h1>{query}</h1>
+        </div>
+
+        {/* Only offered when there is something to narrow to: a row of filters where every
+            one but "All" is empty is just noise. */}
+        {!isLoading && availableScopes.length > 2 && (
+          <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Filter results">
+            {availableScopes.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                role="tab"
+                aria-selected={scope === item.value}
+                onClick={() => setScope(item.value)}
+                className={cn(
+                  "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  scope === item.value
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-card text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {item.label}
+                {item.value !== "all" && (
+                  <span className="ml-1.5 tabular-nums opacity-60">
+                    {results[item.field].length}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
       </header>
 
       {isLoading ? (
@@ -219,11 +290,11 @@ export function SearchResultsPage({
         <p className="px-2 py-10 text-center text-sm text-muted-foreground">No results found.</p>
       ) : (
         <div className="flex flex-col gap-8">
-          {results.artists.length > 0 && (
+          {scopedResults.artists.length > 0 && (
             <section className="flex flex-col gap-3" style={{ order: songsFirst ? 1 : 0 }}>
               <h2>Artists</h2>
               <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr))]">
-                {results.artists.map((artist) => {
+                {scopedResults.artists.map((artist) => {
                   const index = flatItems.findIndex(
                     (item) => item.kind === "artist" && item.artist.id === artist.id,
                   );
@@ -252,11 +323,11 @@ export function SearchResultsPage({
             </section>
           )}
 
-          {results.tracks.length > 0 && (
+          {scopedResults.tracks.length > 0 && (
             <section className="flex flex-col gap-3" style={{ order: songsFirst ? 0 : 1 }}>
               <h2>Songs</h2>
               <div className="flex flex-col gap-0.5" data-onboarding="search-results">
-                {results.tracks.map((track, displayIndex) => {
+                {scopedResults.tracks.map((track, displayIndex) => {
                   const index = flatItems.findIndex(
                     (item) => item.kind === "track" && item.track.id === track.id,
                   );
@@ -289,11 +360,11 @@ export function SearchResultsPage({
             </section>
           )}
 
-          {results.albums.length > 0 && (
+          {scopedResults.albums.length > 0 && (
             <section className="flex flex-col gap-3" style={{ order: 2 }}>
               <h2>Albums</h2>
               <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr))]">
-                {results.albums.map((album) => {
+                {scopedResults.albums.map((album) => {
                   const index = flatItems.findIndex(
                     (item) => item.kind === "album" && item.album.id === album.id,
                   );
@@ -321,11 +392,11 @@ export function SearchResultsPage({
             </section>
           )}
 
-          {results.playlists.length > 0 && (
+          {scopedResults.playlists.length > 0 && (
             <section className="flex flex-col gap-3" style={{ order: 3 }}>
               <h2>Playlists</h2>
               <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr))]">
-                {results.playlists.map((playlist) => {
+                {scopedResults.playlists.map((playlist) => {
                   const index = flatItems.findIndex(
                     (item) => item.kind === "playlist" && item.playlist.id === playlist.id,
                   );
