@@ -65,18 +65,21 @@ If you find it useful, **starring the repo** genuinely helps.
 
 | Feature | Description |
 |---|---|
-| **Multiple tabs** | Each tab keeps its own queue, volume and player state |
-| **Cylinder carousel** | "Made for you" picks roll through a 3D shelf rather than sitting in a grid |
-| **Light & dark themes** | Follows the OS by default, or pin either one |
+| **Multiple tabs** | Each tab keeps its own queue, volume and player state — start an album in one, browse in another, and the first keeps playing |
+| **Offline downloads** | Save a song, a selection, or a whole album or playlist, with its own quality setting and a size cap you control |
 | **Mini player** | A morphing capsule that appears when you tab away; drag it anywhere, hover to expand |
 | **Synced lyrics** | Real-time synced lyrics, not available on the official web client |
-| **Caching** | Playlists, lyrics and artwork are cached, so revisits are instant |
+| **Like & dislike** | Rate from the row, the player or the right-click menu; ratings sync to your YouTube Music account |
+| **Batch actions** | Shift/ctrl-select rows, then queue, download, add to a playlist or remove them together |
+| **Queue control** | Collapses to an artwork rail — end the queue here, build a queue from here, shuffle, clear |
 | **Recommendations** | Personalised suggestions plus a "surprise me" shuffle |
-| **Discord Rich Presence** | Shows what you are listening to on Discord |
-| **Last.fm** | Scrobbling and now-playing updates |
-| **Account support** | Sign in for your library, playlists and recommendations |
-| **Song management** | Add to playlists or queue from anywhere, via right-click or keyboard |
-| **Local files** | Build playlists from folders on your own machine |
+| **Local files** | Folders from your own machine sit alongside your library, with a tag editor for fixing metadata |
+| **Discord & Last.fm** | Rich Presence and scrobbling, each toggleable straight from the toolbar |
+| **Account support** | Sign in for your library and playlists, and switch between channels on the same account |
+| **Desktop integration** | Media keys, minimise to tray, launch at login, remembered window position, rebindable shortcuts |
+| **Light & dark themes** | Follows the OS by default, or pin either one — plus a reduced-motion mode |
+| **Caching** | Playlists, lyrics and artwork are cached, so revisits are instant |
+| **Auto-updates** | Signed updates install themselves; no manual re-download |
 
 <br />
 

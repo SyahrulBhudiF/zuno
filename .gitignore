@@ -47,3 +47,10 @@ outputs/*
 ~/
 *.key
 !**/*.key.pub
+
+# Reference dumps and working images kept in docs/ for local use only. The committed
+# documentation (architecture.md, backend.md, frontend.md, solarIcons.md) and the README's
+# screenshots stay tracked — this covers the scratch material that accumulates beside them.
+docs/*.txt
+docs/*.webp
+docs/zuno.PNG
