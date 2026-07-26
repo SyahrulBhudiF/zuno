@@ -2,13 +2,12 @@ import { useState, useRef, useEffect, useMemo, useSyncExternalStore, type ReactE
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
-import { RailPopover } from "./RailPopover";
+import { FloatingPanel } from "./FloatingPanel";
 import { isLikedSongsId, likedSongsCover } from "../likedSongsArtwork";
 import {
   AlbumIcon,
   FolderIcon,
   PlaylistIcon,
-  PlusIcon,
   RefreshIcon,
 } from "@/ui/icons";
 import type { Album, Playlist } from "../../datasource/types";
@@ -27,6 +26,8 @@ import { getAppSetting, setAppSetting } from "../../internal/appSettings";
 import { ArtistLinks } from "./ArtistLinks";
 import { TrackArtwork } from "./TrackArtwork";
 import { usePlaylistContextMenu } from "./PlaylistContextMenu";
+import { Button } from "@/components/motion/button";
+import { AddCircleIcon } from "@solar-icons/react/bold-duotone";
  
 const PLAYLIST_ORDER_KEY = "ytc-sidebar-playlist-order";
 const ALBUM_ORDER_KEY = "ytc-sidebar-album-order";
@@ -204,7 +205,7 @@ function CreatePlaylistButton({
   };
 
   return (
-    <RailPopover
+    <FloatingPanel
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
@@ -212,21 +213,23 @@ function CreatePlaylistButton({
       }}
       className="w-64"
       trigger={
-        <button
+        <Button
           type="button"
           aria-label="New playlist"
+          size="icon"
+          variant='outline'
           aria-expanded={open}
           onClick={() => setOpen(!open)}
           className={cn(
-            "mx-2 mb-1 flex shrink-0 items-center justify-center gap-1.5 rounded-lg bg-card/50 py-2",
-            "text-sm text-muted-foreground transition-colors hover:bg-card hover:text-foreground",
+            "mx-2 mb-1 flex shrink-0 group items-center self-center  justify-center gap-1.5 rounded-full  bg-black/90  py-2",
+            "text-sm text-muted-foreground transition-colors hover:bg-primary hover:text-foreground",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            open && "bg-card text-foreground",
+            open && "bg-primary text-foreground",
           )}
         >
-          <PlusIcon size={18} aria-hidden="true" />
+          <AddCircleIcon size={22} aria-hidden="true" className=" text-white group-hover:text-white" />
           {!collapsed && <span>New playlist</span>}
-        </button>
+        </Button>
       }
     >
       <div className="flex flex-col gap-2">
@@ -236,7 +239,7 @@ function CreatePlaylistButton({
         </span>
         <input
           ref={inputRef}
-          className="mt-1 w-full min-w-0 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-inset focus:ring-ring/60"
+          className="mt-1 w-full min-w-0 rounded-lg bg-background px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-inset focus:ring-border"
           value={name}
           placeholder="Playlist name"
           aria-label="Playlist name"
@@ -258,7 +261,7 @@ function CreatePlaylistButton({
           Create playlist
         </button>
       </div>
-    </RailPopover>
+    </FloatingPanel>
   );
 }
 
@@ -882,6 +885,8 @@ export function Sidebar({
             onNavigatePlaylist(playlist);
           }}
         />
+
+        
         <div ref={listRef} className={listClasses}>
           {libraryView === "albums" ? (
             albums.map((album) => (

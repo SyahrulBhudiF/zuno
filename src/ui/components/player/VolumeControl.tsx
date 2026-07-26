@@ -1,254 +1,97 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { RangeSlider } from "@/components/motion/range-slider";
 import { VolumeLoudIcon, VolumeMutedIcon, VolumeSmallIcon } from "@/ui/icons";
-import { logInternalDebug } from "../../../internal/logging";
 import { playerController, usePlayerState } from "../../../player/playerStore";
+import { FloatingPanel } from "../FloatingPanel";
 
-/* Same rationale as SeekBar: native input keeps the wheel/drag/animation behaviour. */
-const VOLUME_SLIDER = [
-  "h-1 w-24 cursor-pointer appearance-none rounded-full bg-transparent",
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
-  "[&::-webkit-slider-runnable-track]:h-1 [&::-webkit-slider-runnable-track]:rounded-full",
-  "[&::-webkit-slider-runnable-track]:bg-[linear-gradient(to_right,var(--color-foreground)_var(--slider-progress),var(--color-muted)_var(--slider-progress))]",
-  "[&::-moz-range-track]:h-1 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-muted",
-  "[&::-moz-range-progress]:h-1 [&::-moz-range-progress]:rounded-full [&::-moz-range-progress]:bg-foreground",
-  "[&::-webkit-slider-thumb]:size-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full",
-  "[&::-webkit-slider-thumb]:-mt-1 [&::-webkit-slider-thumb]:bg-foreground [&::-webkit-slider-thumb]:opacity-0",
-  "[&::-webkit-slider-thumb]:transition-opacity",
-  "group-hover/volume:[&::-webkit-slider-thumb]:opacity-100 focus-visible:[&::-webkit-slider-thumb]:opacity-100",
-  "[&::-moz-range-thumb]:size-3 [&::-moz-range-thumb]: [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-foreground",
-].join(" ");
+/** Scroll step over the icon, matching the old inline slider's wheel behaviour. */
+const WHEEL_STEP_PERCENT = 5;
 
+/**
+ * Volume as a single icon that opens a slider on hover.
+ *
+ * The bar previously carried a permanently visible 96px slider for a control most people
+ * touch rarely. Collapsing it to the icon returns that width to the track title, and the
+ * slider is one hover away rather than hidden behind a click.
+ *
+ * The panel is portalled (see FloatingPanel): the player bar sits inside the window's
+ * `overflow-hidden` root, so a panel positioned within the bar would be clipped by it.
+ */
 export function VolumeControl() {
   const playerState = usePlayerState();
-  const sliderRef = useRef<HTMLInputElement>(null);
+  const [isOpen, setIsOpen] = useState(false);
   const [volume, setVolume] = useState(() => playerController.getVolume());
   const [isMuted, setIsMuted] = useState(() => playerController.isMuted());
-  const [displayedVolume, setDisplayedVolume] = useState(
-    () => playerController.isMuted() ? 0 : playerController.getVolume(),
-  );
-  const displayedVolumeRef = useRef(displayedVolume);
-  const volumeAnimationRef = useRef<number | null>(null);
-  const pointerStartRef = useRef({ x: 0, y: 0 });
-  const isPointerDownRef = useRef(false);
-  const isDraggingRef = useRef(false);
-  const shouldAnimatePointerChangeRef = useRef(false);
 
-  const setVolumeDisplay = (value: number) => {
-    displayedVolumeRef.current = value;
-    setDisplayedVolume(value);
-  };
-
-  const cancelVolumeAnimation = () => {
-    if (volumeAnimationRef.current !== null) {
-      cancelAnimationFrame(volumeAnimationRef.current);
-      volumeAnimationRef.current = null;
-    }
-  };
-
-  const animateVolumeTo = (target: number) => {
-    cancelVolumeAnimation();
-
-    const start = displayedVolumeRef.current;
-    const startedAt = performance.now();
-    const animate = (now: number) => {
-      const progress = Math.min(1, (now - startedAt) / 120);
-      const eased = 1 - Math.pow(1 - progress, 3);
-      setVolumeDisplay(start + (target - start) * eased);
-
-      if (progress < 1) {
-        volumeAnimationRef.current = requestAnimationFrame(animate);
-      } else {
-        volumeAnimationRef.current = null;
-      }
-    };
-
-    volumeAnimationRef.current = requestAnimationFrame(animate);
-  };
-
+  // The engine is the source of truth: the mini player and OS media keys change it too.
   useEffect(() => {
     setVolume(playerState.volume);
     setIsMuted(playerState.muted);
-    if (!isPointerDownRef.current && volumeAnimationRef.current === null) {
-      setVolumeDisplay(playerState.muted ? 0 : playerState.volume);
-    }
   }, [playerState.muted, playerState.volume]);
 
-  useEffect(() => () => {
-    cancelVolumeAnimation();
-  }, []);
+  const displayedVolume = isMuted ? 0 : volume;
+  const percent = Math.round(displayedVolume * 100);
 
-  useEffect(() => {
-    const slider = sliderRef.current;
-    if (!slider) {
-      return;
-    }
-
-    const preventBackgroundScroll = (event: WheelEvent) => {
-      event.preventDefault();
-    };
-
-    slider.addEventListener("wheel", preventBackgroundScroll, { passive: false });
-    return () => slider.removeEventListener("wheel", preventBackgroundScroll);
-  }, []);
-
-  const updateVolume = (value: number, updateDisplay = true, source = "unknown") => {
-    const clampedValue = Math.min(1, Math.max(0, value));
-    const roundedValue = Math.round(clampedValue * 100) / 100;
-
-    logInternalDebug("VolumeControl.updateVolume", {
-      source,
-      inputValue: value,
-      roundedValue,
-      updateDisplay,
-      displayedVolume: displayedVolumeRef.current,
-      stateVolume: volume,
-      isMuted,
-      pointerDown: isPointerDownRef.current,
-      isDragging: isDraggingRef.current,
-    });
-
-    setVolume(roundedValue);
-    if (updateDisplay) {
-      cancelVolumeAnimation();
-      setVolumeDisplay(roundedValue);
-    }
-    setIsMuted(roundedValue === 0);
-    void playerController.setVolume(roundedValue);
+  const applyVolume = (nextPercent: number) => {
+    const next = Math.min(1, Math.max(0, nextPercent / 100));
+    setVolume(next);
+    // Dragging to a level is itself an unmute; dragging to zero is a mute.
+    setIsMuted(next === 0);
+    void playerController.setVolume(next);
   };
 
-  const getVolumeFromPointer = (event: React.PointerEvent<HTMLInputElement>) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    if (bounds.width <= 0) return displayedVolumeRef.current;
-    return (event.clientX - bounds.left) / bounds.width;
-  };
-
-  const handleVolumeInput = (event: React.FormEvent<HTMLInputElement>) => {
-    updateVolume(Number(event.currentTarget.value), true, "input");
-  };
-
-  const handleVolumeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const value = parseFloat(event.target.value);
-    const shouldAnimate = (
-      isPointerDownRef.current
-      && shouldAnimatePointerChangeRef.current
-      && !isDraggingRef.current
-    );
-    updateVolume(value, !shouldAnimate, "change");
-    if (shouldAnimate) {
-      animateVolumeTo(value);
-    }
-  };
-
-  const handleVolumePointerDown = (event: React.PointerEvent<HTMLInputElement>) => {
-    if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    }
-    pointerStartRef.current = { x: event.clientX, y: event.clientY };
-    isPointerDownRef.current = true;
-    isDraggingRef.current = false;
-
-    const sliderBounds = event.currentTarget.getBoundingClientRect();
-    const thumbX = sliderBounds.left + sliderBounds.width * displayedVolumeRef.current;
-    const thumbHitArea = Math.max(14, sliderBounds.height / 2);
-    shouldAnimatePointerChangeRef.current = Math.abs(event.clientX - thumbX) > thumbHitArea;
-
-    if (shouldAnimatePointerChangeRef.current) {
-      const nextVolume = getVolumeFromPointer(event);
-      logInternalDebug("VolumeControl.pointerDown jump", {
-        pointerX: event.clientX,
-        nextVolume,
-        currentTargetValue: Number(event.currentTarget.value),
-      });
-      updateVolume(nextVolume, false, "pointerDown");
-      animateVolumeTo(nextVolume);
-    }
-  };
-
-  const handleVolumePointerMove = (event: React.PointerEvent<HTMLInputElement>) => {
-    if (!isPointerDownRef.current) return;
-
-    const distance = Math.hypot(
-      event.clientX - pointerStartRef.current.x,
-      event.clientY - pointerStartRef.current.y,
-    );
-    if (distance < 3) return;
-
-    isDraggingRef.current = true;
-    shouldAnimatePointerChangeRef.current = false;
-    const nextVolume = getVolumeFromPointer(event);
-    logInternalDebug("VolumeControl.pointerMove drag", {
-      pointerX: event.clientX,
-      nextVolume,
-      currentTargetValue: Number(event.currentTarget.value),
-    });
-    updateVolume(nextVolume, true, "pointerMove");
-  };
-
-  const handleVolumePointerEnd = (event: React.PointerEvent<HTMLInputElement>) => {
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    isPointerDownRef.current = false;
-    isDraggingRef.current = false;
-    shouldAnimatePointerChangeRef.current = false;
-  };
-
-  const handleVolumeWheel = (event: React.WheelEvent<HTMLInputElement>) => {
-    event.preventDefault();
-
-    const scrollDelta = event.deltaY || event.deltaX;
-    if (scrollDelta === 0) {
-      return;
-    }
-
-    const currentVolume = isMuted ? 0 : volume;
-    const direction = scrollDelta < 0 ? 1 : -1;
-    updateVolume(currentVolume + direction * 0.05, true, "wheel");
-  };
-
-  const handleToggleMute = () => {
-    const nextMuted = !isMuted;
-    setIsMuted(nextMuted);
-    animateVolumeTo(nextMuted ? 0 : volume);
+  const toggleMute = () => {
+    setIsMuted((muted) => !muted);
     void playerController.toggleMute();
   };
 
+  const VolumeGlyph = isMuted
+    ? VolumeMutedIcon
+    : displayedVolume < 0.5
+      ? VolumeSmallIcon
+      : VolumeLoudIcon;
+
   return (
-    <div className="group/volume flex items-center gap-1.5">
-      <button
-        type="button"
-        className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={handleToggleMute}
-        aria-label={isMuted ? "Unmute" : "Mute"}
-      >
-        {isMuted ? (
-          <VolumeMutedIcon size={18} />
-        ) : displayedVolume < 0.5 ? (
-          <VolumeSmallIcon size={18} />
-        ) : (
-          <VolumeLoudIcon size={18} />
-        )}
-      </button>
-      <input
-        ref={sliderRef}
-        type="range"
-        min="0"
-        max="1"
-        step="0.01"
-        value={displayedVolume}
-        onInput={handleVolumeInput}
-        onChange={handleVolumeChange}
-        onPointerDown={handleVolumePointerDown}
-        onPointerMove={handleVolumePointerMove}
-        onPointerUp={handleVolumePointerEnd}
-        onPointerCancel={handleVolumePointerEnd}
-        onWheel={handleVolumeWheel}
-        className={VOLUME_SLIDER}
-        style={{
-          "--slider-progress": `${displayedVolume * 100}%`,
-        } as React.CSSProperties}
-        aria-label="Volume"
-      />
-    </div>
+    <FloatingPanel
+      open={isOpen}
+      onOpenChange={setIsOpen}
+      side="top"
+      openOnHover
+      triggerClassName="shrink-0"
+      className="w-52"
+      trigger={
+        <button
+          type="button"
+          onClick={toggleMute}
+          onWheel={(event) => {
+            const delta = event.deltaY || event.deltaX;
+            if (delta === 0) return;
+            applyVolume(percent + (delta < 0 ? 1 : -1) * WHEEL_STEP_PERCENT);
+          }}
+          aria-label={isMuted ? `Unmute (volume ${percent}%)` : `Mute (volume ${percent}%)`}
+          className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <VolumeGlyph size={18} aria-hidden="true" />
+        </button>
+      }
+    >
+      <div className="flex flex-col gap-2">
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-xs font-medium text-foreground">
+            {isMuted ? "Muted" : "Volume"}
+          </span>
+          <span className="text-xs tabular-nums text-muted-foreground">{percent}%</span>
+        </div>
+        <RangeSlider
+          value={percent}
+          onValueChange={applyVolume}
+          min={0}
+          max={100}
+          step={1}
+          showTicks={false}
+          aria-label="Volume"
+        />
+      </div>
+    </FloatingPanel>
   );
 }
