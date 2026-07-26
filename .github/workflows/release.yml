@@ -1,6 +1,10 @@
 name: Release
 
 on:
+  # Pushing the tag is what actually starts a release. `release: published` did not fire for
+  # v1.0.0 or v1.0.1 and both had to be dispatched by hand; it is kept below as a fallback.
+  push:
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       release_tag:
@@ -13,7 +17,7 @@ permissions:
   contents: write
 
 env:
-  RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+  RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name || github.ref_name }}
 
 jobs:
   release:
