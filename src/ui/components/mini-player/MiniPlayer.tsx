@@ -924,7 +924,7 @@ export default function MiniPlayer() {
             <TrackArtwork
               artworkUrl={artworkUrl ?? undefined}
               className={cn(
-                "relative size-[28px] shrink-0 rounded-full bg-neutral-800 transition-transform duration-300",
+                "relative size-[34px] shrink-0 rounded-full bg-neutral-800 transition-transform duration-300",
                 isPlaying && "motion-safe:animate-[spin_12s_linear_infinite]",
                 "group-hover/art:scale-90",
               )}

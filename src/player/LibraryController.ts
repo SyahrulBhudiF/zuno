@@ -11,6 +11,7 @@ import type {
   Playlist,
   TrackPage,
   Track,
+  TrackRating,
 } from "../datasource/types";
 import { logInternalError, logInternalInfo } from "../internal/logging";
 import { forgetTrackInPlaylist, rememberTrackInPlaylist } from "./playlistMembership";
@@ -59,6 +60,19 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+/** Local mirror of dislikes: YouTube stores the rating but exposes no list to read it back. */
+const DISLIKED_TRACKS_STORAGE_KEY = "zuno:disliked-tracks-v1";
+
+function readDislikedTrackIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DISLIKED_TRACKS_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
 export class LibraryController {
   private readonly listeners = new Set<Listener>();
   private initializationPromise: Promise<void> | null = null;
@@ -69,6 +83,8 @@ export class LibraryController {
     pendingLikeTrackIds: new Set(),
     error: null,
   };
+
+  private dislikedTrackIds: Set<string> = readDislikedTrackIds();
 
   constructor(private readonly dataSource: DataSource) {}
 
@@ -622,8 +638,34 @@ export class LibraryController {
   }
 
   async setTrackLiked(track: Track, liked: boolean): Promise<void> {
-    if (!this.dataSource.setTrackLiked) {
-      throw new Error("Liking songs is unavailable.");
+    await this.setTrackRating(track, liked ? "like" : "none");
+  }
+
+  /**
+   * The rating a track currently has.
+   *
+   * Likes are read from the library snapshot, which YouTube gives us. Dislikes are read from a
+   * local set, because there is no "disliked songs" list to fetch back — YouTube stores the
+   * rating but never hands it to us in bulk. Mirroring it locally is what lets the button show
+   * the right state after a restart instead of silently resetting to neutral.
+   */
+  getTrackRating(trackId: string): TrackRating {
+    if (this.isTrackLiked(trackId)) return "like";
+    return this.dislikedTrackIds.has(trackId) ? "dislike" : "none";
+  }
+
+  async setTrackRating(track: Track, rating: TrackRating): Promise<void> {
+    const applyRating = this.dataSource.setTrackRating
+      ? (value: TrackRating) => this.dataSource.setTrackRating!(track, value)
+      : this.dataSource.setTrackLiked && rating !== "dislike"
+        // A source with only setTrackLiked can still like and unlike; dislike is what it cannot do.
+        ? (value: TrackRating) => this.dataSource.setTrackLiked!(track, value === "like")
+        : null;
+
+    if (!applyRating) {
+      throw new Error(
+        rating === "dislike" ? "Disliking songs is unavailable." : "Liking songs is unavailable.",
+      );
     }
     if (this.state.status === "signed-out" || !this.state.library) {
       throw new Error("Sign in to like");
@@ -631,11 +673,21 @@ export class LibraryController {
     if (this.state.pendingLikeTrackIds.has(track.id)) return;
 
     const previousLibrary = this.state.library;
+    const previousDisliked = new Set(this.dislikedTrackIds);
     const pendingLikeTrackIds = new Set(this.state.pendingLikeTrackIds);
     pendingLikeTrackIds.add(track.id);
-    const likedSongs = liked
+
+    /*
+     * Applied optimistically, and both lists move together: a rating is one value, so liking a
+     * disliked song must clear the dislike rather than leave the track in both states.
+     */
+    const likedSongs = rating === "like"
       ? [track, ...previousLibrary.likedSongs.filter((item) => item.id !== track.id)]
       : previousLibrary.likedSongs.filter((item) => item.id !== track.id);
+
+    if (rating === "dislike") this.dislikedTrackIds.add(track.id);
+    else this.dislikedTrackIds.delete(track.id);
+    this.persistDislikedTrackIds();
 
     this.setState({
       library: { ...previousLibrary, likedSongs },
@@ -643,14 +695,27 @@ export class LibraryController {
     });
 
     try {
-      await this.dataSource.setTrackLiked(track, liked);
+      await applyRating(rating);
     } catch (error) {
       this.setState({ library: previousLibrary });
+      this.dislikedTrackIds = previousDisliked;
+      this.persistDislikedTrackIds();
       throw error;
     } finally {
       const nextPending = new Set(this.state.pendingLikeTrackIds);
       nextPending.delete(track.id);
       this.setState({ pendingLikeTrackIds: nextPending });
+    }
+  }
+
+  private persistDislikedTrackIds(): void {
+    try {
+      localStorage.setItem(
+        DISLIKED_TRACKS_STORAGE_KEY,
+        JSON.stringify([...this.dislikedTrackIds]),
+      );
+    } catch {
+      // Quota or privacy mode: the rating still reached YouTube, only the local mirror is lost.
     }
   }
 

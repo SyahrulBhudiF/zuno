@@ -6,7 +6,7 @@ import {
 } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
-import { CheckActiveIcon, CheckIcon, DownloadIcon, ListIcon, PlaylistAddIcon, PlayActiveIcon } from "@/ui/icons";
+import { CheckActiveIcon, CheckIcon, DislikeActiveIcon, DislikeIcon, DownloadIcon, HeartActiveIcon, HeartIcon, ListIcon, PlaylistAddIcon, PlayActiveIcon } from "@/ui/icons";
 import { Loader } from "@/components/motion/loader";
 import {
   getOfflineStatus,
@@ -14,7 +14,9 @@ import {
   removeDownload,
   useOfflineState,
 } from "../../player/offlineStore";
-import type { Track } from "../../datasource/types";
+import type { Track, TrackRating } from "../../datasource/types";
+import { libraryController, useLibraryState } from "../../player/playerStore";
+import { useTrackContextMenu } from "./TrackContextMenu";
 import { ArtistLinks } from "./ArtistLinks";
 import { TrackArtwork } from "./TrackArtwork";
 
@@ -44,6 +46,8 @@ interface TrackRowProps extends PassthroughButtonProps {
   onQuickAddToQueue?: () => void;
   /** Shows a download-for-offline toggle. Omit on rows where it makes no sense. */
   showDownload?: boolean;
+  /** Shows like/dislike. Omit where a rating makes no sense, e.g. local-only lists. */
+  showRating?: boolean;
   /** Part of a multi-selection. Swaps the index column for a checkbox. */
   isSelected?: boolean;
   /** True while any row in the list is selected, so every row shows its checkbox. */
@@ -181,6 +185,79 @@ function QuickAction({
 }
 
 /**
+ * Like and dislike, as a pair.
+ *
+ * Shown together rather than as one cycling control: a rating has three states, and a single
+ * button that walks like → dislike → none makes the user guess where they are in the cycle.
+ * Two buttons say what they will do and which one is active.
+ *
+ * The active one stays visible when set — hiding a rating until hover would mean you cannot see
+ * what you rated without hunting for it — while the inactive one appears on hover like the
+ * other row actions.
+ */
+function RatingActions({ track }: { track: Track }) {
+  const { rateTrack } = useTrackContextMenu();
+  const libraryState = useLibraryState();
+
+  // Local files have no YouTube rating to set, and a signed-out session has nowhere to put one.
+  if (track.source === "local") return null;
+
+  const rating = libraryController.getTrackRating(track.id);
+  const isPending = libraryState.pendingLikeTrackIds.has(track.id);
+
+  const button = (target: Exclude<TrackRating, "none">, icon: ReactNode, label: string) => {
+    const isActive = rating === target;
+    return (
+      <Tooltip content={isActive ? `Undo ${label.toLowerCase()}` : label}>
+        <span
+          role="button"
+          tabIndex={0}
+          aria-label={isActive ? `Undo ${label.toLowerCase()} for ${track.title}` : `${label} ${track.title}`}
+          aria-pressed={isActive}
+          aria-busy={isPending}
+          className={cn(
+            "grid size-8 shrink-0 place-items-center rounded-full transition",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            isPending && "pointer-events-none opacity-50",
+            isActive
+              ? "text-primary opacity-100"
+              : "text-muted-foreground opacity-0 hover:bg-background hover:text-foreground group-hover/row:opacity-100 focus:opacity-100",
+          )}
+          onClick={(event) => {
+            event.stopPropagation();
+            // Pressing the active rating clears it, which is the only way back to neutral.
+            void rateTrack(track, isActive ? "none" : target);
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            event.stopPropagation();
+            void rateTrack(track, isActive ? "none" : target);
+          }}
+        >
+          {icon}
+        </span>
+      </Tooltip>
+    );
+  };
+
+  return (
+    <span className="flex shrink-0 items-center">
+      {button(
+        "like",
+        rating === "like" ? <HeartActiveIcon size={17} /> : <HeartIcon size={17} />,
+        "Like",
+      )}
+      {button(
+        "dislike",
+        rating === "dislike" ? <DislikeActiveIcon size={17} /> : <DislikeIcon size={17} />,
+        "Dislike",
+      )}
+    </span>
+  );
+}
+
+/**
  * One track in a list, shared by the playlist, album and artist pages.
  *
  * Those three had drifted into three different rows — only one showed artwork, only one
@@ -203,6 +280,7 @@ export const TrackRow = memo(function TrackRow({
   onQuickAdd,
   onQuickAddToQueue,
   showDownload = false,
+  showRating = false,
   isSelected = false,
   isSelectionActive = false,
   onToggleSelected,
@@ -327,6 +405,7 @@ export const TrackRow = memo(function TrackRow({
 
       {/* Hover actions. The row itself is a <button>, so these cannot be buttons — see
           QuickAction. They sit before `trailing` so durations stay hard against the edge. */}
+      {showRating && <RatingActions track={track} />}
       {showDownload && <DownloadAction track={track} />}
 
       {(onQuickAddToQueue || onQuickAdd) && (

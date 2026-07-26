@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { Loader } from "@/components/motion/loader";
+import { SpinnerSteps } from "@/components/motion/loader";
 import { ArrowDownIcon, ArrowUpIcon, CloseIcon, SearchIcon } from "@/ui/icons";
 import type { Playlist, Track } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
@@ -12,7 +12,7 @@ import { isLocalPlaylist } from "../../player/localPlaylists";
 import { logInternalError } from "../../internal/logging";
 import { SelectionBar } from "../components/SelectionBar";
 import { useTrackSelection } from "../hooks/useTrackSelection";
-import { queueDownloads } from "../../player/offlineStore";
+import { queueDownloads, useOfflineState } from "../../player/offlineStore";
 import { usePlaylistContextMenu } from "../components/PlaylistContextMenu";
 import { formatCollectionMeta, MediaHeader } from "../components/MediaHeader";
 import { isLikedSongsId, likedSongsCover } from "../likedSongsArtwork";
@@ -20,6 +20,7 @@ import { TrackRow } from "../components/TrackRow";
 import { useNowPlaying } from "../hooks/useNowPlaying";
 import { useKeyboardShortcuts } from "../settings/keyboardShortcuts";
 import { shouldStartPageSearch } from "./pageSearchKeyboard";
+import { collectTrackPages } from "./collectTrackPages";
 
 /*
  * Collapsed search affordance that widens on hover/focus or while it holds a query —
@@ -32,6 +33,12 @@ const SEARCH_FIELD =
   "[&_input]:min-w-0 [&_input]:flex-1 [&_input]:bg-transparent [&_input]:text-sm " +
   "[&_input]:text-foreground [&_input]:outline-none [&_input]:placeholder:text-muted-foreground";
 const SEARCH_FIELD_COLLAPSED = "w-9 hover:w-56 focus-within:w-56";
+
+/*
+ * Ceiling on a whole-playlist sweep. At YouTube page sizes this is far more than any real
+ * playlist, and it exists only so a source that keeps reporting "more" cannot loop forever.
+ */
+const MAX_COLLECT_PAGES = 200;
 
 interface PlaylistViewProps {
   playlist?: Playlist;
@@ -82,7 +89,7 @@ function getUniqueNewTracks(current: Track[], next: Track[]): Track[] {
 function PlaylistLoadingSpinner({ label }: { label: string }) {
   return (
     <div className="grid place-items-center px-2 py-16 text-muted-foreground" role="status" aria-live="polite" aria-label={label}>
-      <Loader variant="spinner" size={18} />
+      <SpinnerSteps size={18} color="currentColor" />
     </div>
   );
 }
@@ -107,6 +114,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreTracks, setHasMoreTracks] = useState(false);
+  const [isCollectingAll, setIsCollectingAll] = useState(false);
   const [nextPageKey, setNextPageKey] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
@@ -118,6 +126,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   const playlistSearchInputRef = useRef<HTMLInputElement | null>(null);
   const playlistIdRef = useRef<string | undefined>(undefined);
   const isLoadingMoreRef = useRef(false);
+  const isCollectingAllRef = useRef(false);
   const tracksRef = useRef<Track[]>([]);
   const pointerDragRef = useRef<{
     pointerId: number;
@@ -131,6 +140,21 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   playlistIdRef.current = playlist?.id;
   isLoadingMoreRef.current = isLoadingMore;
   tracksRef.current = tracks;
+
+  /*
+   * Derived from the offline store so the header button can say what pressing it would do.
+   * Recomputed from entries rather than tracked separately: a count kept in parallel with the
+   * store is a count that drifts the moment a download finishes elsewhere.
+   */
+  const offlineState = useOfflineState();
+  const downloadCounts = useMemo(
+    () => ({
+      downloaded: tracks.filter((track) => Boolean(offlineState.entries[track.id])).length,
+      total: tracks.length,
+      isPartial: hasMoreTracks,
+    }),
+    [tracks, offlineState.entries, hasMoreTracks],
+  );
 
   const isLocalPlaylistView = playlist ? isLocalPlaylist(playlist) : false;
   /*
@@ -183,7 +207,8 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
   }, [playlist, libraryController]);
 
   const loadMoreTracks = useCallback(async () => {
-    if (!playlist || !hasMoreTracks || !nextPageKey || isLoading || isLoadingMoreRef.current) return;
+    if (!playlist || !hasMoreTracks || !nextPageKey || isLoading) return;
+    if (isLoadingMoreRef.current || isCollectingAllRef.current) return;
     const loadingPlaylistId = playlist.id;
     isLoadingMoreRef.current = true;
     setIsLoadingMore(true);
@@ -209,6 +234,56 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
       }
     }
   }, [hasMoreTracks, isLoading, libraryController, nextPageKey, playlist]);
+
+  /**
+   * Pulls every remaining page, and returns the complete list.
+   *
+   * Whole-collection actions — download all, queue all, add all to a playlist — are the only
+   * things that need more than what is on screen, so the rest is fetched when one is invoked
+   * rather than on mount. Eagerly paging a 5,000-track playlist would spend dozens of round
+   * trips before the first row appeared, to serve a button most visits never press.
+   *
+   * Returns the tracks rather than relying on the state it also sets, because callers act on
+   * the result immediately and a `setTracks` in the same tick is not visible to them yet.
+   */
+  const collectAllTracks = useCallback(async (): Promise<Track[]> => {
+    if (!playlist || !hasMoreTracks || !nextPageKey) return tracksRef.current;
+
+    const loadingPlaylistId = playlist.id;
+    // Held for the whole sweep so the scroll sentinel does not fetch the same pages alongside it.
+    isCollectingAllRef.current = true;
+    setIsCollectingAll(true);
+    setLoadMoreError(null);
+
+    try {
+      return await collectTrackPages({
+        initial: tracksRef.current,
+        hasMore: hasMoreTracks,
+        nextPageKey,
+        maxPages: MAX_COLLECT_PAGES,
+        fetchPage: (pageKey) => libraryController.getPlaylistTrackPage(playlist, pageKey),
+        isStale: () => playlistIdRef.current !== loadingPlaylistId,
+        // Written through on every page so the list fills in as it loads, and the work already
+        // done survives if the sweep is abandoned partway.
+        onPage: (collected, more, pageKey) => {
+          tracksRef.current = collected;
+          setTracks(collected);
+          setHasMoreTracks(more);
+          setNextPageKey(pageKey);
+        },
+      });
+    } catch {
+      if (playlistIdRef.current === loadingPlaylistId) {
+        setLoadMoreError("Could not load the rest of this playlist.");
+      }
+      return tracksRef.current;
+    } finally {
+      if (playlistIdRef.current === loadingPlaylistId) {
+        isCollectingAllRef.current = false;
+        setIsCollectingAll(false);
+      }
+    }
+  }, [hasMoreTracks, libraryController, nextPageKey, playlist]);
 
   useEffect(() => {
     if (!hasMoreTracks) return;
@@ -502,8 +577,23 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
           onShuffle={() => void playShuffled()}
           onPlayInLoop={() => void playInLoop()}
           isLooping={isCurrentCollection && playbackOrderMode === "repeat-all"}
-          onAddToQueue={() => playerController.addTracksToQueue(tracks)}
-          onAddToPlaylist={() => openPlaylistPicker(tracks[0], tracks)}
+                    /*
+           * Whole-collection actions page in the rest of the playlist first. Acting on the
+           * loaded `tracks` alone would quietly cover only what had scrolled into view —
+           * "download this playlist" on a 500-song list would fetch the visible 100 and look
+           * finished.
+           */
+          onAddToQueue={() => {
+            void collectAllTracks().then((all) => playerController.addTracksToQueue(all));
+          }}
+          onAddToPlaylist={() => {
+            void collectAllTracks().then((all) => openPlaylistPicker(all[0], all));
+          }}
+          onDownload={() => {
+            void collectAllTracks().then(queueDownloads);
+          }}
+          downloadCounts={downloadCounts}
+          downloadBusy={isCollectingAll}
         />
       </div>
       {isLoading && <PlaylistLoadingSpinner label="Loading songs" />}
@@ -620,6 +710,8 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
                     void playPlaylistTrack(track);
                   }}
                   showDownload
+
+                  showRating
                   onQuickAddToQueue={() => playerController.addToQueue(track)}
                   onQuickAdd={() => openPlaylistPicker(track)}
                   onContextMenu={(event) => openTrackMenu(event, track, {

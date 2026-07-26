@@ -3,8 +3,11 @@ import { cn } from "@/lib/utils";
 import { AlbumIcon, MusicNoteIcon, PlaylistIcon, UserIcon } from "@/ui/icons";
 import { getArtworkUrlCandidates } from "../../datasource/youtube/artwork";
 import {
+  forgetResolvedArtworkUrl,
   getResolvedArtworkUrl,
+  hasArtworkFailed,
   rememberResolvedArtworkUrl,
+  resolveArtworkThroughProxy,
 } from "../../internal/artworkCache";
 import { tauriFetch } from "../../datasource/youtube/tauriFetch";
 
@@ -50,7 +53,20 @@ export function TrackArtwork({
   const [artworkIndex, setArtworkIndex] = useState(0);
   const [retryCount, setRetryCount] = useState(0);
   const [proxiedArtworkUrl, setProxiedArtworkUrl] = useState<string | null>(null);
-  const [loadedArtworkUrl, setLoadedArtworkUrl] = useState<string | null>(null);
+  /*
+   * Seeded from the cache rather than starting at null.
+   *
+   * A mount with a known-good URL is not "not loaded yet" — the bytes are in the webview's
+   * cache or in a live blob, and treating it as unknown means one frame of fallback icon before
+   * onLoad fires. That flash is what shows up when dragging a song: reordering shifts every
+   * row's index, index is part of the React key, so the rows remount and every cover blinks.
+   *
+   * Optimistic rather than assumed: if the cached URL turns out to be dead, onError still runs
+   * and the ladder continues from there.
+   */
+  const [loadedArtworkUrl, setLoadedArtworkUrl] = useState<string | null>(
+    () => (artworkUrl ? getResolvedArtworkUrl(artworkUrl) ?? null : null),
+  );
   const retryTimerRef = useRef<number | null>(null);
   const baseArtworkUrl = artworkCandidates[artworkIndex] ?? proxiedArtworkUrl;
   const currentArtworkUrl = baseArtworkUrl
@@ -70,7 +86,8 @@ export function TrackArtwork({
     setArtworkIndex(0);
     setRetryCount(0);
     setProxiedArtworkUrl(null);
-    setLoadedArtworkUrl(null);
+    // Same reasoning as the initial state: a cached resolution is already loaded, not unknown.
+    setLoadedArtworkUrl(artworkUrl ? getResolvedArtworkUrl(artworkUrl) ?? null : null);
   }, [artworkUrl]);
 
   useEffect(() => () => {
@@ -79,46 +96,46 @@ export function TrackArtwork({
     }
   }, []);
 
+  /*
+   * Only when the candidate actually *changes*, never on mount.
+   *
+   * Running this on the first render would immediately undo the cache seeding above and
+   * reintroduce the fallback flash, since an effect fires after the first paint.
+   */
+  const previousBaseUrlRef = useRef(baseArtworkUrl);
   useEffect(() => {
+    if (previousBaseUrlRef.current === baseArtworkUrl) return;
+    previousBaseUrlRef.current = baseArtworkUrl;
     setRetryCount(0);
     setLoadedArtworkUrl(null);
   }, [baseArtworkUrl]);
 
   useEffect(() => {
     if (!artworkUrl || artworkIndex < artworkCandidates.length || proxiedArtworkUrl) return;
+    // Every candidate already failed for this source once; re-walking earns the same 404s.
+    if (hasArtworkFailed(artworkUrl)) return;
 
-    let objectUrl: string | null = null;
     let active = true;
 
-    void tauriFetch(artworkUrl, {
-      headers: {
-        Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-      },
-    })
-      .then((response) => {
-        if (!response.ok) throw new Error(`Artwork request failed with HTTP ${response.status}.`);
-        return response.blob();
-      })
-      .then((blob) => {
-        objectUrl = URL.createObjectURL(blob);
-        if (!active) {
-          URL.revokeObjectURL(objectUrl);
-          return;
-        }
-        // Handed to the cache, which now owns revoking it — see the unmount note below.
-        rememberResolvedArtworkUrl(artworkUrl, objectUrl, { ownsObjectUrl: true });
-        objectUrl = null;
-        setProxiedArtworkUrl(getResolvedArtworkUrl(artworkUrl) ?? null);
-      })
-      .catch(() => {
-        if (active) setProxiedArtworkUrl(null);
+    /*
+     * Shared per source URL by the cache, so a screen of rows on the same album issues one
+     * proxy request between them rather than one each. The blob is owned by the cache and
+     * deliberately survives this unmount — that is what makes a re-scroll free.
+     */
+    void resolveArtworkThroughProxy(artworkUrl, async (url) => {
+      const response = await tauriFetch(url, {
+        headers: {
+          Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        },
       });
+      if (!response.ok) throw new Error(`Artwork request failed with HTTP ${response.status}.`);
+      return response.blob();
+    }).then((objectUrl) => {
+      if (active) setProxiedArtworkUrl(objectUrl);
+    });
 
     return () => {
       active = false;
-      // Only revokes a blob the cache never took ownership of; a cached one stays alive so
-      // the next mount reuses it instead of re-downloading.
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [artworkCandidates.length, artworkIndex, artworkUrl, proxiedArtworkUrl]);
 
@@ -165,6 +182,14 @@ export function TrackArtwork({
           }}
           onError={() => {
             setLoadedArtworkUrl(null);
+            /*
+             * A cached resolution that fails is stale — the URL worked once and no longer does.
+             * Dropping it rebuilds the full candidate ladder next time instead of retrying the
+             * same dead URL on every mount from here on.
+             */
+            if (artworkUrl && baseArtworkUrl === getResolvedArtworkUrl(artworkUrl)) {
+              forgetResolvedArtworkUrl(artworkUrl);
+            }
             if (retryOnError && retryCount < ARTWORK_RETRY_DELAYS_MS.length) {
               if (retryTimerRef.current !== null) {
                 window.clearTimeout(retryTimerRef.current);

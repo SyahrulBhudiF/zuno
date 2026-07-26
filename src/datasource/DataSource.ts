@@ -11,6 +11,7 @@ import type {
   SearchResults,
   TrackPage,
   Track,
+  TrackRating,
 } from "./types";
 
 export type StreamData = {
@@ -60,6 +61,8 @@ export abstract class DataSource {
   ): Promise<"added" | "already-present">;
   removeTrackFromPlaylist?(track: Track, playlist: Playlist): Promise<void>;
   setTrackLiked?(track: Track, liked: boolean): Promise<void>;
+  /** Three-valued rating. Sources that only support liking may implement setTrackLiked alone. */
+  setTrackRating?(track: Track, rating: TrackRating): Promise<void>;
   getRecommendations?(seed: Track, onUpdate?: (tracks: Track[]) => void): Promise<Track[]>;
   getBrowsePage?(target: BrowseTarget): Promise<BrowsePage>;
   getLyrics?(track: Track): Promise<Lyrics | null>;

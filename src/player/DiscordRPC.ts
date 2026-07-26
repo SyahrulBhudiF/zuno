@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { logInternalDebug, logInternalWarn } from "../internal/logging";
+import {
+  getDiscordPresenceEnabled,
+  setDiscordPresenceEnabled,
+} from "../ui/settings/discord";
 
 export interface DiscordPresenceData {
   title: string;
@@ -81,7 +85,13 @@ function sanitizePresenceData(data: DiscordPresenceData): DiscordPresenceData {
  * Calls Tauri commands that handle the actual Discord connection in Rust
  */
 export class DiscordRpcService {
-  private static isEnabled = true;
+  /**
+   * Read per call rather than cached, so toggling the setting takes effect on the next track
+   * update without anything having to notify this service.
+   */
+  private static get isEnabled(): boolean {
+    return getDiscordPresenceEnabled();
+  }
 
   /**
    * Initialize Discord RPC
@@ -89,6 +99,25 @@ export class DiscordRpcService {
    */
   static async init(): Promise<void> {
     logInternalDebug("Discord.init", { message: "Rust backend will handle connection" });
+  }
+
+  /**
+   * Stops publishing presence and wipes whatever is already showing.
+   *
+   * Turning the setting off has to clear as well as stop: presence persists on Discord's side
+   * until something replaces it, so without this the last track stays on the user's profile
+   * indefinitely — the opposite of what switching it off is asking for.
+   */
+  static async setEnabled(enabled: boolean): Promise<void> {
+    setDiscordPresenceEnabled(enabled);
+    if (enabled) return;
+
+    try {
+      await invoke("discord_rpc_clear");
+      logInternalDebug("Discord.setEnabled cleared presence", {});
+    } catch (error) {
+      logInternalWarn("Discord.setEnabled.clearFailed", error as Record<string, unknown>);
+    }
   }
 
   /**

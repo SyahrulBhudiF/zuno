@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
-import { Loader } from "@/components/motion/loader";
+import { SpinnerSteps } from "@/components/motion/loader";
 import { ArrowLeftIcon, DownloadIcon } from "@/ui/icons";
 import type {
   Album,
@@ -274,6 +274,8 @@ export function BrowsePage({
                       onSelect={() => playShelfTrack([track], track)}
                       onContextMenu={(event) => openTrackMenu(event, track)}
                       showDownload
+
+                      showRating
                       className="opacity-70"
                       trailing={
                         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
@@ -305,6 +307,8 @@ export function BrowsePage({
                   onQuickAdd={() => openPlaylistPicker(entry.track)}
                   onQuickAddToQueue={() => playerController.addToQueue(entry.track)}
                   showDownload
+
+                  showRating
                   trailing={
                     <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                       {formatSize(entry.byteLength)}
@@ -319,7 +323,7 @@ export function BrowsePage({
         <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>
       ) : page === null ? (
         <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
-          <Loader variant="spinner" size={18} />
+          <SpinnerSteps size={18} color="currentColor" />
           Loading {SURFACES.find((item) => item.value === surface)?.label}...
         </div>
       ) : page.shelves.length === 0 ? (
@@ -347,6 +351,8 @@ export function BrowsePage({
                     onQuickAdd={() => openPlaylistPicker(track)}
                     onQuickAddToQueue={() => playerController.addToQueue(track)}
                     showDownload
+
+                    showRating
                   />
                 ))}
               </div>

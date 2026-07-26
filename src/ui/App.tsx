@@ -77,6 +77,8 @@ import {
   OnboardingCompleteToast,
   KeychainNotice,
   OnboardingWelcome,
+  nextOnboardingStep,
+  previousOnboardingStep,
   type OnboardingStep,
 } from "./components/Onboarding";
 import { isLinux, isMacOS } from "./platform";
@@ -1083,6 +1085,27 @@ export default function App() {
     markOnboardingComplete(false);
   };
 
+  /*
+   * Skipping advances the tour without performing the step.
+   *
+   * Deliberately not "do it for them": creating the tab or playing the track on their behalf
+   * would make Skip an action button, and someone skipping a step is saying they do not want
+   * that thing to happen. Later steps may then have nothing to point at, which is fine — they
+   * are skippable too, and the last one finishes the tour.
+   */
+  const skipOnboardingStep = () => {
+    if (!onboardingStep) return;
+    const next = nextOnboardingStep(onboardingStep);
+    if (next) setOnboardingStep(next);
+    else markOnboardingComplete(true);
+  };
+
+  const backOnboardingStep = () => {
+    if (!onboardingStep) return;
+    const previous = previousOnboardingStep(onboardingStep);
+    if (previous) setOnboardingStep(previous);
+  };
+
   const handlePlaySearchTrack = async (track: Track) => {
     const stepAtStart = onboardingStep;
     const tabAtStart = activeTabId;
@@ -1903,7 +1926,12 @@ useEffect(() => {
             <OnboardingWelcome />
           )}
           {loadingScreenState === "hidden" && onboardingComplete === false && !showOnboardingWelcome && onboardingStep && (
-            <Onboarding step={onboardingStep} onSkip={finishOnboarding} />
+            <Onboarding
+              step={onboardingStep}
+              onSkip={finishOnboarding}
+              onSkipStep={skipOnboardingStep}
+              onBack={backOnboardingStep}
+            />
           )}
           {showOnboardingComplete && <OnboardingCompleteToast />}
         </>

@@ -953,7 +953,7 @@ export function Sidebar({
         */}
         <div
           className={cn(
-            "flex shrink-0 items-center gap-0.5 rounded-full bg-card/40 p-0.5",
+            "flex shrink-0 items-center gap-0.5 rounded-full bg-card/40 p-0.5 border border-border",
             shouldHideText ? "mx-auto flex-col" : "mx-2",
           )}
           role="group"
@@ -988,7 +988,7 @@ export function Sidebar({
                          mode and the darker one in light, so the active pill reads as raised
                          in both. Against `bg-background` it went *darker* than its own track
                          in dark mode, which reads as disabled rather than selected. */
-                      className="absolute inset-0 -z-10 rounded-full bg-card shadow-sm ring-1 ring-inset ring-border/60"
+                      className="absolute inset-0 -z-10 rounded-full bg-primary/10 shadow-sm ring-1 ring-inset ring-border/60"
                     />
                   )}
                   <view.icon size={16} aria-hidden="true" />

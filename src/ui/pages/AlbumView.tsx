@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { Loader } from "@/components/motion/loader";
+import { SpinnerSteps } from "@/components/motion/loader";
 import { CloseIcon, SearchIcon } from "@/ui/icons";
 import { TrackRow } from "../components/TrackRow";
 import { useNowPlaying } from "../hooks/useNowPlaying";
@@ -11,7 +11,7 @@ import { shuffleTracks } from "../../player/shuffleTracks";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
 import { SelectionBar } from "../components/SelectionBar";
 import { useTrackSelection } from "../hooks/useTrackSelection";
-import { queueDownloads } from "../../player/offlineStore";
+import { queueDownloads, useOfflineState } from "../../player/offlineStore";
 import { ArtistLinks } from "../components/ArtistLinks";
 import { formatCollectionMeta, MediaHeader } from "../components/MediaHeader";
 import { useKeyboardShortcuts } from "../settings/keyboardShortcuts";
@@ -42,7 +42,7 @@ function getTrackRenderKey(track: Track, index: number): string {
 function AlbumLoadingSpinner({ label }: { label: string }) {
   return (
     <div className="grid place-items-center px-2 py-16 text-muted-foreground" role="status" aria-live="polite" aria-label={label}>
-      <Loader variant="spinner" size={18} />
+      <SpinnerSteps size={18} color="currentColor" />
     </div>
   );
 }
@@ -57,6 +57,20 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
     playbackOrderMode,
   } = useNowPlaying();
   const [tracks, setTracks] = useState<Track[]>([]);
+  /*
+   * Derived from the offline store so the header button can say what pressing it would do.
+   * Recomputed from entries rather than tracked separately: a count kept in parallel with the
+   * store is a count that drifts the moment a download finishes elsewhere.
+   */
+  const offlineState = useOfflineState();
+  const downloadCounts = useMemo(
+    () => ({
+      downloaded: tracks.filter((track) => Boolean(offlineState.entries[track.id])).length,
+      total: tracks.length,
+    }),
+    [tracks, offlineState.entries],
+  );
+
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [albumSearchQuery, setAlbumSearchQuery] = useState("");
@@ -179,6 +193,8 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
         isLooping={isCurrentCollection && playbackOrderMode === "repeat-all"}
         onAddToQueue={() => playerController.addTracksToQueue(tracks)}
         onAddToPlaylist={() => openPlaylistPicker(tracks[0], tracks)}
+        onDownload={() => queueDownloads(tracks)}
+        downloadCounts={downloadCounts}
       />
       {isLoading && <AlbumLoadingSpinner label="Loading songs" />}
       {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}
@@ -243,6 +259,8 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
                       void playerController.playTrackById(track.id, visibleTracks);
                     }}
                     showDownload
+
+                    showRating
                     onQuickAddToQueue={() => playerController.addToQueue(track)}
                     onQuickAdd={() => openPlaylistPicker(track)}
                     onContextMenu={(event) => openTrackMenu(event, track)}

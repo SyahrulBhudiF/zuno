@@ -4,8 +4,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
-import { GitHubIcon, LoginIcon, SettingsIcon } from "@/ui/icons";
+import { DiscordIcon, GitHubIcon, LastFmIcon, LoginIcon, SettingsIcon } from "@/ui/icons";
 import { GITHUB_REPOSITORY_URL } from "../links";
+import { DiscordRpcService } from "../../player/DiscordRPC";
+import { useDiscordPresenceEnabled } from "../settings/discord";
+import { setLastFmScrobblingEnabled, useLastFmScrobblingEnabled } from "../settings/lastfm";
 import { logInternalError, logInternalInfo, logInternalWarn } from "../../internal/logging";
 import { MusicTabs } from "./MusicTabs";
 import type { Tab } from "../types/tab";
@@ -60,6 +63,8 @@ export function TitleBar({
   const [isAccountPanelOpen, setIsAccountPanelOpen] = useState(false);
   const nativeWindowControls = useNativeWindowControls();
   const windowsStyleWindowControls = useWindowsStyleWindowControls();
+  const discordEnabled = useDiscordPresenceEnabled();
+  const lastFmEnabled = useLastFmScrobblingEnabled();
   const homePointerRef = useRef<{
     pointerId: number;
     startX: number;
@@ -198,6 +203,61 @@ export function TitleBar({
         chrome the window buttons disappear but these still belong here.
       */}
       <div className="flex shrink-0 items-center gap-1 pl-2 pr-1" aria-label="App actions">
+        {/*
+          Integration toggles.
+
+          Both share what the user is listening to with a third party, which is exactly the kind
+          of thing worth being able to stop in one click rather than three — hence a toolbar
+          toggle rather than only a setting buried in a panel. Dimmed when off so the current
+          state reads at a glance without a label.
+        */}
+        <Tooltip
+          side="bottom"
+          content={discordEnabled ? "Discord presence on" : "Discord presence off"}
+        >
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => void DiscordRpcService.setEnabled(!discordEnabled)}
+            aria-pressed={discordEnabled}
+            aria-label={
+              discordEnabled ? "Turn off Discord presence" : "Turn on Discord presence"
+            }
+          >
+            <DiscordIcon
+              size={16}
+              aria-hidden="true"
+              className={cn(
+                "transition-opacity",
+                discordEnabled ? "opacity-100 text-primary" : "opacity-40",
+              )}
+            />
+          </Button>
+        </Tooltip>
+        <Tooltip
+          side="bottom"
+          content={lastFmEnabled ? "Last.fm scrobbling on" : "Last.fm scrobbling off"}
+        >
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setLastFmScrobblingEnabled(!lastFmEnabled)}
+            aria-pressed={lastFmEnabled}
+            aria-label={
+              lastFmEnabled ? "Turn off Last.fm scrobbling" : "Turn on Last.fm scrobbling"
+            }
+          >
+            <LastFmIcon
+              size={16}
+              aria-hidden="true"
+              className={cn(
+                "transition-opacity",
+                lastFmEnabled ? "opacity-100 text-primary" : "opacity-40",
+              )}
+            />
+          </Button>
+        </Tooltip>
+
         <Tooltip side="bottom" content="Source on GitHub">
           <Button
             variant='ghost'

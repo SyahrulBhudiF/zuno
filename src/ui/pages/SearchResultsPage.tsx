@@ -1,6 +1,6 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { Loader } from "@/components/motion/loader";
+import { SpinnerSteps } from "@/components/motion/loader";
 import { PlayActiveIcon } from "@/ui/icons";
 import type {
   Album,
@@ -58,7 +58,7 @@ function buildFlatItems(results: SearchResults, songsFirst: boolean): Selectable
 function SearchLoadingSpinner() {
   return (
     <div className="grid place-items-center px-2 py-16 text-muted-foreground" role="status" aria-live="polite" aria-label="Searching">
-      <Loader variant="spinner" size={30} />
+      <SpinnerSteps size={30} color="currentColor" />
     </div>
   );
 }

@@ -55,6 +55,12 @@ export interface Playlist {
   localPaths?: string[];
 }
 
+/**
+ * YouTube stores a per-track rating, not a like flag: liking a disliked song clears the
+ * dislike, and both clear to "none". A boolean cannot express that middle state.
+ */
+export type TrackRating = "like" | "dislike" | "none";
+
 export interface Artist {
   id: string;
   name: string;

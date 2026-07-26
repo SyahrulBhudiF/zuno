@@ -197,6 +197,8 @@ export function LibraryPage({
                 onQuickAdd={() => openPlaylistPicker(track)}
                 onQuickAddToQueue={() => playerController.addToQueue(track)}
                 showDownload
+
+                showRating
               />
             ))}
           </div>

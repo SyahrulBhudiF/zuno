@@ -1,24 +1,38 @@
 /**
  * Remembers which artwork URL actually loaded, per source URL.
  *
- * Artwork is served from several candidate URLs (the original, plus resized YouTube
- * variants) and falls back to fetching the bytes through Rust when the webview cannot load
- * the image directly. Without this cache every mount restarts that walk from the top: a
- * playlist scrolled twice re-requests every failing candidate again, and the proxied blobs
- * were being revoked on unmount, so they were re-downloaded in full.
+ * Artwork is served from several candidate URLs (the original, plus resized YouTube variants)
+ * and falls back to fetching the bytes through Rust when the webview cannot load the image
+ * directly. Without this cache every mount restarts that walk from the top: a playlist scrolled
+ * twice re-requests every failing candidate again, and proxied blobs were revoked on unmount,
+ * so they were re-downloaded in full.
  *
- * The cache is keyed by the *source* URL the app was given, and stores whatever finally
- * worked, so a remount paints from the resolved URL on the first frame.
+ * Four things this holds, each for a different failure it prevents:
  *
- * Bounded because the values can be object URLs holding decoded image bytes. Insertion
- * order gives LRU for free: reading re-inserts, so eviction takes the coldest entry, and
- * only then is an object URL revoked.
+ * - **Resolved URLs** — what finally worked, so a remount paints on the first frame. Bounded,
+ *   with insertion order giving LRU for free: reading re-inserts, so eviction takes the coldest
+ *   entry, and only then is an object URL revoked.
+ * - **In-flight promises** — twenty rows sharing one album cover used to issue twenty identical
+ *   proxy fetches, because nothing recorded that the first was already running.
+ * - **Failures** — a source whose every candidate 404s would otherwise re-walk the entire
+ *   ladder on every single mount, forever.
+ * - **A persisted copy** of the plain (non-blob) resolutions, so a restart does not re-derive
+ *   what was already learned. Object URLs are deliberately excluded: they die with the page.
  */
+
 const MAX_ENTRIES = 500;
+const MAX_PERSISTED_ENTRIES = 300;
+const STORAGE_KEY = "zuno:artwork-resolved-v1";
 
 const resolved = new Map<string, string>();
 /** Values that own a blob and must be revoked when evicted. */
 const ownedObjectUrls = new Set<string>();
+/** Sources where every candidate and the proxy all failed. */
+const failed = new Set<string>();
+/** Proxy fetches already running, keyed by source URL, so callers share one request. */
+const inFlight = new Map<string, Promise<string | null>>();
+
+let persistTimer: number | null = null;
 
 export function getResolvedArtworkUrl(sourceUrl: string): string | undefined {
   const hit = resolved.get(sourceUrl);
@@ -42,6 +56,8 @@ export function rememberResolvedArtworkUrl(
   resolved.delete(sourceUrl);
   resolved.set(sourceUrl, workingUrl);
   if (options.ownsObjectUrl) ownedObjectUrls.add(workingUrl);
+  // Anything that resolves is, by definition, no longer a failure.
+  failed.delete(sourceUrl);
 
   while (resolved.size > MAX_ENTRIES) {
     const oldestKey = resolved.keys().next().value;
@@ -50,6 +66,73 @@ export function rememberResolvedArtworkUrl(
     resolved.delete(oldestKey);
     if (oldestValue !== undefined) releaseValue(oldestValue);
   }
+
+  schedulePersist();
+}
+
+/**
+ * Drops a resolution that has stopped working.
+ *
+ * Without this a URL that resolved once and later went dead stays cached forever — and now
+ * that resolutions persist, it would survive restarts too, pinning that cover to the proxy
+ * path permanently. Forgetting it lets the candidate ladder be walked again from scratch.
+ */
+export function forgetResolvedArtworkUrl(sourceUrl: string): void {
+  const previous = resolved.get(sourceUrl);
+  if (previous === undefined) return;
+  resolved.delete(sourceUrl);
+  releaseValue(previous);
+  schedulePersist();
+}
+
+/** True once every candidate and the proxy have failed for this source. */
+export function hasArtworkFailed(sourceUrl: string): boolean {
+  return failed.has(sourceUrl);
+}
+
+export function rememberArtworkFailure(sourceUrl: string): void {
+  // Bounded the same way, and by the same reasoning, as the resolved map.
+  if (failed.size >= MAX_ENTRIES) {
+    const oldest = failed.values().next().value;
+    if (oldest !== undefined) failed.delete(oldest);
+  }
+  failed.add(sourceUrl);
+}
+
+/**
+ * Fetches artwork bytes through the proxy, at most once per source URL.
+ *
+ * The promise is shared, so a screen full of rows showing the same cover issues one request
+ * rather than one each. The result is cached before any caller sees it, so whoever loses the
+ * race still reads a hit rather than starting a second fetch.
+ */
+export function resolveArtworkThroughProxy(
+  sourceUrl: string,
+  fetchBlob: (url: string) => Promise<Blob>,
+): Promise<string | null> {
+  const cached = getResolvedArtworkUrl(sourceUrl);
+  if (cached) return Promise.resolve(cached);
+
+  const existing = inFlight.get(sourceUrl);
+  if (existing) return existing;
+
+  const request = fetchBlob(sourceUrl)
+    .then((blob) => {
+      const objectUrl = URL.createObjectURL(blob);
+      // Handed to the cache, which owns revoking it from here on.
+      rememberResolvedArtworkUrl(sourceUrl, objectUrl, { ownsObjectUrl: true });
+      return objectUrl;
+    })
+    .catch(() => {
+      rememberArtworkFailure(sourceUrl);
+      return null;
+    })
+    .finally(() => {
+      inFlight.delete(sourceUrl);
+    });
+
+  inFlight.set(sourceUrl, request);
+  return request;
 }
 
 function releaseValue(value: string): void {
@@ -58,8 +141,79 @@ function releaseValue(value: string): void {
   URL.revokeObjectURL(value);
 }
 
+/**
+ * Restores the plain resolutions learned in previous sessions.
+ *
+ * Cheap and worth it: without it, every restart re-walks the candidate ladder for every cover
+ * the user has ever seen. Failures are not persisted — a 404 today may be a valid image
+ * tomorrow, and a stored "this is broken" would be self-fulfilling.
+ */
+export function hydrateArtworkCache(): void {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const entries: unknown = JSON.parse(raw);
+    if (!Array.isArray(entries)) return;
+
+    for (const entry of entries) {
+      if (!Array.isArray(entry) || entry.length !== 2) continue;
+      const [source, working] = entry;
+      if (typeof source !== "string" || typeof working !== "string") continue;
+      // A blob URL from a previous session points at nothing; skip rather than paint a broken image.
+      if (working.startsWith("blob:")) continue;
+      resolved.set(source, working);
+    }
+  } catch {
+    // A corrupt or unavailable store is not worth failing a render over.
+  }
+}
+
+function schedulePersist(): void {
+  if (persistTimer !== null) return;
+  // Batched: resolutions arrive one per image, and a playlist scroll would otherwise write
+  // the whole map to localStorage dozens of times in a second.
+  persistTimer = window.setTimeout(() => {
+    persistTimer = null;
+    persistNow();
+  }, 2000);
+}
+
+function persistNow(): void {
+  try {
+    const persistable: Array<[string, string]> = [];
+    // Walked newest-first so the cap keeps the warmest entries.
+    for (const [source, working] of [...resolved.entries()].reverse()) {
+      if (working.startsWith("blob:")) continue;
+      persistable.push([source, working]);
+      if (persistable.length >= MAX_PERSISTED_ENTRIES) break;
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable.reverse()));
+  } catch {
+    // Quota or privacy mode; the in-memory cache still works for this session.
+  }
+}
+
 /** Used when clearing app data, so stale blobs do not outlive a cache reset. */
 export function clearArtworkCache(): void {
   for (const value of resolved.values()) releaseValue(value);
   resolved.clear();
+  failed.clear();
+  inFlight.clear();
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Nothing actionable; the in-memory cache is already cleared.
+  }
 }
+
+/** Exposed for the self-check only. */
+export const __artworkCacheForTest = {
+  reset(): void {
+    resolved.clear();
+    ownedObjectUrls.clear();
+    failed.clear();
+    inFlight.clear();
+  },
+  resolvedSize: () => resolved.size,
+  inFlightSize: () => inFlight.size,
+};

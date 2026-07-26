@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
-import { ListIcon, PauseActiveIcon, PlayActiveIcon, PlaylistAddIcon, RepeatActiveIcon, ShuffleActiveIcon } from "@/ui/icons";
+import { CheckIcon, DownloadIcon, ListIcon, PauseActiveIcon, PlayActiveIcon, PlaylistAddIcon, RepeatActiveIcon, ShuffleActiveIcon } from "@/ui/icons";
 import { SpinnerSteps } from "@/components/motion/loader";
 import { TrackArtwork } from "./TrackArtwork";
 import { setAmbientArtwork } from "../stores/ambientArtworkStore";
@@ -61,6 +61,25 @@ interface MediaHeaderProps {
   onAddToQueue?: () => void;
   /** Adds every track in this collection to a playlist, via the usual picker. */
   onAddToPlaylist?: () => void;
+  /** Queues every not-yet-downloaded track in this collection for offline use. */
+  onDownload?: () => void;
+  /**
+   * The collection is still being paged in before the download can start.
+   *
+   * Worth showing: on a long playlist this takes several round trips, and a button that looks
+   * idle after a click reads as broken and gets clicked again.
+   */
+  downloadBusy?: boolean;
+  /**
+   * How much of this collection is already offline, so the button can say what pressing it
+   * would actually do — "all 12 downloaded" is a different message from "download 9 songs".
+   */
+  downloadCounts?: {
+    downloaded: number;
+    total: number;
+    /** True while pages remain unfetched, so `total` is a floor rather than the real total. */
+    isPartial?: boolean;
+  };
   /** Plays from the top with repeat-all on, so the collection restarts instead of ending. */
   onPlayInLoop?: () => void;
   /** Reflects repeat-all being active for this collection. */
@@ -99,6 +118,9 @@ export function MediaHeader({
   onShuffle,
   onAddToQueue,
   onAddToPlaylist,
+  onDownload,
+  downloadCounts,
+  downloadBusy = false,
   onPlayInLoop,
   isLooping = false,
   actionsDisabled = false,
@@ -235,6 +257,50 @@ export function MediaHeader({
               </button>
             </Tooltip>
           ) : null}
+
+          {onDownload ? (() => {
+            /*
+             * Disabled once everything here is already offline. Re-queueing downloaded tracks
+             * would be a no-op the user cannot see, so the button says so instead of appearing
+             * to do nothing.
+             */
+            const total = downloadCounts?.total ?? 0;
+            const downloaded = downloadCounts?.downloaded ?? 0;
+            const remaining = Math.max(0, total - downloaded);
+            // Never "all downloaded" while pages remain unfetched — the unseen ones are not.
+            const allDownloaded = total > 0 && remaining === 0 && !downloadCounts?.isPartial;
+
+            return (
+              <Tooltip
+                content={
+                  allDownloaded
+                    ? "Every song here is downloaded"
+                    : downloadCounts?.isPartial
+                      ? "Download every song here for offline"
+                      : remaining > 0
+                        ? `Download ${remaining} song${remaining === 1 ? "" : "s"} for offline`
+                        : "Download for offline"
+                }
+              >
+                <button
+                  type="button"
+                  disabled={actionsDisabled || allDownloaded || downloadBusy}
+                  onClick={onDownload}
+                  aria-busy={downloadBusy}
+                  aria-label={allDownloaded ? "Already downloaded" : "Download for offline"}
+                  className="relative flex size-11 items-center justify-center rounded-full bg-card text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {downloadBusy ? (
+                    <SpinnerSteps size={18} color="currentColor" />
+                  ) : allDownloaded ? (
+                    <CheckIcon size={18} aria-hidden="true" className="text-primary" />
+                  ) : (
+                    <DownloadIcon size={18} aria-hidden="true" />
+                  )}
+                </button>
+              </Tooltip>
+            );
+          })() : null}
 
           {actions}
         </div>

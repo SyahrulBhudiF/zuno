@@ -108,6 +108,8 @@ import {
   subscribeToLocalPlaylists,
 } from "../../player/localPlaylists";
 import { LastFmService, type LastFmAuthStart, type LastFmSessionStatus } from "../../player/LastFm";
+import { DiscordRpcService } from "../../player/DiscordRPC";
+import { useDiscordPresenceEnabled } from "../settings/discord";
 import {
   setLastFmScrobblingEnabled,
   useLastFmScrobblingEnabled,
@@ -275,7 +277,7 @@ const SETTINGS_TABS: Array<{
   description: string;
   icon: typeof UserIcon;
 }> = [
-  { id: "about", label: "Account", description: "Sign-in, Last.fm, updates", icon: UserIcon },
+  { id: "about", label: "Account", description: "Sign-in, integrations, updates", icon: UserIcon },
   { id: "appearance", label: "Appearance", description: "Theme and motion", icon: PaletteIcon },
   { id: "system", label: "Library", description: "Cache and local files", icon: FolderIcon },
   { id: "window", label: "Window", description: "Chrome and mini player", icon: QueuePanelIcon },
@@ -362,6 +364,7 @@ export function SettingsPage({
   );
   const [clearingDownloads, setClearingDownloads] = useState(false);
   const lastFmScrobblingEnabled = useLastFmScrobblingEnabled();
+  const discordPresenceEnabled = useDiscordPresenceEnabled();
   const localPlaylists = useSyncExternalStore(
     subscribeToLocalPlaylists,
     getLocalPlaylists,
@@ -887,6 +890,21 @@ export function SettingsPage({
               </div>
 
               {lastFmError && <p className="text-sm text-destructive">{lastFmError}</p>}
+            </div>
+          </section>
+
+          <section className={SETTINGS_CARD} aria-labelledby="discord-settings-title">
+            <h2 className="text-lg font-semibold text-foreground" id="discord-settings-title">
+              Discord
+            </h2>
+
+            <div className="flex flex-col gap-5">
+              <SettingToggle
+                title="Show what you're playing"
+                description="Publishes the current track, artist and artwork to your Discord profile. Turning this off clears whatever is showing there now."
+                checked={discordPresenceEnabled}
+                onCheckedChange={(enabled) => void DiscordRpcService.setEnabled(enabled)}
+              />
             </div>
           </section>
 

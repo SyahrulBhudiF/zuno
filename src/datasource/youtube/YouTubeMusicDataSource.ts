@@ -22,6 +22,7 @@ import type {
   SearchResults,
   TrackPage,
   Track,
+  TrackRating,
 } from "../types";
 import { collectArtworkCandidates, getVideoArtworkFallback, selectArtworkUrl } from "./artwork";
 import { isTrackDownloaded } from "../../player/offlineStore";
@@ -164,6 +165,7 @@ type RawLikeEndpoint = {
   };
   params?: string;
   likeParams?: string;
+  dislikeParams?: string;
   removeLikeParams?: string;
 };
 
@@ -1063,7 +1065,10 @@ export class YouTubeMusicDataSource extends DataSource {
     return [...byId.values()];
   }
 
-  private findLikeEndpoint(root: unknown, status: "LIKE" | "INDIFFERENT"): RawLikeEndpoint | null {
+  private findLikeEndpoint(
+    root: unknown,
+    status: "LIKE" | "DISLIKE" | "INDIFFERENT",
+  ): RawLikeEndpoint | null {
     const seen = new WeakSet<object>();
     let match: RawLikeEndpoint | null = null;
 
@@ -1447,16 +1452,24 @@ export class YouTubeMusicDataSource extends DataSource {
     });
   }
 
-  private async executeTrackLikeCommand(
+  /**
+   * Sends one of YouTube's three ratings for a track.
+   *
+   * The status doubles as the lookup key: /next carries a `likeEndpoint` per rating, and the
+   * one whose `status` matches is the command to run. That is why dislike needed no new
+   * discovery — only a third branch for which endpoint, params and path to use.
+   */
+  private async executeTrackRatingCommand(
     musicClient: Innertube,
     trackId: string,
-    liked: boolean,
+    rating: TrackRating,
   ) {
     const musicNextResponse = await musicClient.actions.execute("/next", {
       videoId: trackId,
       client: "YTMUSIC",
     });
-    const status = liked ? "LIKE" : "INDIFFERENT";
+    const status: "LIKE" | "DISLIKE" | "INDIFFERENT" =
+      rating === "like" ? "LIKE" : rating === "dislike" ? "DISLIKE" : "INDIFFERENT";
     let endpoint = this.findLikeEndpoint(musicNextResponse.data, status);
     let endpointSource = "music";
 
@@ -1470,19 +1483,31 @@ export class YouTubeMusicDataSource extends DataSource {
     }
 
     if (!endpoint?.target) {
-      logInternalError("YouTubeMusicDataSource.executeTrackLikeCommand missing endpoint", {
+      logInternalError("YouTubeMusicDataSource.executeTrackRatingCommand missing endpoint", {
         trackId,
         status,
       });
       throw new Error(`YouTube did not return a ${status} command for this song.`);
     }
 
-    const params = liked
-      ? endpoint.likeParams ?? endpoint.params
-      : endpoint.removeLikeParams ?? endpoint.params;
-    const path = liked ? "/like/like" : "/like/removelike";
+    const params =
+      rating === "like"
+        ? endpoint.likeParams ?? endpoint.params
+        : rating === "dislike"
+          ? endpoint.dislikeParams ?? endpoint.params
+          : endpoint.removeLikeParams ?? endpoint.params;
+    /*
+     * `removelike` clears a dislike as well as a like — the endpoint is named for the like it
+     * was built around, but YouTube treats it as "set rating to indifferent".
+     */
+    const path =
+      rating === "like"
+        ? "/like/like"
+        : rating === "dislike"
+          ? "/like/dislike"
+          : "/like/removelike";
 
-    logInternalInfo("YouTubeMusicDataSource.executeTrackLikeCommand", {
+    logInternalInfo("YouTubeMusicDataSource.executeTrackRatingCommand", {
       trackId,
       status,
       hasParams: Boolean(params),
@@ -3564,24 +3589,35 @@ export class YouTubeMusicDataSource extends DataSource {
     }
   }
 
+  /** Kept for callers that only deal in likes; the rating path is the single implementation. */
   async setTrackLiked(track: Track, liked: boolean): Promise<void> {
+    await this.setTrackRating(track, liked ? "like" : "none");
+  }
+
+  async setTrackRating(track: Track, rating: TrackRating): Promise<void> {
     if (!this.musicCookie) {
-      throw new Error("Sign in to like songs.");
+      throw new Error("Sign in to rate songs.");
     }
 
-    logInternalInfo("YouTubeMusicDataSource.setTrackLiked start", {
+    logInternalInfo("YouTubeMusicDataSource.setTrackRating start", {
       trackId: track.id,
-      liked,
+      rating,
     });
 
     try {
       const client = await this.getMusicClient();
-      const response = await this.executeTrackLikeCommand(client, track.id, liked);
+      const response = await this.executeTrackRatingCommand(client, track.id, rating);
 
       if (!response.success) {
         throw new Error(`YouTube returned HTTP ${response.status_code}.`);
       }
 
+      /*
+       * Liked Songs mirrors the rating locally so the library does not need a refetch. Only a
+       * like adds; both "dislike" and "none" remove, because a disliked song is not liked —
+       * leaving it in the list would show it as liked until the next full sync.
+       */
+      const liked = rating === "like";
       const cachedLibrary = await getCachedJson<LibrarySnapshot>(LIBRARY_CACHE_KEY);
       if (cachedLibrary) {
         const likedSongs = liked
@@ -3603,18 +3639,22 @@ export class YouTubeMusicDataSource extends DataSource {
         );
       }
 
-      logInternalInfo("YouTubeMusicDataSource.setTrackLiked success", {
+      logInternalInfo("YouTubeMusicDataSource.setTrackRating success", {
         trackId: track.id,
-        liked,
+        rating,
       });
     } catch (error) {
-      logInternalError("YouTubeMusicDataSource.setTrackLiked failed", error, {
+      logInternalError("YouTubeMusicDataSource.setTrackRating failed", error, {
         trackId: track.id,
-        liked,
+        rating,
       });
-      throw new Error(liked
-        ? "YouTube Music could not like this song."
-        : "YouTube Music could not remove this like.");
+      throw new Error(
+        rating === "like"
+          ? "YouTube Music could not like this song."
+          : rating === "dislike"
+            ? "YouTube Music could not dislike this song."
+            : "YouTube Music could not clear this rating.",
+      );
     }
   }
 

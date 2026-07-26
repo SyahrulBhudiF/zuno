@@ -10,10 +10,17 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { CheckIcon, CloseIcon, HeartActiveIcon, HeartIcon, LinkIcon, ListIcon, PencilIcon, PlaylistAddIcon, PlaylistIcon, SearchIcon, SkipNextIcon, TrashIcon } from "@/ui/icons";
-import type { Playlist, Track } from "../../datasource/types";
+import { CheckIcon, CloseIcon, DownloadIcon, HeartActiveIcon, HeartIcon, LinkIcon, ListIcon, PencilIcon, PlaylistAddIcon, PlaylistIcon, SearchIcon, SkipNextIcon, TrashIcon } from "@/ui/icons";
+import type { Playlist, Track, TrackRating } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
 import { logInternalError } from "../../internal/logging";
+import {
+  cancelDownload,
+  getOfflineStatus,
+  queueDownload,
+  removeDownload,
+  useOfflineState,
+} from "../../player/offlineStore";
 import {
   playerController,
   useLibraryState,
@@ -55,6 +62,8 @@ interface TrackContextMenuValue {
   /** Pass `batch` to add several tracks at once; `track` is what the header shows. */
   openPlaylistPicker: (track: Track, batch?: Track[]) => void;
   toggleTrackLike: (track: Track) => Promise<void>;
+  /** Three-valued rating. toggleTrackLike is the like-only shorthand over the same path. */
+  rateTrack: (track: Track, rating: TrackRating) => Promise<void>;
 }
 
 interface TrackContextMenuProviderProps {
@@ -401,7 +410,15 @@ export function TrackContextMenuProvider({
     }
   };
 
+  /** Like-only shorthand, kept for callers that never deal in dislikes. */
   const toggleTrackLike = async (selectedTrack: Track) => {
+    await rateTrack(
+      selectedTrack,
+      libraryController.isTrackLiked(selectedTrack.id) ? "none" : "like",
+    );
+  };
+
+  const rateTrack = async (selectedTrack: Track, rating: TrackRating) => {
     if (selectedTrack.source === "local") return;
     if (libraryState.status === "signed-out" || !libraryState.library) {
       showToast("Sign in to like");
@@ -409,14 +426,22 @@ export function TrackContextMenuProvider({
     }
     if (libraryState.pendingLikeTrackIds.has(selectedTrack.id)) return;
 
-    const shouldLike = !libraryController.isTrackLiked(selectedTrack.id);
-    showPersistentToast(shouldLike ? "Liking..." : "Removing like...");
+    const pendingLabel =
+      rating === "like" ? "Liking..." : rating === "dislike" ? "Disliking..." : "Clearing...";
+    const doneLabel =
+      rating === "like"
+        ? "Added to Liked Songs"
+        : rating === "dislike"
+          ? "Disliked"
+          : "Rating cleared";
+
+    showPersistentToast(pendingLabel);
     try {
-      await libraryController.setTrackLiked(selectedTrack, shouldLike);
-      showToast(shouldLike ? "Added to Liked Songs" : "Removed from Liked Songs");
-    } catch (likeError) {
+      await libraryController.setTrackRating(selectedTrack, rating);
+      showToast(doneLabel);
+    } catch (ratingError) {
       showToast(
-        likeError instanceof Error ? likeError.message : "Unable to update this like.",
+        ratingError instanceof Error ? ratingError.message : "Unable to update this rating.",
         4000,
       );
     }
@@ -430,6 +455,20 @@ export function TrackContextMenuProvider({
     : false;
   const canLikeSelectedTrack = track?.source !== "local";
   const canCopySelectedTrackLink = track?.source !== "local";
+  /*
+   * Subscribed rather than read once: a download finishing while the menu is open should change
+   * the item from "Cancel download" to "Remove download" under the cursor, not go stale.
+   */
+  const offlineState = useOfflineState();
+  const selectedTrackOfflineStatus = track
+    ? offlineState.entries[track.id]
+      ? "ready"
+      : offlineState.downloadingId === track.id
+        ? "downloading"
+        : offlineState.queued.includes(track.id)
+          ? "queued"
+          : "absent"
+    : "absent";
   const canRemoveSelectedTrackFromPlaylist = Boolean(
     menuContext?.playlist
       && menuContext.playlist.isEditable !== false
@@ -439,7 +478,7 @@ export function TrackContextMenuProvider({
   );
 
   return (
-    <TrackContextMenuContext.Provider value={{ openTrackMenu, openPlaylistPicker, toggleTrackLike }}>
+    <TrackContextMenuContext.Provider value={{ openTrackMenu, openPlaylistPicker, toggleTrackLike, rateTrack }}>
       {children}
 
       {menuPosition && track && (
@@ -483,6 +522,42 @@ export function TrackContextMenuProvider({
               </span>
             </button>
           )}
+          {/*
+            Hidden for local files: they are already on disk, so "download for offline" would be
+            a no-op that implies otherwise. The label follows the track's real state so one item
+            covers download, cancel and remove rather than three that are mostly disabled.
+          */}
+          {track && track.source !== "local" && (
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              onClick={() => {
+                const selected = track;
+                const status = getOfflineStatus(selected.id);
+                setMenuPosition(null);
+                if (status === "ready") void removeDownload(selected.id);
+                else if (status === "queued" || status === "downloading") cancelDownload(selected.id);
+                else queueDownload(selected);
+              }}
+            >
+              {selectedTrackOfflineStatus === "ready" ? (
+                <CheckIcon size={18} aria-hidden="true" className="text-primary" />
+              ) : (
+                <DownloadIcon size={18} aria-hidden="true" />
+              )}
+              <span className="flex-1">
+                {selectedTrackOfflineStatus === "ready"
+                  ? "Remove download"
+                  : selectedTrackOfflineStatus === "downloading"
+                    ? "Cancel download"
+                    : selectedTrackOfflineStatus === "queued"
+                      ? "Remove from download queue"
+                      : "Download"}
+              </span>
+            </button>
+          )}
+
           {/* Only for files we can actually write to — a YouTube track has no tags to edit. */}
           {track?.source === "local" && track.localPath && (
             <button

@@ -149,6 +149,8 @@ export function HistoryPage({
                 onContextMenu={(event) => openTrackMenu(event, entry.track)}
                 onQuickAdd={() => openPlaylistPicker(entry.track)}
                 showDownload
+
+                showRating
                 onQuickAddToQueue={() => playerController.addToQueue(entry.track)}
                 trailing={
                   <span className="flex shrink-0 items-center gap-1">

@@ -17,16 +17,21 @@ import { hydrateAudioQualitySettings } from "./internal/audioQuality";
 import { notifyLocalPlaylistsChanged, syncLocalAudioWatcher } from "./player/localPlaylists";
 import { listen } from "@tauri-apps/api/event";
 import { hydrateLastFmSettings } from "./ui/settings/lastfm";
+import { hydrateDiscordSettings } from "./ui/settings/discord";
 import { hydrateKeyboardShortcuts } from "./ui/settings/keyboardShortcuts";
 import {
   hydrateMainWindowGeometry,
   restoreMainWindowGeometry,
 } from "./ui/settings/mainWindowGeometry";
 import { applyPlatformAttributes } from "./ui/platform";
+import { hydrateArtworkCache } from "./internal/artworkCache";
 import { DiscordRpcService } from "./player/DiscordRPC";
 import { hydratePlaybackSettings } from "./player/playbackSettings";
 
 logInternalInfo("main.bootstrap start");
+// Before React mounts: a resolution restored after first paint is a resolution that already
+// let its image flash the fallback icon.
+hydrateArtworkCache();
 applyPlatformAttributes();
 // Before React mounts: a late theme apply shows a flash of the wrong palette.
 applyTheme();
@@ -46,6 +51,7 @@ void Promise.all([
   hydrateTraySettings(),
   hydrateAudioQualitySettings(),
   hydrateLastFmSettings(),
+  hydrateDiscordSettings(),
   hydrateKeyboardShortcuts(),
   hydratePlaybackSettings(),
 ]).catch((error) => {

@@ -286,6 +286,8 @@ export function ArtistView({
                     }
                     onSelect={() => void playerController.playTrackById(track.id, page.allSongs)}
                     showDownload
+
+                    showRating
                     onQuickAddToQueue={() => playerController.addToQueue(track)}
                     onQuickAdd={() => openPlaylistPicker(track)}
                     onContextMenu={(event) => openTrackMenu(event, track)}
