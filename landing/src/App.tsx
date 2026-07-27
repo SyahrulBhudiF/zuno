@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { BrandIcon, OS_ICON } from "@/components/brandIcons";
 import { useLatestRelease } from "@/useLatestRelease";
 import { Downloads } from "@/components/Downloads";
-import { Features } from "@/components/Features";
 import { Hero } from "@/components/Hero";
 import { LinkButton, Mono, Section, cn } from "./components/ui";
 import { GITHUB_REPO, RELEASES_URL } from "./releases";
@@ -14,7 +13,7 @@ import { GITHUB_REPO, RELEASES_URL } from "./releases";
  * with its own fill there reads as a second surface stacked on the first. It takes a background
  * only once the hero has scrolled past and there is content underneath to separate itself from.
  */
-function Header() {
+export function Header() {
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
@@ -27,13 +26,16 @@ function Header() {
   return (
     <header
       className={cn(
-        "sticky top-0 z-50 transition-colors duration-300",
-        scrolled && "bg-background/80 backdrop-blur-md",
+        "sticky top-0 z-50 transition-colors duration-200 bg-inherit"
+
       )}
     >
-      <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-3 px-6">
-        <a className="flex items-center gap-2 text-base font-bold text-foreground" href="#top">
-          <img className="size-6" src="./logo.png" alt="" />
+      <div className={cn(
+        "sticky top-0 z-50 max-w-3xl transition-colors duration-200 bg-background/50",
+        scrolled && "bg-transparent backdrop-blur-md","mx-auto flex h-16    items-center gap-3 px-3 mt-2 border border-border rounded-3xl"
+      )}>
+        <a className="flex items-center gap-2 text-2xl font-bold text-foreground" href="#top">
+          <img className="size-10" src="./logo.png" alt="" />
           zuno_
         </a>
 
@@ -136,8 +138,9 @@ export function App() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <Header />
+   
       <main className="flex-1">
+        
         <Hero release={latest.release} platform={latest.platform} />
 {/* 
         <Section

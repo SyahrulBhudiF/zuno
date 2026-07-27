@@ -8,6 +8,7 @@ import {
   type LatestRelease,
   type PlatformId,
 } from "../releases";
+import { Header } from "@/App";
 
 const PLATFORM_LABEL: Record<PlatformId, string> = {
   windows: "Windows",
@@ -42,6 +43,7 @@ export function Hero({
 
   return (
     <section id="top" className="relative w-full overflow-hidden">
+         <Header />
       <video
         className="absolute inset-0 z-0 h-full w-full object-cover"
         src="./bgvid.mp4"
@@ -52,19 +54,8 @@ export function Hero({
         aria-hidden="true"
       />
 
-      <div
-        className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-80"
-        style={{
-          background:
-            "linear-gradient(180deg, var(--color-background) 0%, color-mix(in oklab, var(--color-background) 10%, transparent) 25%, transparent 10%)",
-        }}
-        aria-hidden="true"
-      />
-      <div
-        className="pointer-events-none absolute inset-0 z-[1]"
-        style={{ background: "color-mix(in oklab, var(--color-background) 35%, transparent)" }}
-        aria-hidden="true"
-      />
+  
+     
       <div
         className="pointer-events-none absolute inset-x-0 bottom-0 z-[1] h-80"
         style={{
@@ -82,13 +73,24 @@ export function Hero({
             </Mono>
           </span>
 
-          <h1 className="mb-6 max-w-[15ch] text-balance text-[clamp(48px,6.5vw,84px)] font-semibold leading-[0.98] tracking-[-0.045em] text-foreground">
-            Every tab keeps playing.
+          {/*
+            Two beats, and the second one is the payoff.
+
+            "Every tab keeps playing" asserts something the reader has to already care about to
+            find remarkable. This stages it instead: an action, then the consequence — which is
+            the same thing the demo further down the page does, and the reason the claim lands
+            without a word of explanation. The muted second line is the punchline, so it reads
+            as the answer to the first rather than a continuation of it.
+          */}
+          <h1 className="mb-6 max-w-[16ch] text-balance text-[clamp(46px,6vw,80px)] font-semibold leading-[0.98] tracking-[-0.045em] text-foreground">
+            Open a second tab.
+            <br />
+            <span className="text-foreground/50">The first keeps playing.</span>
           </h1>
 
           <p className="mb-9 max-w-[46ch] text-pretty text-xl leading-relaxed text-foreground/70">
-            A desktop client for your own YouTube Music account. Tabs that each hold their own
-            queue, offline downloads, synced lyrics, and your local files in the same list.
+            A desktop client for your own YouTube Music account — every tab with its own queue.
+            Offline downloads, synced lyrics, a mini player, and your local files in the same list.
           </p>
 
           <div className="mb-6 flex flex-wrap items-center gap-3 max-lg:justify-center">
