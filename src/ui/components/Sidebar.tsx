@@ -1,6 +1,14 @@
 import { useState, useRef, useEffect, useMemo, useSyncExternalStore, type ReactElement,
 } from "react";
 import { motion } from "motion/react";
+import {
+  LIBRARY_SORTS,
+  canReorderLibrary,
+  filterLibraryEntries,
+  reorderBlockedReason,
+  sortLibraryEntries,
+  type LibrarySort,
+} from "./sidebarLibrary";
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
 import { FloatingPanel } from "./FloatingPanel";
@@ -8,9 +16,13 @@ import { importPlaylistFile } from "../../player/playlistTransfer";
 import { isLikedSongsId, likedSongsCover } from "../likedSongsArtwork";
 import {
   AlbumIcon,
+  CheckIcon,
+  CloseIcon,
   FolderIcon,
   PlaylistIcon,
   RefreshIcon,
+  SearchIcon,
+  SortIcon,
 } from "@/ui/icons";
 import type { Album, Playlist } from "../../datasource/types";
 import { libraryController, useLibraryState } from "../../player/playerStore";
@@ -24,6 +36,7 @@ import {
   subscribeToLocalPlaylists,
 } from "../../player/localPlaylists";
 import { getAppSetting, setAppSetting } from "../../internal/appSettings";
+import { resolveSidebarWidth, useSidebarMode } from "../settings/sidebarMode";
 import { ArtistLinks } from "./ArtistLinks";
 import { TrackArtwork } from "./TrackArtwork";
 import { usePlaylistContextMenu } from "./PlaylistContextMenu";
@@ -34,6 +47,7 @@ const PLAYLIST_ORDER_KEY = "ytc-sidebar-playlist-order";
 const ALBUM_ORDER_KEY = "ytc-sidebar-album-order";
 const PLAYLIST_LIKED_ORDER_MIGRATION_KEY = "ytc-sidebar-playlist-liked-order-v1";
 const ALBUM_LIKED_ORDER_MIGRATION_KEY = "ytc-sidebar-album-liked-order-v1";
+const LIBRARY_SORT_KEY = "zuno:sidebar-library-sort";
 
 function loadOrderFromStorage(key: string, migrationKey: string): string[] {
   if (typeof window === "undefined") return [];
@@ -171,11 +185,20 @@ function CreatePlaylistButton({
   collapsed,
   canCreateRemote,
   onCreated,
+  onOpenChange,
 }: {
   collapsed: boolean;
   /** Signed in, so a YouTube Music playlist is a real option. */
   canCreateRemote: boolean;
   onCreated: (playlist: Playlist) => void;
+  /**
+   * Reported upward so the rail can stay expanded while this is open.
+   *
+   * The panel is portalled outside the sidebar, so moving the pointer into it counts as leaving
+   * the rail — which would collapse it mid-typing and, since the panel is only rendered when
+   * expanded, take the form away with it.
+   */
+  onOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -269,6 +292,7 @@ function CreatePlaylistButton({
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
+        onOpenChange?.(next);
         if (!next) setError(null);
       }}
       className="w-64"
@@ -289,7 +313,12 @@ function CreatePlaylistButton({
              */
             "my-2 flex shrink-0 items-center justify-center gap-2 rounded-xl border border-dashed transition-colors",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            collapsed ? "mx-auto size-9" : "mx-2 h-9 px-3 text-sm font-medium",
+            /*
+             * `w-auto` is load-bearing when expanded: size="icon" pins the button to `h-8 w-8`,
+             * and without releasing the width it stays a square regardless of the flex parent's
+             * stretch. Released, it fills the rail minus its own margins.
+             */
+            collapsed ? "mx-auto size-9" : "mx-2 h-9 w-auto px-3 text-sm font-medium",
             open
               ? "border-primary bg-primary/10 text-primary"
               : "border-border text-muted-foreground hover:border-muted-foreground hover:text-foreground",
@@ -433,6 +462,7 @@ function SidebarPlaylistArtwork({ playlist }: { playlist: Playlist }) {
 
 export function Sidebar({
   width,
+  onWidthChange,
   onNavigateAlbum,
   onNavigatePlaylist,
 }: SidebarProps) {
@@ -446,6 +476,17 @@ export function Sidebar({
   const [albumOrder, setAlbumOrder] = useState<string[]>(() =>
     loadOrderFromStorage(ALBUM_ORDER_KEY, ALBUM_LIKED_ORDER_MIGRATION_KEY)
   );
+  const [libraryFilter, setLibraryFilter] = useState("");
+  const [librarySort, setLibrarySort] = useState<LibrarySort>(() => {
+    try {
+      const stored = localStorage.getItem(LIBRARY_SORT_KEY);
+      return stored === "recent" || stored === "name" ? stored : "custom";
+    } catch {
+      return "custom";
+    }
+  });
+  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
+  const filterInputRef = useRef<HTMLInputElement | null>(null);
   const [draggedItem, setDraggedItem] = useState<{ id: string; type: LibraryView } | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; type: LibraryView; insertAfter: boolean } | null>(null);
   const localPlaylists = useSyncExternalStore(
@@ -468,8 +509,30 @@ export function Sidebar({
   const suppressClickRef = useRef(false);
 
 
-  const isCollapsed = width <= COLLAPSED_WIDTH;
-  const shouldHideText = width <= TEXT_HIDE_THRESHOLD;
+  /*
+   * The rail owns its own width now, derived from the mode rather than read from the `width`
+   * prop. The prop stays the source of truth for everyone else — the title bar sizes its home
+   * button to match — so the resolved width is reported upward rather than taken from there.
+   */
+  const sidebarMode = useSidebarMode();
+  const [isSidebarHovered, setIsSidebarHovered] = useState(false);
+  const [isCreatePanelOpen, setIsCreatePanelOpen] = useState(false);
+  /*
+   * An open popover holds the rail open regardless of the pointer.
+   *
+   * Both panels are portalled out of the sidebar, so moving into one reads as leaving the rail.
+   * Tracking the pointer alone would collapse it while the user is typing a playlist name — and
+   * because these controls only render when expanded, collapsing unmounts the thing being used.
+   */
+  const isExpansionHeld = isSidebarHovered || isCreatePanelOpen || isSortMenuOpen;
+  const effectiveWidth = resolveSidebarWidth(sidebarMode, isExpansionHeld);
+
+  useEffect(() => {
+    if (width !== effectiveWidth) onWidthChange(effectiveWidth);
+  }, [effectiveWidth, onWidthChange, width]);
+
+  const isCollapsed = effectiveWidth <= COLLAPSED_WIDTH;
+  const shouldHideText = effectiveWidth <= TEXT_HIDE_THRESHOLD;
   const hasUserCreatedPlaylists = (libraryState.library?.playlists.length ?? 0) + localPlaylists.length > 0;
   const hasLoadedLibrary = Boolean(libraryState.library);
   const showPlaylistRetry =
@@ -578,6 +641,33 @@ export function Sidebar({
     playlistOrder,
     recentPlaylistsRevision,
   ]);
+
+  /*
+   * Filter and sort are applied *after* the saved custom order has been resolved above, never
+   * instead of it — `custom` is the identity sort, so switching back to it restores exactly the
+   * arrangement the user dragged into place rather than an approximation of it.
+   */
+  const visiblePlaylists = useMemo(
+    () =>
+      sortLibraryEntries(
+        filterLibraryEntries(
+          playlists.map((playlist) => ({ ...playlist, subtitle: playlist.owner })),
+          libraryFilter,
+        ),
+        librarySort,
+        {
+          recencyOf: getRecentPlaylistTimestamp,
+          pinnedId: libraryState.library?.likedSongsPlaylist?.id,
+        },
+      ),
+    [
+      playlists,
+      libraryFilter,
+      librarySort,
+      recentPlaylistsRevision,
+      libraryState.library?.likedSongsPlaylist?.id,
+    ],
+  );
 
   const albums = useMemo(() => {
     const likedSongsPlaylist = libraryState.library?.likedSongsPlaylist;
@@ -709,16 +799,52 @@ export function Sidebar({
     albumOrder,
   ]);
 
+  const visibleAlbums = useMemo(
+    () =>
+      sortLibraryEntries(
+        filterLibraryEntries(
+          albums.map((album) => ({ ...album, subtitle: album.artist })),
+          libraryFilter,
+        ),
+        librarySort,
+        { pinnedId: libraryState.library?.likedSongsPlaylist?.id },
+      ),
+    [albums, libraryFilter, librarySort, libraryState.library?.likedSongsPlaylist?.id],
+  );
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LIBRARY_SORT_KEY, librarySort);
+    } catch {
+      // Sort preference is a convenience; losing it is not worth failing a render over.
+    }
+  }, [librarySort]);
+
+  /*
+   * The filter is scoped to the list you are looking at, so switching views clears it. Carrying
+   * "daft" across to Albums and showing an empty rail reads as a bug, not as a filter.
+   */
+  useEffect(() => {
+    setLibraryFilter("");
+  }, [libraryView]);
+
   const playlistsRef = useRef<string[]>([]);
   const albumsRef = useRef<string[]>([]);
 
+  /*
+   * The *rendered* lists, not the raw ones. A drop is expressed as "after the row I dropped
+   * onto", so it can only be resolved against the order actually on screen — reading the
+   * unfiltered list here would place the row relative to something the user cannot see.
+   * Dragging is confined to the unfiltered custom order anyway, so in practice these agree;
+   * taking them from the rendered list is what keeps that true if the guard ever changes.
+   */
   useEffect(() => {
-    playlistsRef.current = playlists.map((playlist) => playlist.id);
-  }, [playlists]);
+    playlistsRef.current = visiblePlaylists.map((playlist) => playlist.id);
+  }, [visiblePlaylists]);
 
   useEffect(() => {
-    albumsRef.current = albums.map((album) => album.id);
-  }, [albums]);
+    albumsRef.current = visibleAlbums.map((album) => album.id);
+  }, [visibleAlbums]);
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
@@ -877,12 +1003,24 @@ export function Sidebar({
     };
   }, [dropTarget, playlistOrder]);
 
+  const totalLibraryCount = libraryView === "albums" ? albums.length : playlists.length;
+  const activeSortLabel =
+    LIBRARY_SORTS.find((option) => option.value === librarySort)?.label ?? "Custom";
+  const canReorder = canReorderLibrary(librarySort, libraryFilter);
+  const reorderBlocked = reorderBlockedReason(librarySort, libraryFilter);
+
   const handleSidebarItemPointerDown = (
     event: React.PointerEvent<HTMLButtonElement>,
     itemId: string,
     itemType: LibraryView,
   ) => {
     if (event.button !== 0) return;
+    /*
+     * Reordering only means anything against the full list in its saved order. Starting a drag
+     * from a filtered or alphabetised list would persist positions derived from a list that is
+     * not the one being stored, quietly scrambling the sidebar later.
+     */
+    if (!canReorder) return;
     pointerDragRef.current = {
       pointerId: event.pointerId,
       itemId,
@@ -936,8 +1074,22 @@ export function Sidebar({
   return (
     <div
       ref={sidebarRef}
-      className="relative flex min-h-0 shrink-0 flex-col   bg-background backdrop-blur"
-      style={{ width: `${width}px` }}
+      className="relative flex min-h-0 shrink-0 flex-col bg-background backdrop-blur transition-[width] duration-200 ease-out"
+      style={{ width: `${effectiveWidth}px` }}
+      onPointerEnter={(event) => {
+        // Pointer only. A drag passing over the rail is not a request to expand it, and a
+        // touch "hover" never ends, which would leave the rail stuck open.
+        if (event.pointerType === "mouse") setIsSidebarHovered(true);
+      }}
+      onPointerLeave={() => setIsSidebarHovered(false)}
+      // Keyboard users never fire pointerenter, so tabbing into the list widens it too —
+      // otherwise the rail is permanently unreadable without a mouse.
+      onFocusCapture={() => setIsSidebarHovered(true)}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setIsSidebarHovered(false);
+        }
+      }}
     >
       {/*
         The resize grip is deliberately not rendered: the rail is a fixed icon strip and
@@ -1002,16 +1154,124 @@ export function Sidebar({
         <CreatePlaylistButton
           canCreateRemote={libraryState.status === "ready"}
           collapsed={shouldHideText}
+          onOpenChange={setIsCreatePanelOpen}
           onCreated={(playlist) => {
             setLibraryView("playlists");
             onNavigatePlaylist(playlist);
           }}
         />
 
-        
+        {/*
+          Filter and sort. Hidden on the collapsed rail, where there is no room for a field and
+          no labels to read anyway — the rail is for jumping between a handful of pinned
+          favourites, not for searching.
+
+          Worth having at all because the list is unbounded: a library with sixty playlists is
+          ordinary, and scrolling a rail to find one by its artwork is not.
+        */}
+        {!shouldHideText && (totalLibraryCount > 0 || libraryFilter) && (
+          <div className="flex shrink-0 items-center gap-1 px-2 pb-2">
+            <div className="group/filter flex min-w-0 flex-1 items-center gap-1.5 rounded-full bg-white/[0.04] px-2.5 py-1 text-muted-foreground transition-colors focus-within:bg-white/[0.08] focus-within:text-foreground">
+              <SearchIcon size={14} aria-hidden="true" />
+              <input
+                ref={filterInputRef}
+                className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+                value={libraryFilter}
+                onChange={(event) => setLibraryFilter(event.target.value)}
+                onKeyDown={(event) => {
+                  // Escape clears rather than blurs: an empty box you are still typing in is
+                  // the state people expect, and blurring loses the caret for no reason.
+                  if (event.key !== "Escape") return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setLibraryFilter("");
+                }}
+                placeholder={libraryView === "albums" ? "Filter albums" : "Filter playlists"}
+                aria-label={libraryView === "albums" ? "Filter albums" : "Filter playlists"}
+                type="text"
+              />
+              {libraryFilter && (
+                <button
+                  type="button"
+                  className="shrink-0 rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => {
+                    setLibraryFilter("");
+                    filterInputRef.current?.focus();
+                  }}
+                  aria-label="Clear filter"
+                >
+                  <CloseIcon size={14} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+
+            {/*
+              The blocked reason rides on this tooltip because this is where someone goes to fix
+              it — rows silently ceasing to be draggable, with no explanation anywhere, is the
+              thing that would read as broken.
+            */}
+            <FloatingPanel
+              open={isSortMenuOpen}
+              onOpenChange={setIsSortMenuOpen}
+              side="bottom"
+              className="w-48 p-1"
+              trigger={
+                <Tooltip
+                  side="bottom"
+                  content={
+                    reorderBlocked
+                      ? `Sort: ${activeSortLabel} — ${reorderBlocked}`
+                      : `Sort: ${activeSortLabel}`
+                  }
+                >
+                  <button
+                    type="button"
+                    className="grid size-7 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    aria-label={`Sort order: ${activeSortLabel}`}
+                    aria-haspopup="menu"
+                  >
+                    <SortIcon size={15} aria-hidden="true" />
+                  </button>
+                </Tooltip>
+              }
+            >
+              <div role="menu" aria-label="Sort order">
+                {LIBRARY_SORTS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={librarySort === option.value}
+                    className={cn(
+                      "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
+                      "hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                      librarySort === option.value ? "text-foreground" : "text-muted-foreground",
+                    )}
+                    onClick={() => {
+                      setLibrarySort(option.value);
+                      setIsSortMenuOpen(false);
+                    }}
+                  >
+                    <span className="mt-0.5 w-4 shrink-0">
+                      {librarySort === option.value && (
+                        <CheckIcon size={14} className="text-primary" aria-hidden="true" />
+                      )}
+                    </span>
+                    <span className="flex min-w-0 flex-col">
+                      <span className="text-sm">{option.label}</span>
+                      <span className="text-xs text-muted-foreground">{option.hint}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </FloatingPanel>
+          </div>
+        )}
+
+
         <div ref={listRef} className={listClasses}>
           {libraryView === "albums" ? (
-            albums.map((album) => (
+            visibleAlbums.map((album) => (
               <SidebarItemTooltip
                 key={album.id}
                 enabled={shouldHideText}
@@ -1054,9 +1314,9 @@ export function Sidebar({
               </SidebarItemTooltip>
             ))
           ) : (
-            playlists.length ? (
+            visiblePlaylists.length ? (
               <>
-                {playlists.map((playlist) => (
+                {visiblePlaylists.map((playlist) => (
                   <SidebarItemTooltip
                     key={playlist.id}
                     enabled={shouldHideText}
@@ -1104,6 +1364,30 @@ export function Sidebar({
                   </div>
                 )}
               </>
+            ) : libraryFilter.trim() ? (
+              /*
+                A filter that matches nothing is a different situation from an empty library, and
+                saying "no playlists were found" here would read as though they had vanished.
+              */
+              <div className={EMPTY_STATE}>
+                <SearchIcon size={26} aria-hidden="true" />
+                {!shouldHideText && (
+                  <span>
+                    Nothing matches “{libraryFilter.trim()}”.
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className={RETRY_BUTTON}
+                  onClick={() => {
+                    setLibraryFilter("");
+                    filterInputRef.current?.focus();
+                  }}
+                >
+                  <CloseIcon size={15} aria-hidden="true" />
+                  {!shouldHideText && <span>Clear filter</span>}
+                </button>
+              </div>
             ) : (
               <div className={EMPTY_STATE}>
                 <PlaylistIcon size={28} aria-hidden="true" />

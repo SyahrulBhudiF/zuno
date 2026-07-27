@@ -12,7 +12,14 @@ import {
   type PlaybackSettings,
 } from "./playbackSettings";
 
-export type PlaybackOrderMode = "in-order" | "shuffle" | "repeat-one" | "repeat-all";
+/**
+ * How the queue advances. Repeat only — shuffle is a separate, independent flag.
+ *
+ * They used to share one enum, which made them mutually exclusive: turning on repeat-all
+ * silently restored the queue to its original order, so "shuffle this playlist on loop" — the
+ * single most common combination — was unreachable.
+ */
+export type PlaybackOrderMode = "in-order" | "repeat-one" | "repeat-all";
 
 export type PlayerStatus = "idle" | "loading" | "playing" | "paused" | "error";
 
@@ -22,6 +29,8 @@ export interface PlayerState {
   history: Track[];
   error: string | null;
   playbackOrderMode: PlaybackOrderMode;
+  /** Independent of playbackOrderMode: shuffle and repeat compose freely. */
+  shuffleEnabled: boolean;
   volume: number;
   muted: boolean;
 }
@@ -40,6 +49,7 @@ export interface PlayerSession {
   muted: boolean;
   autoplayEnabled: boolean;
   playbackOrderMode: PlaybackOrderMode;
+  shuffleEnabled?: boolean;
   isPlaylistMode?: boolean;
 }
 
@@ -57,8 +67,12 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
+/** A session saved before shuffle split out stored it as the order mode. */
+function wasLegacyShuffleMode(mode: unknown): boolean {
+  return mode === "shuffle";
+}
+
 function normalizePlaybackOrderMode(mode: unknown): PlaybackOrderMode {
-  if (mode === "shuffle") return "shuffle";
   if (mode === "repeat-one") return "repeat-one";
   if (mode === "repeat-all") return "repeat-all";
   return "in-order";
@@ -134,6 +148,7 @@ export class PlayerController {
   private sleepFadeId: number | null = null;
   private navigationRequest: Promise<void> = Promise.resolve();
   private playbackOrderMode: PlaybackOrderMode = "in-order";
+  private shuffleEnabled = false;
   private isPlaylistMode = false;
 
   private state: PlayerState = {
@@ -142,6 +157,7 @@ export class PlayerController {
     history: [],
     error: null,
     playbackOrderMode: "in-order",
+    shuffleEnabled: false,
     volume: 1,
     muted: false,
   };
@@ -182,6 +198,7 @@ export class PlayerController {
       muted: this.audioEngine.isMuted(),
       autoplayEnabled: this.autoplayEnabled,
       playbackOrderMode: this.playbackOrderMode,
+      shuffleEnabled: this.shuffleEnabled,
       isPlaylistMode: this.isPlaylistMode,
     };
   }
@@ -202,6 +219,13 @@ export class PlayerController {
     this.audioEngine.setVolume(session.volume);
     this.audioEngine.setMuted(session.muted);
     this.playbackOrderMode = normalizePlaybackOrderMode(session.playbackOrderMode);
+    /*
+     * A session written before the split stored shuffle as the order mode. Reading it back as
+     * the flag keeps the setting the user chose instead of silently turning shuffle off on the
+     * first launch after an update.
+     */
+    this.shuffleEnabled =
+      session.shuffleEnabled ?? wasLegacyShuffleMode(session.playbackOrderMode);
     this.isPlaylistMode = session.isPlaylistMode ?? false;
     this.state = {
       status: session.currentTrack ? session.status : "idle",
@@ -209,6 +233,7 @@ export class PlayerController {
       history: session.history,
       error: null,
       playbackOrderMode: this.playbackOrderMode,
+      shuffleEnabled: this.shuffleEnabled,
       volume: this.audioEngine.getVolume(),
       muted: this.audioEngine.isMuted(),
     };
@@ -326,6 +351,7 @@ export class PlayerController {
         status: "loading",
         error: null,
         playbackOrderMode: this.playbackOrderMode,
+        shuffleEnabled: this.shuffleEnabled,
       });
       if (autoplayWhenQueueEnds && playbackQueue?.length === 1) {
         void this.primeRadioQueue(track, requestId);
@@ -435,34 +461,56 @@ export class PlayerController {
   }
 
   setPlaybackOrderMode(mode: PlaybackOrderMode): void {
-    const wasShuffle = this.playbackOrderMode === "shuffle";
     this.playbackOrderMode = mode;
-    if (mode === "shuffle" && this.isPlaylistMode) {
-      this.queue.shuffleRemaining(this.queue.queuedManually);
-    } else if (wasShuffle && this.isPlaylistMode) {
-      this.queue.restoreOriginalOrder(this.queue.queuedManually);
-    }
     this.setState({ playbackOrderMode: mode });
   }
 
-  cyclePlaybackOrderMode(): void {
+  isShuffleEnabled(): boolean {
+    return this.shuffleEnabled;
+  }
+
+  /**
+   * Turns shuffle on or off, reordering what has not played yet.
+   *
+   * Only the *remaining* queue is touched — history stays as it happened, and hand-queued
+   * tracks keep their position, because someone who explicitly said "play this next" did not
+   * ask for it to be moved. Turning shuffle off restores the collection's original order rather
+   * than leaving the shuffled arrangement frozen in place.
+   */
+  setShuffleEnabled(enabled: boolean): void {
+    if (this.shuffleEnabled === enabled) return;
+    this.shuffleEnabled = enabled;
+
     if (this.isPlaylistMode) {
-      const nextMode: PlaybackOrderMode = this.playbackOrderMode === "in-order"
-        ? "shuffle"
-        : this.playbackOrderMode === "shuffle"
-          ? "repeat-all"
-          : this.playbackOrderMode === "repeat-all"
-            ? "repeat-one"
-            : "in-order";
-      this.setPlaybackOrderMode(nextMode);
-    } else {
-      const nextMode: PlaybackOrderMode = this.playbackOrderMode === "shuffle"
-        ? "repeat-all"
-        : this.playbackOrderMode === "repeat-all"
-          ? "repeat-one"
-          : "shuffle";
-      this.setPlaybackOrderMode(nextMode);
+      if (enabled) this.queue.shuffleRemaining(this.queue.queuedManually);
+      else this.queue.restoreOriginalOrder(this.queue.queuedManually);
     }
+
+    logInternalInfo("PlayerController.setShuffleEnabled", {
+      enabled,
+      isPlaylistMode: this.isPlaylistMode,
+    });
+    this.setState({ shuffleEnabled: enabled });
+  }
+
+  toggleShuffle(): void {
+    this.setShuffleEnabled(!this.shuffleEnabled);
+  }
+
+  /**
+   * Walks the repeat states: off → all → one → off.
+   *
+   * Three states in a fixed cycle, the convention every player shares, and short enough that
+   * you can get back to where you were without wondering how many presses are left. Shuffle is
+   * no longer in this loop — it has its own button and composes with any of these.
+   */
+  cyclePlaybackOrderMode(): void {
+    const nextMode: PlaybackOrderMode = this.playbackOrderMode === "in-order"
+      ? "repeat-all"
+      : this.playbackOrderMode === "repeat-all"
+        ? "repeat-one"
+        : "in-order";
+    this.setPlaybackOrderMode(nextMode);
   }
 
   addToQueue(track: Track): void {
@@ -712,10 +760,21 @@ export class PlayerController {
        * quietly turns into a radio station.
        */
       if (this.playbackOrderMode === "repeat-all" && this.queue.all.length > 0) {
+        /*
+         * Reshuffled on each lap when shuffle is on. Looping a shuffled queue back to index 0
+         * would otherwise replay the same "random" order forever, which is the one thing a
+         * listener notices immediately and reads as shuffle being broken.
+         */
+        if (this.shuffleEnabled && this.isPlaylistMode) {
+          this.queue.select(0);
+          this.queue.shuffleRemaining(this.queue.queuedManually);
+        }
+
         const firstTrack = this.queue.select(0);
         if (firstTrack) {
           logInternalInfo("PlayerController.handleTrackEnded looping queue", {
             trackCount: this.queue.all.length,
+            reshuffled: this.shuffleEnabled && this.isPlaylistMode,
           });
           await this.playTrackById(firstTrack.id);
           return;

@@ -550,15 +550,33 @@ export class AudioEngine {
       throw new Error("YouTube player API loaded without a Player constructor.");
     }
 
+    /*
+     * The IFrame player has to exist, at a real size, on screen.
+     *
+     * YouTube refuses to start playback in a player that is display:none, visibility:hidden or
+     * effectively zero-sized, so it cannot simply be hidden — which is why this is a 200px box
+     * held at 1% opacity rather than removed. That opacity is not enough on its own: a bright
+     * video thumbnail is still legible over a flat background, and it showed as a faded square
+     * in the bottom-right corner from the moment the first song played.
+     *
+     * A negative z-index puts it behind the app's own opaque background instead. The element
+     * keeps its position, its size and its opacity, so none of the heuristics YouTube uses to
+     * detect a hidden player change — it is simply painted underneath something.
+     */
     const host = document.createElement("div");
     host.style.position = "fixed";
-    host.style.right = "0";
-    host.style.bottom = "0";
+    /*
+     * Inset rather than flush to the corner: html/body/#root are transparent so the window's
+     * rounded corners cut out, which leaves a notch where a corner-pinned box would show
+     * through from behind the app rather than being covered by it.
+     */
+    host.style.right = "24px";
+    host.style.bottom = "24px";
     host.style.width = "200px";
     host.style.height = "200px";
     host.style.opacity = "0.01";
     host.style.pointerEvents = "none";
-    host.style.zIndex = "0";
+    host.style.zIndex = "-1";
     const target = document.createElement("div");
     host.appendChild(target);
     document.body.appendChild(host);

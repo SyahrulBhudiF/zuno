@@ -8,6 +8,7 @@ import {
   RepeatIcon,
   RepeatOneActiveIcon,
   ShuffleActiveIcon,
+  ShuffleIcon,
   SkipNextIcon,
   SkipPreviousIcon,
 } from "@/ui/icons";
@@ -51,27 +52,46 @@ export function PlaybackControls({ extraControlsAlwaysVisible = true }: Playback
     playerController.cyclePlaybackOrderMode();
   };
 
+  const handleShuffleToggle = () => {
+    playerController.toggleShuffle();
+  };
+
   const orderLabel =
     state.playbackOrderMode === "repeat-one"
       ? "Loop current song"
       : state.playbackOrderMode === "repeat-all"
         ? "Loop the queue"
-        : state.playbackOrderMode === "shuffle"
-          ? "Shuffle playback"
-          : "Play in order";
+        : "Play in order";
 
   // In-order is the resting state, so it reads as Linear; the other two are Bold.
   const isOrderActive = state.playbackOrderMode !== "in-order";
+  const isShuffled = state.shuffleEnabled;
 
   return (
     <div className="flex items-center gap-1">
       {/*
-        Mirrors the playback-order button on the opposite side. That button keeps its layout
-        space when hidden (it only fades), so without a counterweight the visible
-        previous/play/next trio sits off-centre — and shifts again the moment the bar is
-        hovered. `aria-hidden` keeps the spacer out of the accessibility tree.
+        Shuffle sits opposite repeat, the arrangement every player shares — and it is what the
+        spacer here used to stand in for, so the previous/play/next trio stays centred without
+        a placeholder. Both fade together when the extra controls are set to appear on hover.
       */}
-      <div className="size-9 shrink-0" aria-hidden="true" />
+      <div
+        className={cn(
+          "size-9 shrink-0 transition-opacity",
+          !extraControlsAlwaysVisible &&
+            "opacity-0 focus-within:opacity-100 group-hover/playerbar:opacity-100",
+        )}
+      >
+        <button
+          type="button"
+          className={cn(CONTROL_BUTTON, isShuffled && "text-primary hover:text-primary")}
+          onClick={handleShuffleToggle}
+          aria-pressed={isShuffled}
+          aria-label={isShuffled ? "Turn off shuffle" : "Shuffle"}
+          title={isShuffled ? "Shuffle is on" : "Shuffle"}
+        >
+          {isShuffled ? <ShuffleActiveIcon size={20} /> : <ShuffleIcon size={20} />}
+        </button>
+      </div>
 
       <button
         type="button"
@@ -137,8 +157,6 @@ export function PlaybackControls({ extraControlsAlwaysVisible = true }: Playback
             <RepeatOneActiveIcon size={20} />
           ) : state.playbackOrderMode === "repeat-all" ? (
             <RepeatActiveIcon size={20} />
-          ) : state.playbackOrderMode === "shuffle" ? (
-            <ShuffleActiveIcon size={20} />
           ) : (
             <RepeatIcon size={20} />
           )}

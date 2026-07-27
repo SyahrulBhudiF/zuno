@@ -54,11 +54,20 @@ export function PlaylistContextMenuProvider({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
+  /*
+   * Selects the existing name once, when the field opens — never again.
+   *
+   * Keying this on `renameDraft` re-ran it on every keystroke: 40ms after each character the
+   * whole value was selected again, so the next character replaced everything typed so far and
+   * the field could never hold more than one letter. Keying it on *whether* a draft exists
+   * means the effect fires on the null → string transition only.
+   */
+  const isRenaming = renameDraft !== null;
   useEffect(() => {
-    if (renameDraft === null) return;
+    if (!isRenaming) return;
     const timer = window.setTimeout(() => renameInputRef.current?.select(), 40);
     return () => window.clearTimeout(timer);
-  }, [renameDraft]);
+  }, [isRenaming]);
 
   useEffect(() => {
     if (!position) return;

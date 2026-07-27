@@ -147,11 +147,16 @@ export function ArtistView({
     if (songs[0]) void playerController.playTrackById(songs[0].id, songs);
   };
 
-  const playShuffled = () => {
-    const shuffled = shuffleTracks(page?.allSongs ?? []);
-    if (shuffled[0]) {
-      void playerController.playTrackById(shuffled[0].id, shuffled);
-    }
+  /*
+   * Queued in its listed order with shuffle switched on afterwards, not pre-shuffled — so the
+   * player bar's toggle reflects reality, and turning shuffle off restores the original order.
+   */
+  const playShuffled = async () => {
+    const songs = page?.allSongs ?? [];
+    const firstTrack = shuffleTracks(songs)[0];
+    if (!firstTrack) return;
+    const started = await playerController.playTrackById(firstTrack.id, songs);
+    if (started) playerController.setShuffleEnabled(true);
   };
 
   const toggleArtistSubscription = async () => {
@@ -233,7 +238,7 @@ export function ArtistView({
         isPlaying={isCurrentCollection && isPlaying}
         isLoading={isCurrentCollection && isPlayerLoading}
         onPlay={togglePlayCollection}
-        onShuffle={playShuffled}
+        onShuffle={() => void playShuffled()}
         onAddToQueue={() => playerController.addTracksToQueue(page?.allSongs ?? [])}
         onAddToPlaylist={() => {
           const songs = page?.allSongs ?? [];

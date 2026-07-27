@@ -93,8 +93,22 @@ impl DiscordRpcManager {
             - elapsed as i64;
         let end_ts = start_ts + duration as i64;
 
+        /*
+         * The artist, not the app, is the headline.
+         *
+         * `name` is what Discord prints after "Listening to", so sending the app name made
+         * every song read "Listening to Zuno" — the same line for everything, saying nothing
+         * about what is actually playing. The artist goes there and the app name is only the
+         * fallback for a track with no artist, so the line is never empty.
+         */
+        let activity_name = if data.artist.trim().is_empty() {
+            ACTIVITY_NAME.to_string()
+        } else {
+            data.artist.clone()
+        };
+
         let mut activity = json!({
-            "name": ACTIVITY_NAME,
+            "name": activity_name,
             "type": 2,
             "details": data.title,
             "state": state_str,
@@ -104,7 +118,7 @@ impl DiscordRpcManager {
             },
             "buttons": [
                 {
-                    "label": "Download JAMusicClient :O",
+                    "label": "Get Zuno",
                     "url": GITHUB_REPO,
                 }
             ],
@@ -122,7 +136,16 @@ impl DiscordRpcManager {
             activity["assets"]["large_url"] = json!(album_url);
         }
 
-        if duration > 0 {
+        /*
+         * Timestamps only while playing.
+         *
+         * Discord does not receive progress updates — it is given a start and an end and runs
+         * the clock itself. Leaving them on a paused track means the bar keeps advancing and
+         * the song keeps "finishing" on other people's screens while the audio sits still, so
+         * pausing had no visible effect at all. Dropping them freezes the presence, which is
+         * what a pause looks like.
+         */
+        if duration > 0 && data.is_playing {
             activity["timestamps"] = json!({
                 "start": start_ts,
                 "end": end_ts,

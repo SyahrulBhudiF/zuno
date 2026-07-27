@@ -61,6 +61,8 @@ type PlayerControllerMethod =
   | "toggleMute"
   | "getPlaybackOrderMode"
   | "cyclePlaybackOrderMode"
+  | "toggleShuffle"
+  | "setShuffleEnabled"
   | "setPlaybackOrderMode"
   | "setPlaybackRate"
   | "getPlaybackRate"
@@ -142,6 +144,9 @@ class ActivePlayerController implements PlayerControllerActions {
   };
   getPlaybackOrderMode = () => tabManager.getActivePlayer().getPlaybackOrderMode();
   cyclePlaybackOrderMode = () => tabManager.getActivePlayer().cyclePlaybackOrderMode();
+  toggleShuffle = () => tabManager.getActivePlayer().toggleShuffle();
+  setShuffleEnabled = (enabled: boolean) =>
+    tabManager.getActivePlayer().setShuffleEnabled(enabled);
   setPlaybackOrderMode = (mode: Parameters<PlayerController["setPlaybackOrderMode"]>[0]) =>
     tabManager.getActivePlayer().setPlaybackOrderMode(mode);
   setPlaybackRate = (rate: number) => tabManager.getActivePlayer().setPlaybackRate(rate);

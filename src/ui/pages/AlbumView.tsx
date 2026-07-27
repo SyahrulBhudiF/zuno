@@ -163,10 +163,16 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
     void playerController.playTrackById(firstTrack.id, tracks);
   };
 
-  const playShuffled = () => {
-    const shuffledTracks = shuffleTracks(tracks);
-    const firstTrack = shuffledTracks[0];
-    if (firstTrack) void playerController.playTrackById(firstTrack.id, shuffledTracks);
+  /*
+   * Queued in album order with shuffle switched on afterwards, not pre-shuffled — so the player
+   * bar's toggle reflects reality, and turning shuffle off restores the album's real running
+   * order rather than treating the shuffle as the original.
+   */
+  const playShuffled = async () => {
+    const firstTrack = shuffleTracks(tracks)[0];
+    if (!firstTrack) return;
+    const started = await playerController.playTrackById(firstTrack.id, tracks);
+    if (started) playerController.setShuffleEnabled(true);
   };
 
   const handleAlbumSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -188,7 +194,7 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
         isPlaying={isCurrentCollection && isPlaying}
         isLoading={isCurrentCollection && isPlayerLoading}
         onPlay={togglePlayCollection}
-        onShuffle={playShuffled}
+        onShuffle={() => void playShuffled()}
         onPlayInLoop={playInLoop}
         isLooping={isCurrentCollection && playbackOrderMode === "repeat-all"}
         onAddToQueue={() => playerController.addTracksToQueue(tracks)}

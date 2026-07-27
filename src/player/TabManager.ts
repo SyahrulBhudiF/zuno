@@ -24,6 +24,7 @@ const EMPTY_PLAYER_STATE: PlayerState = {
   history: [],
   error: null,
   playbackOrderMode: "in-order",
+  shuffleEnabled: false,
   volume: 1,
   muted: false,
 };

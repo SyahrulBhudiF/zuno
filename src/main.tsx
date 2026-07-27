@@ -18,6 +18,7 @@ import { notifyLocalPlaylistsChanged, syncLocalAudioWatcher } from "./player/loc
 import { listen } from "@tauri-apps/api/event";
 import { hydrateLastFmSettings } from "./ui/settings/lastfm";
 import { hydrateDiscordSettings } from "./ui/settings/discord";
+import { hydrateSidebarSettings } from "./ui/settings/sidebarMode";
 import { hydrateKeyboardShortcuts } from "./ui/settings/keyboardShortcuts";
 import {
   hydrateMainWindowGeometry,
@@ -52,6 +53,7 @@ void Promise.all([
   hydrateAudioQualitySettings(),
   hydrateLastFmSettings(),
   hydrateDiscordSettings(),
+  hydrateSidebarSettings(),
   hydrateKeyboardShortcuts(),
   hydratePlaybackSettings(),
 ]).catch((error) => {

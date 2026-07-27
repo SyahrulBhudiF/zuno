@@ -507,13 +507,21 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     if (started) markPlaylistPlayed(playlist.id);
   };
 
+  /*
+   * The queue is handed the playlist in its real order and shuffle is switched on afterwards,
+   * rather than being given a pre-shuffled array. Two reasons: the player bar's shuffle toggle
+   * then reflects reality instead of reading "off" over a shuffled queue, and turning shuffle
+   * back off restores the playlist's actual order — with a pre-shuffled array the queue's
+   * "original" order *is* the shuffle, so there is nothing to restore.
+   */
   const playShuffled = async () => {
-    const shuffledTracks = shuffleTracks(tracks);
-    const firstTrack = shuffledTracks[0];
+    const firstTrack = shuffleTracks(tracks)[0];
     if (!firstTrack) return;
 
-    const started = await playerController.playTrackById(firstTrack.id, shuffledTracks);
-    if (started) markPlaylistPlayed(playlist.id);
+    const started = await playerController.playTrackById(firstTrack.id, tracks);
+    if (!started) return;
+    playerController.setShuffleEnabled(true);
+    markPlaylistPlayed(playlist.id);
   };
 
   const selection = useTrackSelection(visibleTracks);

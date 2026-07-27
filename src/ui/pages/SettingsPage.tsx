@@ -90,6 +90,12 @@ import {
 } from "../settings/mainWindowGeometry";
 import { setMinimizeToTray, useMinimizeToTray } from "../settings/tray";
 import {
+  SIDEBAR_MODES,
+  setSidebarMode,
+  useSidebarMode,
+  type SidebarMode,
+} from "../settings/sidebarMode";
+import {
   captureKeyboardShortcut,
   formatKeyboardShortcut,
   KEYBOARD_SHORTCUT_ACTIONS,
@@ -350,6 +356,7 @@ export function SettingsPage({
   const paperPcMode = usePaperPcMode();
   const miniPlayerEnabled = useMiniPlayerEnabled();
   const miniPlayerHoverAction = useMiniPlayerHoverAction();
+  const sidebarMode = useSidebarMode();
   const extraPlayerControlsAlwaysVisible = useExtraPlayerControlsAlwaysVisible();
   const compactPlayerBar = useCompactPlayerBar();
   const windowsStyleWindowControls = useWindowsStyleWindowControls();
@@ -1425,6 +1432,30 @@ export function SettingsPage({
               checked={miniPlayerEnabled}
               onCheckedChange={setMiniPlayerEnabled}
             />
+
+            <SettingRow
+              title="Library sidebar"
+              description="How much room the playlist rail takes. Expand on hover keeps the collapsed width while still letting you read the list."
+            >
+              {() => (
+                <Select
+                  className="w-52"
+                  value={sidebarMode}
+                  onValueChange={(value) => setSidebarMode(value as SidebarMode)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SIDEBAR_MODES.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </SettingRow>
 
             <SettingRow
               title="Mini player hover bar"
