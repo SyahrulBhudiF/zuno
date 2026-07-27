@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { BrandIcon, OS_ICON } from "@/components/brandIcons";
 import { useLatestRelease } from "@/useLatestRelease";
 import { Downloads } from "@/components/Downloads";
 import { Hero } from "@/components/Hero";
@@ -31,7 +30,7 @@ export function Header() {
       )}
     >
       <div className={cn(
-        "sticky top-0 z-50 max-w-3xl transition-colors duration-200 bg-background/50",
+        "sticky top-0 z-50 max-w-3xl transition-colors duration-200 bg-background/80",
         scrolled && "bg-transparent backdrop-blur-md","mx-auto flex h-16    items-center gap-3 px-3 mt-2 border border-border rounded-3xl"
       )}>
         <a className="flex items-center gap-2 text-2xl font-bold text-foreground" href="#top">
@@ -55,14 +54,14 @@ export function Header() {
         </nav> */}
 
         <div className="ml-auto flex items-center gap-2">
-          <a
-            className="grid size-9 place-items-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+       {/*    <a
+            className="grid size-9 place-items-center rounded-full text-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             href={GITHUB_REPO}
             rel="noopener"
             aria-label="Zuno on GitHub"
           >
-            <BrandIcon icon={OS_ICON.github} width={17} height={17} />
-          </a>
+            <BrandIcon icon={OS_ICON.github} width={17} height={17} className="text-foreground" />
+          </a> */}
           <LinkButton href="#download" className="px-4 py-2 text-sm">
             Download
           </LinkButton>

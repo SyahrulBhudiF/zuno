@@ -43,7 +43,6 @@ export function Hero({
 
   return (
     <section id="top" className="relative w-full overflow-hidden">
-         <Header />
       <video
         className="absolute inset-0 z-0 h-full w-full object-cover"
         src="./bgvid.mp4"
@@ -54,8 +53,12 @@ export function Hero({
         aria-hidden="true"
       />
 
-  
-     
+<Header/>
+      <div
+        className="pointer-events-none absolute inset-0 z-[1]"
+        style={{ background: "color-mix(in oklab, var(--color-background) 35%, transparent)" }}
+        aria-hidden="true"
+      />
       <div
         className="pointer-events-none absolute inset-x-0 bottom-0 z-[1] h-80"
         style={{
@@ -65,41 +68,44 @@ export function Hero({
       />
 
       <div className="relative z-[2] mx-auto grid w-full max-w-[1400px] items-center gap-12 px-6 pb-24 pt-32 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:gap-8 lg:pb-32 lg:pt-40">
-        <div className="flex flex-col items-start text-left max-lg:items-center max-lg:text-center">
-          <span className="mb-7 inline-flex items-center gap-2 rounded-full bg-background/50 px-3 py-1.5 ring-1 ring-border backdrop-blur">
+      <div className="flex flex-col items-start text-left max-lg:items-center max-lg:text-center">
+          <span className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/10 bg-background/45 px-3.5 py-1.5 text-sm backdrop-blur-xl">
             <span className="size-1.5 rounded-full bg-primary" aria-hidden="true" />
             <Mono className="text-foreground/80">
               {release ? `v${release.version} — out now` : "free · open source"}
             </Mono>
           </span>
 
-          {/*
-            Two beats, and the second one is the payoff.
+          <div className="max-w-4xl">
+            <h1 className="max-w-[12ch] text-balance text-[clamp(48px,6.5vw,90px)] font-semibold leading-[0.9] tracking-[-0.065em] text-foreground">
+              <span className="block">The desktop app</span>
 
-            "Every tab keeps playing" asserts something the reader has to already care about to
-            find remarkable. This stages it instead: an action, then the consequence — which is
-            the same thing the demo further down the page does, and the reason the claim lands
-            without a word of explanation. The muted second line is the punchline, so it reads
-            as the answer to the first rather than a continuation of it.
-          */}
-          <h1 className="mb-6 max-w-[16ch] text-balance text-[clamp(46px,6vw,80px)] font-semibold leading-[0.98] tracking-[-0.045em] text-foreground">
-            Open a second tab.
-            <br />
-            <span className="text-foreground/50">The first keeps playing.</span>
-          </h1>
+              <span className="mt-3 inline-flex flex-wrap items-center align-middle justify-center gap-3">
+                <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-1 py-1 shadow-[0_12px_40px_rgba(0,0,0,0.25)] backdrop-blur-xl align-middle items-center">
+                  <img
+                    src="./images.png"
+                    alt="YouTube Music"
+                    className="h-10 w-auto md:h-18 rounded-full"
+                  />
+                </span>
+                <span>deserves</span>
+              </span>
+            </h1>
 
-          <p className="mb-9 max-w-[46ch] text-pretty text-xl leading-relaxed text-foreground/70">
-            A desktop client for your own YouTube Music account — every tab with its own queue.
-            Offline downloads, synced lyrics, a mini player, and your local files in the same list.
-          </p>
+            <p className="mt-7 max-w-[46ch] text-pretty text-lg leading-8 text-foreground/68 md:text-xl">
+              A desktop client for your own YouTube Music account. Tabs that each hold
+              their own queue, offline downloads, synced lyrics, and your local files in
+              the same list.
+            </p>
+          </div>
 
-          <div className="mb-6 flex flex-wrap items-center gap-3 max-lg:justify-center">
+          <div className="mt-9 flex flex-wrap items-center gap-3 max-lg:justify-center">
             <LinkButton
               href={asset?.url ?? RELEASES_URL}
               rel="noopener"
-              className="px-7 py-4 text-lg"
+              className="group rounded-full px-7 py-4 text-lg shadow-sm transition-transform duration-200 hover:-translate-y-0.5"
             >
-              <DownloadIcon size={20} />
+              <DownloadIcon size={20} className="transition-transform duration-200 group-hover:translate-y-0.5" />
               Download for {label}
             </LinkButton>
 
@@ -107,20 +113,23 @@ export function Hero({
               variant="outline"
               href={GITHUB_REPO}
               rel="noopener"
-              className="px-6 py-4 text-lg"
+              className="rounded-full px-6 py-4 text-lg backdrop-blur-sm transition-transform duration-200 hover:-translate-y-0.5"
             >
               <BrandIcon icon={OS_ICON.github} width={19} height={19} />
               Source
             </LinkButton>
           </div>
 
-          {/* Availability as marks rather than a sentence — read at a glance, in any language. */}
-          <div className="flex items-center gap-4 max-lg:justify-center">
-            <span className="flex items-center gap-3" aria-label="Available for Windows, macOS and Linux">
-              <BrandIcon icon={OS_ICON.windows} width={19} height={19} />
-              <BrandIcon icon={OS_ICON.macos} width={19} height={19} className="text-foreground" />
-              <BrandIcon icon={OS_ICON.linux} width={19} height={19} />
+          <div className="mt-6 flex flex-wrap items-center gap-4 max-lg:justify-center">
+            <span
+              className="inline-flex items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 backdrop-blur-xl"
+              aria-label="Available for Windows, macOS and Linux"
+            >
+              <BrandIcon icon={OS_ICON.windows} width={18} height={18} />
+              <BrandIcon icon={OS_ICON.macos} width={18} height={18} className="text-foreground" />
+              <BrandIcon icon={OS_ICON.linux} width={18} height={18} />
             </span>
+
             <Mono className="text-foreground/50">
               {asset ? `${formatSize(asset.size)} · signed` : "Windows · macOS · Linux"}
             </Mono>
@@ -132,7 +141,7 @@ export function Hero({
           reads as a picture of the app; one that runs out of the frame reads as the app itself,
           continuing beyond what the page can show.
         */}
-        <div className="relative max-lg:mx-auto max-lg:max-w-2xl lg:-mr-24 xl:-mr-40">
+        <div className="relative max-lg:mx-auto max-lg:max-w-2xl lg:-mr-14 xl:-mr-40">
           <div className="overflow-hidden rounded-2xl bg-[#141414] shadow-2xl ring-1 ring-white/10">
         
             <img
@@ -140,7 +149,7 @@ export function Hero({
               src="./screenshot-dark.png"
               alt="Zuno's home view, with a playlist rail on the left and the player bar along the bottom"
               width={1920}
-              height={1239}
+              height={1209}
             />
           </div>
         </div>
