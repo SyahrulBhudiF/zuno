@@ -55,16 +55,8 @@ export function Hero({
   const label = platform ? PLATFORM_LABEL[platform] : "your system";
 
   return (
-    <section id="top" className="relative w-full overflow-hidden">
-      <video
-        className="absolute inset-0 z-0 h-full w-full object-cover"
-        src="./bgvid.mp4"
-        autoPlay
-        muted
-        loop
-        playsInline
-        aria-hidden="true"
-      />
+    <section id="top" className="relative w-full overflow-hidden bg-muted">
+
 
 <Header/>
       <div
@@ -162,7 +154,7 @@ export function Hero({
         
             <img
               className="w-full"
-              src="./screenshot-dark.png"
+              src="./zuno-da.PNG"
               alt="Zuno's home view, with a playlist rail on the left and the player bar along the bottom"
               width={1920}
               height={1209}

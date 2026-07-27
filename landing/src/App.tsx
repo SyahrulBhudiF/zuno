@@ -25,7 +25,7 @@ export function Header() {
   return (
     <header
       className={cn(
-        "sticky top-0 z-50 transition-colors duration-200 bg-inherit"
+        "sticky top-0 z-50 transition-colors duration-200 bg-transparent"
 
       )}
     >
