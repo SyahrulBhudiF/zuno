@@ -30,6 +30,19 @@ const PLATFORM_LABEL: Record<PlatformId, string> = {
  * bottom fade hands off to the page instead of ending on a cut. All are mixed from the theme
  * token rather than hardcoded black.
  */
+function Character() {
+  return (
+    <video
+      className="size-14 shrink-0 rounded-full bg-card/40 object-cover"
+      src="./zuno-character.mp4"
+      autoPlay
+      muted
+      loop
+      playsInline
+      aria-hidden="true"
+    />
+  );
+}
 export function Hero({
   release,
   platform,
@@ -67,7 +80,9 @@ export function Hero({
         aria-hidden="true"
       />
 
-      <div className="relative z-[2] mx-auto grid w-full max-w-[1400px] items-center gap-12 px-6 pb-24 pt-32 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:gap-8 lg:pb-32 lg:pt-40">
+      <div className="relative z-[2] mx-auto grid w-full max-w-[1500px] items-center gap-12 px-2 pb-24 pt-32 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:gap-8 lg:pb-32 lg:pt-40">
+
+        
       <div className="flex flex-col items-start text-left max-lg:items-center max-lg:text-center">
           <span className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/10 bg-background/45 px-3.5 py-1.5 text-sm backdrop-blur-xl">
             <span className="size-1.5 rounded-full bg-primary" aria-hidden="true" />
@@ -77,7 +92,8 @@ export function Hero({
           </span>
 
           <div className="max-w-4xl">
-            <h1 className="max-w-[12ch] text-balance text-[clamp(48px,6.5vw,90px)] font-semibold leading-[0.9] tracking-[-0.065em] text-foreground">
+           <div className="flex items-center text-4xl font-bold gap-2 p-2 bg-black w-fit rounded-full pr-6 "><Character/>zuno_</div> 
+            <h1 className="max-w-[12ch] text-balance text-[clamp(42px,8vw,80px)] font-semibold leading-[0.9] tracking-[-0.065em] text-foreground">
               <span className="block">The desktop app</span>
 
               <span className="mt-3 inline-flex flex-wrap items-center align-middle justify-center gap-3">
@@ -85,7 +101,7 @@ export function Hero({
                   <img
                     src="./images.png"
                     alt="YouTube Music"
-                    className="h-10 w-auto md:h-18 rounded-full"
+                    className="h-10 w-auto md:h-16 rounded-full"
                   />
                 </span>
                 <span>deserves</span>
