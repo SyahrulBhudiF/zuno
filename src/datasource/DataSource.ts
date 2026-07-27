@@ -1,13 +1,18 @@
 import type {
   AccountOption,
+  ArtistNotificationLevel,
   BrowsePage,
+  BrowseShelf,
   BrowseTarget,
   Album,
   ArtistPage,
   AuthPrompt,
+  FeedNotification,
   LibrarySnapshot,
   Lyrics,
   Playlist,
+  ResolvedLink,
+  SearchCategory,
   SearchResults,
   TrackPage,
   Track,
@@ -24,6 +29,10 @@ export abstract class DataSource {
   abstract getTrack(id: string): Promise<Track>;
   abstract getStreamUrl(track: Track): Promise<string>;
   search?(query: string, onUpdate?: (results: SearchResults) => void): Promise<SearchResults>;
+  /** One filtered search. Narrower and deeper than `search`, which samples every category. */
+  searchCategory?(query: string, category: SearchCategory): Promise<SearchResults>;
+  /** Resolves a pasted YouTube link. Null when it points at something Zuno cannot open. */
+  resolveLink?(url: string): Promise<ResolvedLink | null>;
   searchTracks?(query: string, onUpdate?: (tracks: Track[]) => void): Promise<Track[]>;
   getSearchSuggestions?(query: string, onUpdate?: (suggestions: string[]) => void): Promise<string[]>;
   getStreamData?(track: Track): Promise<StreamData>;
@@ -39,6 +48,10 @@ export abstract class DataSource {
   setAlbumSaved?(album: Album, saved: boolean): Promise<void>;
   getArtist?(artistId: string, onUpdate?: (artist: ArtistPage) => void): Promise<ArtistPage>;
   setArtistSubscribed?(artistId: string, subscribed: boolean): Promise<void>;
+  setArtistNotificationLevel?(artistId: string, level: ArtistNotificationLevel): Promise<void>;
+  /** The account's notification inbox, newest first. */
+  getNotifications?(): Promise<FeedNotification[]>;
+  getUnseenNotificationCount?(): Promise<number>;
   getPlaylistTracks?(playlist: Playlist, onUpdate?: (tracks: Track[]) => void): Promise<Track[]>;
   getPlaylistTrackPage?(
     playlist: Playlist,
@@ -48,6 +61,8 @@ export abstract class DataSource {
   setPlaylistSaved?(playlist: Playlist, saved: boolean): Promise<void>;
   createPlaylist?(title: string, trackIds?: string[]): Promise<Playlist>;
   renamePlaylist?(playlist: Playlist, title: string): Promise<void>;
+  getPlaylistDescription?(playlist: Playlist): Promise<string | null>;
+  setPlaylistDescription?(playlist: Playlist, description: string): Promise<void>;
   deletePlaylist?(playlist: Playlist): Promise<void>;
   /** Moves `movedTrack` to sit after `predecessorTrack`, or to the front when it is null. */
   reorderPlaylistTracks?(
@@ -59,11 +74,20 @@ export abstract class DataSource {
     track: Track,
     playlist: Playlist,
   ): Promise<"added" | "already-present">;
+  /**
+   * Ids of the playlists that already contain this track.
+   *
+   * One question the source can answer directly; the alternative is fetching every playlist in
+   * full just to draw a tick. Ids come back unprefixed.
+   */
+  getPlaylistIdsContainingTrack?(track: Track): Promise<string[]>;
   removeTrackFromPlaylist?(track: Track, playlist: Playlist): Promise<void>;
   setTrackLiked?(track: Track, liked: boolean): Promise<void>;
   /** Three-valued rating. Sources that only support liking may implement setTrackLiked alone. */
   setTrackRating?(track: Track, rating: TrackRating): Promise<void>;
   getRecommendations?(seed: Track, onUpdate?: (tracks: Track[]) => void): Promise<Track[]>;
+  /** Discovery shelves for a track: similar artists, related playlists, more from the album. */
+  getRelated?(track: Track): Promise<BrowseShelf[]>;
   getBrowsePage?(target: BrowseTarget): Promise<BrowsePage>;
   getLyrics?(track: Track): Promise<Lyrics | null>;
 }

@@ -1,6 +1,13 @@
 import { useMemo, useState, type MouseEvent } from "react";
 import { cn } from "@/lib/utils";
 import { SearchIcon } from "@/ui/icons";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/motion/select";
 import type { Album, Artist, Playlist, Track } from "../../datasource/types";
 import type { LibraryState } from "../../player/LibraryController";
 import type { PlayerControllerActions } from "../../player/playerStore";
@@ -27,9 +34,23 @@ const TABS: Array<{ value: LibraryTab; label: string }> = [
 
 const GRID = "grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(9rem,1fr))]";
 
+/** "recent" is YouTube's own order, which is newest-first — so it sorts by doing nothing. */
+type LibrarySort = "recent" | "title" | "artist";
+
 function matches(query: string, ...fields: Array<string | undefined>): boolean {
   if (!query) return true;
   return fields.some((field) => field?.toLocaleLowerCase().includes(query));
+}
+
+function sortItems<T>(
+  items: T[],
+  sort: LibrarySort,
+  title: (item: T) => string,
+  artist: (item: T) => string,
+): T[] {
+  if (sort === "recent") return items;
+  const key = sort === "artist" ? artist : title;
+  return [...items].sort((left, right) => key(left).localeCompare(key(right)));
 }
 
 /**
@@ -55,59 +76,107 @@ export function LibraryPage({
 }) {
   const [tab, setTab] = useState<LibraryTab>("songs");
   const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<LibrarySort>("recent");
   const { currentTrackId, isPlaying } = useNowPlaying();
   const { openTrackMenu, openPlaylistPicker } = useTrackContextMenu();
   const { openPlaylistMenu, openAlbumMenu } = usePlaylistContextMenu();
 
   const library = libraryState.library;
   const normalizedQuery = query.trim().toLocaleLowerCase();
+  // Artists have no second field to sort on, so that option is hidden there rather than
+  // silently doing nothing when the tab changes under a chosen sort.
+  const activeSort: LibrarySort = tab === "artists" && sort === "artist" ? "title" : sort;
 
+  // Liked Songs first, then everything else saved to the library — two lists on YouTube's
+  // side, one "Songs" tab here.
   const songs = useMemo(
-    () => (library?.likedSongs ?? []).filter((track) =>
-      matches(normalizedQuery, track.title, track.artist, track.album)),
-    [library?.likedSongs, normalizedQuery],
+    () => sortItems(
+      [...(library?.likedSongs ?? []), ...(library?.librarySongs ?? [])].filter((track) =>
+        matches(normalizedQuery, track.title, track.artist, track.album)),
+      activeSort,
+      (track) => track.title,
+      (track) => track.artist,
+    ),
+    [activeSort, library?.likedSongs, library?.librarySongs, normalizedQuery],
   );
 
   const albums = useMemo(
-    () => (library?.albums ?? []).filter((album) =>
-      matches(normalizedQuery, album.title, album.artist)),
-    [library?.albums, normalizedQuery],
+    () => sortItems(
+      (library?.albums ?? []).filter((album) =>
+        matches(normalizedQuery, album.title, album.artist)),
+      activeSort,
+      (album) => album.title,
+      (album) => album.artist,
+    ),
+    [activeSort, library?.albums, normalizedQuery],
   );
 
   const playlists = useMemo(() => {
     const all = [...(library?.playlists ?? []), ...getLocalPlaylistItems()];
-    return all.filter((playlist) => matches(normalizedQuery, playlist.title, playlist.owner));
-  }, [library?.playlists, normalizedQuery]);
+    return sortItems(
+      all.filter((playlist) => matches(normalizedQuery, playlist.title, playlist.owner)),
+      activeSort,
+      (playlist) => playlist.title,
+      (playlist) => playlist.owner,
+    );
+  }, [activeSort, library?.playlists, normalizedQuery]);
 
   const artists = useMemo(() => {
     const byId = new Map<string, Artist>();
+    /*
+     * The artist references carried by albums and tracks are a name and a channel id — no
+     * photo. The library's own artists section is the only place those come from, so it is
+     * consulted by id and by name for anything derived below.
+     */
+    const artworkByName = new Map(
+      (library?.artists ?? [])
+        .filter((artist) => artist.artworkUrl)
+        .map((artist) => [artist.name.trim().toLocaleLowerCase(), artist.artworkUrl] as const),
+    );
     const remember = (reference: { id?: string; name?: string; artworkUrl?: string }) => {
       const name = reference.name?.trim();
       if (!name) return;
+      // Matching on name is for references that have no channel id at all. Applying it to one
+      // that does would hand an artist the photo of whoever shares their name.
+      const artworkUrl = reference.artworkUrl
+        ?? (reference.id ? undefined : artworkByName.get(name.toLocaleLowerCase()));
       // Keyed by id where there is one, by name otherwise: an artist without an id still
       // deserves a single row rather than one per track that mentions them.
       const key = reference.id ?? `name:${name.toLocaleLowerCase()}`;
       const existing = byId.get(key);
       if (existing) {
-        if (!existing.artworkUrl && reference.artworkUrl) existing.artworkUrl = reference.artworkUrl;
+        if (!existing.artworkUrl && artworkUrl) existing.artworkUrl = artworkUrl;
         return;
       }
-      byId.set(key, { id: reference.id ?? key, name, artworkUrl: reference.artworkUrl });
+      byId.set(key, { id: reference.id ?? key, name, artworkUrl });
     };
 
+    for (const artist of library?.artists ?? []) remember(artist);
     for (const album of library?.albums ?? []) {
       if (album.artists?.length) album.artists.forEach((item) => remember(item));
-      else remember({ name: album.artist, artworkUrl: album.artworkUrl });
+      // No album cover as a stand-in: it is a picture of a record, not of the artist, and one
+      // arbitrary sleeve in a round frame reads as the wrong person entirely.
+      else remember({ name: album.artist });
     }
-    for (const track of library?.likedSongs ?? []) {
+    for (const track of [...(library?.likedSongs ?? []), ...(library?.librarySongs ?? [])]) {
       if (track.artists?.length) track.artists.forEach((item) => remember(item));
       else remember({ name: track.artist });
     }
 
-    return [...byId.values()]
-      .filter((artist) => matches(normalizedQuery, artist.name))
-      .sort((left, right) => left.name.localeCompare(right.name));
-  }, [library?.albums, library?.likedSongs, normalizedQuery]);
+    return sortItems(
+      [...byId.values()].filter((artist) => matches(normalizedQuery, artist.name)),
+      activeSort,
+      (artist) => artist.name,
+      (artist) => artist.name,
+    );
+  }, [
+    activeSort,
+    library?.albums,
+    library?.artists,
+    library?.likedSongs,
+    library?.librarySongs,
+    normalizedQuery,
+  ]);
 
   const selection = useTrackSelection(songs);
 
@@ -174,6 +243,23 @@ export function LibraryPage({
               className="w-36 min-w-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
             />
           </label>
+
+          <Select
+            className="w-44"
+            value={activeSort}
+            onValueChange={(value) => setSort(value as LibrarySort)}
+          >
+            <SelectTrigger aria-label="Sort library">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="recent">Recently added</SelectItem>
+              <SelectItem value="title">{tab === "artists" ? "Name" : "Title"}</SelectItem>
+              {tab !== "artists" && (
+                <SelectItem value="artist">{tab === "playlists" ? "Owner" : "Artist"}</SelectItem>
+              )}
+            </SelectContent>
+          </Select>
         </div>
       </header>
 

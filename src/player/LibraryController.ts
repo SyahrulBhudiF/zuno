@@ -2,13 +2,19 @@ import type { DataSource } from "../datasource/DataSource";
 import type {
   AccountOption,
   Album,
+  ArtistNotificationLevel,
   BrowsePage,
+  BrowseShelf,
   BrowseTarget,
   Artist,
   ArtistPage,
   AuthPrompt,
+  FeedNotification,
   LibrarySnapshot,
   Playlist,
+  ResolvedLink,
+  SearchCategory,
+  SearchResults,
   TrackPage,
   Track,
   TrackRating,
@@ -42,7 +48,12 @@ export interface LibraryState {
 }
 
 type Listener = () => void;
-const LIBRARY_REFRESH_TIMEOUT_MS = 20_000;
+/**
+ * A first sync walks every page of every library section, so a large account legitimately takes
+ * well past twenty seconds. This only bounds the *initial* fetch — a cached library returns at
+ * once and refreshes in the background, where nothing is waiting on it.
+ */
+const LIBRARY_REFRESH_TIMEOUT_MS = 120_000;
 const SIGN_IN_REFRESH_RETRY_DELAYS_MS = [0, 1_500, 5_000];
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -301,6 +312,59 @@ export class LibraryController {
     return this.dataSource.setArtistSubscribed(artist.id, subscribed);
   }
 
+  /**
+   * How often YouTube may notify about this artist.
+   *
+   * Requires an active subscription — YouTube stores the preference against it, so setting a
+   * level on an unsubscribed channel silently does nothing.
+   */
+  async setArtistNotificationLevel(
+    artist: Artist,
+    level: ArtistNotificationLevel,
+  ): Promise<void> {
+    if (!this.dataSource.setArtistNotificationLevel) {
+      throw new Error("Artist notifications are unavailable.");
+    }
+    if (this.state.status === "signed-out" || !this.state.library) {
+      throw new Error("Sign in to YouTube Music to change notifications.");
+    }
+    if (!artist.id.startsWith("UC")) {
+      throw new Error("This artist does not have a subscribable channel.");
+    }
+    return this.dataSource.setArtistNotificationLevel(artist.id, level);
+  }
+
+  async getNotifications(): Promise<FeedNotification[]> {
+    if (!this.dataSource.getNotifications) return [];
+    if (this.state.status === "signed-out") return [];
+    return this.dataSource.getNotifications();
+  }
+
+  async getUnseenNotificationCount(): Promise<number> {
+    if (!this.dataSource.getUnseenNotificationCount) return 0;
+    if (this.state.status === "signed-out") return 0;
+    return this.dataSource.getUnseenNotificationCount();
+  }
+
+  /** Discovery shelves for a track. Empty rather than throwing — this is never the main event. */
+  async getRelated(track: Track): Promise<BrowseShelf[]> {
+    if (!this.dataSource.getRelated) return [];
+    return this.dataSource.getRelated(track);
+  }
+
+  /** Resolves a pasted YouTube link. Null when it is not one, or points somewhere unopenable. */
+  async resolveLink(url: string): Promise<ResolvedLink | null> {
+    if (!this.dataSource.resolveLink) return null;
+    return this.dataSource.resolveLink(url);
+  }
+
+  async searchCategory(query: string, category: SearchCategory): Promise<SearchResults> {
+    if (!this.dataSource.searchCategory) {
+      return { artists: [], tracks: [], albums: [], playlists: [] };
+    }
+    return this.dataSource.searchCategory(query, category);
+  }
+
   isAlbumSaved(albumId: string): boolean {
     return this.state.library?.albums.some((album) =>
       album.id === albumId || album.playlistId === albumId
@@ -385,6 +449,13 @@ export class LibraryController {
 
   async getRecommendations(seed: Track): Promise<Track[]> {
     return this.dataSource.getRecommendations?.(seed) ?? [];
+  }
+
+  /** Empty when the source cannot answer — the picker falls back to what it remembers. */
+  async getPlaylistIdsContainingTrack(track: Track): Promise<string[]> {
+    if (!this.dataSource.getPlaylistIdsContainingTrack) return [];
+    if (this.state.status === "signed-out") return [];
+    return this.dataSource.getPlaylistIdsContainingTrack(track);
   }
 
   async addTrackToPlaylist(
@@ -546,6 +617,44 @@ export class LibraryController {
 
     try {
       await this.dataSource.renamePlaylist(playlist, trimmed);
+    } catch (error) {
+      if (previousLibrary) this.setState({ library: previousLibrary });
+      throw error;
+    }
+  }
+
+  /**
+   * Sets a playlist's description.
+   *
+   * Local playlists have nowhere to keep one — they are a list of file paths — so this is a
+   * no-op for them rather than an error the caller has to special-case.
+   */
+  async getPlaylistDescription(playlist: Playlist): Promise<string | null> {
+    if (isLocalPlaylist(playlist) || !this.dataSource.getPlaylistDescription) return null;
+    return this.dataSource.getPlaylistDescription(playlist);
+  }
+
+  async setPlaylistDescription(playlist: Playlist, description: string): Promise<void> {
+    if (isLocalPlaylist(playlist)) return;
+    if (!this.dataSource.setPlaylistDescription) {
+      throw new Error("Playlist descriptions are unavailable.");
+    }
+
+    const trimmed = description.trim();
+    const previousLibrary = this.state.library;
+    if (previousLibrary) {
+      this.setState({
+        library: {
+          ...previousLibrary,
+          playlists: previousLibrary.playlists.map((item) =>
+            item.id === playlist.id ? { ...item, description: trimmed } : item,
+          ),
+        },
+      });
+    }
+
+    try {
+      await this.dataSource.setPlaylistDescription(playlist, trimmed);
     } catch (error) {
       if (previousLibrary) this.setState({ library: previousLibrary });
       throw error;

@@ -122,11 +122,29 @@ function loadYouTubeIframeApi(): Promise<void> {
 export class AudioEngine {
   private readonly useNativeAudio = shouldUseNativeAudio();
   private player: YouTubePlayer | null = null;
+  private playerHost: HTMLElement | null = null;
   private playerPromise: Promise<YouTubePlayer> | null = null;
+  /*
+   * A second, idle IFrame player holding the *next* track, already cued.
+   *
+   * One player cannot hold two videos, and cueing is where the gap between tracks comes from:
+   * loading a video takes a network round-trip that only starts once the previous one has
+   * ended. With the next track cued in a player of its own, the transition is a volume ramp
+   * between two live players rather than a stop followed by a load.
+   */
+  private standbyPlayer: YouTubePlayer | null = null;
+  private standbyHost: HTMLElement | null = null;
+  private standbyVideoId: string | null = null;
+  private standbyPromise: Promise<void> | null = null;
   private audio: HTMLAudioElement | null = null;
   private audioObjectUrl: string | null = null;
   private currentVideoId: string | null = null;
   private volume = 1;
+  /*
+   * The crossfade ramp. Held so a stop mid-transition can cancel it — a ramp that kept running
+   * would set volumes on a deck that had already been torn down.
+   */
+  private fadeFrameId: number | null = null;
   private muted = false;
   private playbackRate = 1;
   private onEnded: (() => void) | null = null;
@@ -223,6 +241,18 @@ export class AudioEngine {
       throw new Error("No YouTube track is loaded.");
     }
 
+    /*
+     * A crossfade has already started this track on what is now the active deck. Reloading it
+     * here would restart the song a second or two after the transition made it audible, so
+     * the claim is all that is left to do.
+     */
+    if (
+      player.getPlayerState() === window.YT!.PlayerState.PLAYING
+      && player.getVideoData().video_id === this.currentVideoId
+    ) {
+      return claimId === playbackClaimId && playbackOwner === this;
+    }
+
     if (this.muted) {
       player.mute();
     } else {
@@ -307,9 +337,12 @@ export class AudioEngine {
       playbackOwner = null;
       playbackClaimId += 1;
     }
+    this.cancelFade();
     this.releaseNativeAudio();
     this.player?.stopVideo();
+    this.discardStandby();
     this.currentVideoId = null;
+    this.applyOutputVolume();
     this.rejectStateWaiters(new Error("Playback was stopped."));
   }
 
@@ -320,7 +353,13 @@ export class AudioEngine {
   dispose(): void {
     this.stop();
     this.player?.destroy();
+    this.playerHost?.remove();
     this.player = null;
+    this.playerHost = null;
+    this.standbyPlayer?.destroy();
+    this.standbyHost?.remove();
+    this.standbyPlayer = null;
+    this.standbyHost = null;
     audioEngines.delete(this);
   }
 
@@ -395,6 +434,142 @@ export class AudioEngine {
   getDuration(): number {
     if (this.audio) return Number.isFinite(this.audio.duration) ? this.audio.duration : 0;
     return this.player?.getDuration() ?? 0;
+  }
+
+  /**
+   * Cues a track on the standby deck so the next transition has nothing to load.
+   *
+   * Idempotent and fire-and-forget: called repeatedly from the playback ticker, and a failure
+   * only means the transition falls back to the ordinary load path. Not available on the
+   * native-audio path, which serves offline files that have no load latency to hide.
+   */
+  preloadNext(videoId: string): void {
+    if (this.useNativeAudio || this.audio) return;
+    if (!videoId || videoId === this.currentVideoId) return;
+    if (this.standbyVideoId === videoId || this.standbyPromise) return;
+
+    this.standbyPromise = this.cueStandby(videoId)
+      .catch((error: unknown) => {
+        logInternalWarn("AudioEngine.preloadNext failed", {
+          videoId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        this.discardStandby();
+      })
+      .finally(() => {
+        this.standbyPromise = null;
+      });
+  }
+
+  /** Whether a transition to `videoId` can skip loading entirely. */
+  hasPreloaded(videoId: string): boolean {
+    return this.standbyPlayer !== null && this.standbyVideoId === videoId;
+  }
+
+  /**
+   * Hands playback to the preloaded deck, optionally over a crossfade.
+   *
+   * With `fadeMs` at 0 this is the gapless case: the standby is already cued, so starting it
+   * and stopping the outgoing deck happen in the same tick. Above 0 both decks play at once
+   * and their volumes are ramped past each other, which is a real crossfade rather than a
+   * fade-out followed by a fade-in.
+   *
+   * Returns false when there is nothing preloaded, leaving the caller to load normally.
+   */
+  async transitionToPreloaded(videoId: string, fadeMs: number): Promise<boolean> {
+    if (!this.hasPreloaded(videoId)) return false;
+
+    const outgoing = this.player;
+    const outgoingHost = this.playerHost;
+    const incoming = this.standbyPlayer!;
+    const targetPercent = this.muted ? 0 : Math.round(this.volume * 100);
+
+    this.cancelFade();
+    incoming.setVolume(fadeMs > 0 ? 0 : targetPercent);
+    if (this.muted) {
+      incoming.mute();
+    } else {
+      incoming.unMute();
+    }
+    incoming.setPlaybackRate?.(this.playbackRate);
+    incoming.playVideo();
+
+    // Swap the decks first: everything else on the engine addresses `this.player`, and the
+    // state events from the incoming deck must be recognised as this engine's playback the
+    // moment it starts making sound.
+    this.player = incoming;
+    this.playerHost = this.standbyHost;
+    this.standbyPlayer = outgoing;
+    this.standbyHost = outgoingHost;
+    this.standbyVideoId = null;
+    this.currentVideoId = videoId;
+    this.loadRequestId += 1;
+
+    if (fadeMs > 0) {
+      await this.rampAcross(outgoing, incoming, targetPercent, fadeMs);
+    }
+
+    outgoing?.stopVideo();
+    logInternalInfo("AudioEngine.transitionToPreloaded", { videoId, fadeMs });
+    return true;
+  }
+
+  /** Ramps the outgoing deck down and the incoming deck up over the same window. */
+  private rampAcross(
+    outgoing: YouTubePlayer | null,
+    incoming: YouTubePlayer,
+    targetPercent: number,
+    fadeMs: number,
+  ): Promise<void> {
+    return new Promise((resolve) => {
+      const startedAt = performance.now();
+      const step = () => {
+        const progress = Math.min(1, (performance.now() - startedAt) / fadeMs);
+        /*
+         * Equal-power rather than linear. Two linear ramps crossing at half volume sum to a
+         * noticeable dip in the middle, because loudness is not proportional to amplitude;
+         * the sine/cosine pair holds perceived level constant across the transition.
+         */
+        outgoing?.setVolume(Math.round(targetPercent * Math.cos((progress * Math.PI) / 2)));
+        incoming.setVolume(Math.round(targetPercent * Math.sin((progress * Math.PI) / 2)));
+
+        if (progress >= 1) {
+          this.fadeFrameId = null;
+          resolve();
+          return;
+        }
+        this.fadeFrameId = window.requestAnimationFrame(step);
+      };
+      this.fadeFrameId = window.requestAnimationFrame(step);
+    });
+  }
+
+  private async cueStandby(videoId: string): Promise<void> {
+    if (!this.standbyPlayer) {
+      const created = await this.createPlayer();
+      this.standbyPlayer = created.player;
+      this.standbyHost = created.host;
+      // Silent until a transition ramps it up: a standby that inherited the output volume
+      // would be audible the instant YouTube decided to start it on its own.
+      this.standbyPlayer.setVolume(0);
+      this.standbyPlayer.mute();
+    }
+
+    this.standbyPlayer.cueVideoById(videoId);
+    this.standbyVideoId = videoId;
+    logInternalInfo("AudioEngine.preloadNext cued", { videoId });
+  }
+
+  private discardStandby(): void {
+    this.standbyVideoId = null;
+    this.standbyPlayer?.stopVideo();
+  }
+
+  private cancelFade(): void {
+    if (this.fadeFrameId !== null) {
+      window.cancelAnimationFrame(this.fadeFrameId);
+      this.fadeFrameId = null;
+    }
   }
 
   private async loadNativeAudio(
@@ -516,7 +691,10 @@ export class AudioEngine {
     if (this.player) return this.player;
     if (this.playerPromise) return this.playerPromise;
 
-    this.playerPromise = this.createPlayer();
+    this.playerPromise = this.createPlayer().then((created) => {
+      this.playerHost = created.host;
+      return created.player;
+    });
     try {
       this.player = await this.playerPromise;
       return this.player;
@@ -542,9 +720,12 @@ export class AudioEngine {
   private pauseForPlaybackClaim(): void {
     this.audio?.pause();
     this.player?.pauseVideo();
+    // The standby is cued rather than playing, but a mid-crossfade claim would otherwise
+    // leave the outgoing deck — now the standby — running under the new owner's audio.
+    this.standbyPlayer?.pauseVideo();
   }
 
-  private async createPlayer(): Promise<YouTubePlayer> {
+  private async createPlayer(): Promise<{ player: YouTubePlayer; host: HTMLElement }> {
     await loadYouTubeIframeApi();
     if (!window.YT?.Player) {
       throw new Error("YouTube player API loaded without a Player constructor.");
@@ -612,14 +793,26 @@ export class AudioEngine {
               player.unMute();
             }
             logInternalInfo("AudioEngine YouTube player ready");
-            resolve(player);
+            resolve({ player, host });
           },
           onStateChange: (event) => {
+            /*
+             * Events from the standby deck are not this engine's playback.
+             *
+             * Without this check a cue on the standby resolves a waiter meant for the deck
+             * that is actually playing, and stopping the outgoing deck after a crossfade
+             * reports ENDED — which would advance the queue a second time, skipping a track
+             * on every transition.
+             */
+            const isActiveDeck = player === this.player;
             logInternalInfo("AudioEngine YouTube player state", {
               state: event.data,
               videoId: this.currentVideoId,
               playerVideoId: player.getVideoData().video_id ?? null,
+              deck: isActiveDeck ? "active" : "standby",
             });
+            if (!isActiveDeck) return;
+
             this.resolveStateWaiters(event.data, player.getVideoData().video_id ?? null);
             if (event.data === window.YT!.PlayerState.ENDED) {
               this.onEnded?.();
@@ -627,6 +820,16 @@ export class AudioEngine {
           },
           onError: (event) => {
             const error = new Error(`YouTube player error ${event.data}`);
+            if (player !== this.player) {
+              // A standby that fails to cue is not an error the user can see: the transition
+              // simply falls back to loading the track the ordinary way.
+              logInternalWarn("AudioEngine standby deck error", {
+                videoId: this.standbyVideoId,
+                code: event.data,
+              });
+              this.discardStandby();
+              return;
+            }
             this.rejectStateWaiters(error);
             logInternalError("AudioEngine YouTube player error", error, {
               videoId: this.currentVideoId,

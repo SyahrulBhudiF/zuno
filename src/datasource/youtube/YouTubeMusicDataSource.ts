@@ -6,6 +6,7 @@ import { mintPoToken } from "./poToken";
 import { DataSource, type StreamData } from "../DataSource";
 import type {
   AccountOption,
+  ArtistNotificationLevel,
   BrowseLink,
   BrowsePage,
   BrowseShelf,
@@ -16,15 +17,19 @@ import type {
   ArtistPage,
   ArtistReference,
   AuthPrompt,
+  FeedNotification,
   LibrarySnapshot,
   Lyrics,
   Playlist,
+  ResolvedLink,
+  SearchCategory,
   SearchResults,
   TrackPage,
   Track,
   TrackRating,
 } from "../types";
 import { collectArtworkCandidates, getVideoArtworkFallback, selectArtworkUrl } from "./artwork";
+import { looksLikeYouTubeLink, parseYouTubeLink } from "./links";
 import { isTrackDownloaded } from "../../player/offlineStore";
 import {
   getStreamingQuality,
@@ -68,6 +73,8 @@ function decodeBase64(base64: string): Uint8Array {
 type MusicItem = {
   id?: string;
   title?: string | { toString(): string };
+  /** Artist rows carry their label here instead of `title`. */
+  name?: string;
   item_type?: string;
   menu?: unknown;
   artists?: Array<{ name?: string; channel_id?: string; endpoint?: { payload?: { browseId?: string } } }>;
@@ -120,6 +127,7 @@ type YouTubeMusicPlaylistPage = {
   items?: MusicItem[];
   contents?: MusicItem[];
   has_continuation?: boolean;
+  description?: string | { toString(): string };
   getContinuation(): Promise<YouTubeMusicPlaylistPage>;
 };
 
@@ -262,10 +270,21 @@ type LibraryResponses = {
 const LIKED_SONGS_PLAYLIST_ID = "LM";
 /** Everything a browse shelf can meaningfully hold. */
 const BROWSE_ITEM_TYPES = new Set(["song", "video", "album", "playlist", "artist"]);
-const LIBRARY_CACHE_KEY = "youtube-music:library:v5";
+/*
+ * v6: v5 snapshots were capped at the first page of each section, so they are discarded rather
+ * than shown as a complete library until the background refresh replaces them.
+ * v7: artist photos in v6 could be the page banner, and they are carried forward between syncs,
+ * so the stored ones have to go with it.
+ * v8: same again — v7 could hold another artist's photo entirely.
+ * v9: and v8 could hold a cropped one; artist pictures are carried between syncs, so they only
+ * change when the key does.
+ */
+const LIBRARY_CACHE_KEY = "youtube-music:library:v9";
 /** The account the user picked by hand, which outranks the automatic probe. */
 const SELECTED_ACCOUNT_STORAGE_KEY = "youtube-music:selected-account";
-const ARTIST_CACHE_VERSION = "v3";
+// v7: artist pictures come from named header fields now — foreground, then thumbnail, then the
+// channel avatar — so anything cached under the older shape-and-crop rules has to go.
+const ARTIST_CACHE_VERSION = "v7";
 const ARTIST_SUBSCRIPTION_OVERRIDE_MS = 60_000;
 const PLAYLIST_PAGE_SESSION_TTL_MS = 10 * 60_000;
 const PLAYLIST_TRACK_CACHE_VERSION = "v4";
@@ -803,7 +822,9 @@ export class YouTubeMusicDataSource extends DataSource {
   private getTitle(item: MusicItem): string | null {
     if (typeof item.title === "string") return item.title;
     const title = item.title?.toString();
-    return title || null;
+    // Artist rows are parsed into `name` and leave `title` unset, and every collector here
+    // discards an item without a title — which is why they never reached the library.
+    return title || item.name || null;
   }
 
   private getPlaylistItemId(item: MusicItem): string | undefined {
@@ -905,11 +926,21 @@ export class YouTubeMusicDataSource extends DataSource {
     };
   }
 
+  /**
+   * Library rows address an artist as MPLA + their channel id; everywhere else in the app —
+   * and every artist reference on a track — is the bare channel id, so they must match.
+   */
+  private normalizeArtistId(id?: string): string | undefined {
+    return id?.startsWith("MPLA") ? id.slice(4) : id;
+  }
+
   private toArtist(item: MusicItem): Artist | null {
-    const id = item.id
-      ?? this.findBrowseId(item.endpoint)
-      ?? this.findBrowseId(item.on_tap)
-      ?? this.findYoutubeChannelId(item);
+    const id = this.normalizeArtistId(
+      item.id
+        ?? this.findBrowseId(item.endpoint)
+        ?? this.findBrowseId(item.on_tap)
+        ?? this.findYoutubeChannelId(item),
+    );
     const name = this.getTitle(item) ?? item.author?.name ?? item.artists?.[0]?.name;
     if (!id?.startsWith("UC") || !name) return null;
     return {
@@ -1523,13 +1554,21 @@ export class YouTubeMusicDataSource extends DataSource {
 
   private getMusicContinuation(client: Innertube, root: unknown): MusicContinuation | null {
     const parsed = root as ParsedMusicResponse;
-    const contentShelf = parsed.contents_memo?.getType(YTNodes.MusicPlaylistShelf)?.[0] as
-      | { continuation?: unknown }
-      | undefined;
-    const continuationShelf = parsed.continuation_contents_memo?.getType(YTNodes.MusicPlaylistShelf)?.[0] as
-      | { continuation?: unknown }
-      | undefined;
-    const shelfContinuation = contentShelf?.continuation ?? continuationShelf?.continuation;
+    /*
+     * Where a "there is more" token lives depends on the surface: playlists use a
+     * MusicPlaylistShelf, library grids a Grid or MusicShelf, and every continuation response
+     * puts the next token on `continuation_contents` instead. Reading all of them explicitly
+     * beats the tree walk below, which finds whichever shelf DFS reaches first.
+     */
+    const shelfTypes = [YTNodes.MusicPlaylistShelf, YTNodes.MusicShelf, YTNodes.Grid] as const;
+    const shelves: Array<{ continuation?: unknown }> = [];
+    for (const memo of [parsed.contents_memo, parsed.continuation_contents_memo]) {
+      shelves.push(...(memo?.getType(...shelfTypes) ?? []) as Array<{ continuation?: unknown }>);
+    }
+    shelves.push((parsed as { continuation_contents?: { continuation?: unknown } }).continuation_contents ?? {});
+    const shelfContinuation = shelves
+      .map((shelf) => shelf.continuation)
+      .find((value) => typeof value === "string" && value.length > 0);
     if (typeof shelfContinuation === "string" && shelfContinuation.length > 0) {
       return {
         key: shelfContinuation,
@@ -1603,6 +1642,61 @@ export class YouTubeMusicDataSource extends DataSource {
     }
 
     return null;
+  }
+
+  /**
+   * Library grids come back one page at a time — roughly 25 albums or playlists — with the rest
+   * behind a continuation token. Reading only the first page silently truncates the library, so
+   * walk every page. A failed continuation keeps what was already collected: a partial library
+   * beats an empty one, and the next refresh tries again.
+   */
+  private async collectAllMusicItems(
+    client: Innertube,
+    initialResponse: unknown,
+    acceptedTypes: Set<string>,
+    label: string,
+    maxPages = 200,
+  ): Promise<MusicItem[]> {
+    const items: MusicItem[] = [];
+    const seenContinuations = new Set<string>();
+    let response = initialResponse;
+    let pageCount = 0;
+
+    while (pageCount < maxPages) {
+      items.push(...this.collectMusicItems(response, acceptedTypes));
+      pageCount += 1;
+
+      const continuation = this.getMusicContinuation(client, response);
+      if (!continuation) break;
+      if (seenContinuations.has(continuation.key)) {
+        logInternalWarn("YouTubeMusicDataSource.collectAllMusicItems repeated continuation", {
+          label,
+          pageCount,
+          continuationKey: continuation.key,
+        });
+        break;
+      }
+
+      seenContinuations.add(continuation.key);
+      try {
+        response = await continuation.load();
+      } catch (error) {
+        logInternalWarn("YouTubeMusicDataSource.collectAllMusicItems continuation failed", {
+          label,
+          pageCount,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        break;
+      }
+    }
+
+    logInternalInfo("YouTubeMusicDataSource.collectAllMusicItems complete", {
+      label,
+      pageCount,
+      itemCount: items.length,
+      truncated: pageCount >= maxPages,
+    });
+    return items;
   }
 
   private async collectAllTracks(client: Innertube, initialResponse: unknown): Promise<Track[]> {
@@ -1699,7 +1793,18 @@ export class YouTubeMusicDataSource extends DataSource {
       }
 
       seenContinuations.add(continuation.key);
-      page = await continuation.load();
+      try {
+        page = await continuation.load();
+      } catch (error) {
+        // Keep the pages already read: a long playlist that loses one request mid-walk is
+        // still mostly here, and throwing would fail the whole library sync over it.
+        logInternalWarn("YouTubeMusicDataSource.collectPlaylistTracks continuation failed", {
+          playlistId,
+          pageCount,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        break;
+      }
     }
 
     const tracks = this.uniqueById(
@@ -1851,8 +1956,7 @@ export class YouTubeMusicDataSource extends DataSource {
     });
   }
 
-  private async getCreatedPlaylists(client: Innertube, playlistLibrary: unknown): Promise<Playlist[]> {
-    const playlistItems = this.collectMusicItems(playlistLibrary, new Set(["playlist"]));
+  private async getCreatedPlaylists(client: Innertube, playlistItems: MusicItem[]): Promise<Playlist[]> {
     const playlists = this.uniqueById(
       playlistItems
         .map((item) => this.toPlaylist(item))
@@ -1865,9 +1969,24 @@ export class YouTubeMusicDataSource extends DataSource {
           return true;
         }),
     );
+    /*
+     * Deciding "did I create this playlist?" costs one browse request each, and a full library
+     * can be hundreds of playlists. Ownership never changes, so anything already classified in
+     * the cached snapshot is reused and only new playlists are probed.
+     */
+    const cachedLibrary = await getCachedJson<LibrarySnapshot>(LIBRARY_CACHE_KEY);
+    const cachedById = new Map((cachedLibrary?.playlists ?? []).map((playlist) => [playlist.id, playlist]));
     const createdPlaylistIds = new Set<string>();
-    const queue = [...playlists];
-    const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
+    const queue = playlists.filter((playlist) => {
+      const cached = cachedById.get(playlist.id);
+      if (!cached || cached.isEditable === undefined) return true;
+      if (cached.isEditable) createdPlaylistIds.add(playlist.id);
+      // The probe is also where a missing cover came from, so carry that over rather than
+      // paying for the request again.
+      if (!playlist.artworkUrl) playlist.artworkUrl = cached.artworkUrl;
+      return false;
+    });
+    const workers = Array.from({ length: Math.min(6, queue.length) }, async () => {
       while (queue.length > 0) {
         const playlist = queue.shift();
         if (!playlist) return;
@@ -1906,6 +2025,64 @@ export class YouTubeMusicDataSource extends DataSource {
     }));
   }
 
+  /**
+   * The library's artists, each with a photo where one exists.
+   *
+   * The library's artists section covers only some of them, and everyone else arrives as a
+   * reference on an album or a song: a name and a channel id, no picture. The only place a
+   * picture exists is that artist's own page, which is one request each — so the results are
+   * the artist-page cache the artist view already fills and reads, and a sync only pays for
+   * artists nobody has resolved yet.
+   */
+  private async completeLibraryArtists(
+    artists: Artist[],
+    references: ArtistReference[],
+  ): Promise<Artist[]> {
+    const byId = new Map(artists.map((artist) => [artist.id, artist]));
+    for (const reference of references) {
+      if (!reference.id.startsWith("UC") || !reference.name || byId.has(reference.id)) continue;
+      byId.set(reference.id, { id: reference.id, name: reference.name });
+    }
+
+    // Photos resolved by an earlier sync, so the budget below always goes to artists nobody
+    // has looked up yet rather than re-spending itself on the same first sixty.
+    const cachedLibrary = await getCachedJson<LibrarySnapshot>(LIBRARY_CACHE_KEY);
+    for (const cached of cachedLibrary?.artists ?? []) {
+      const artist = byId.get(cached.id);
+      if (artist && !artist.artworkUrl && cached.artworkUrl) {
+        byId.set(cached.id, { ...artist, artworkUrl: cached.artworkUrl });
+      }
+    }
+
+    /*
+     * ponytail: a first sync of a large library would otherwise fire hundreds of requests at
+     * once. Resolved artists keep their photo in the snapshot and never come back here, so a
+     * per-sync budget fills the rest in over the next few refreshes rather than all at once.
+     */
+    const queue = [...byId.values()].filter((artist) => !artist.artworkUrl).slice(0, 60);
+    const workers = Array.from({ length: Math.min(6, queue.length) }, async () => {
+      while (queue.length > 0) {
+        const artist = queue.shift();
+        if (!artist) return;
+        const resolved = await this.getArtistArtworkFromPage(artist.id);
+        if (resolved?.artworkUrl) {
+          byId.set(artist.id, { ...artist, artworkUrl: resolved.artworkUrl });
+        }
+      }
+    });
+    await Promise.all(workers);
+
+    const completed = [...byId.values()];
+    logInternalInfo("YouTubeMusicDataSource.completeLibraryArtists complete", {
+      artistCount: completed.length,
+      withArtwork: completed.filter((artist) => artist.artworkUrl).length,
+      // Non-zero here means the budget above ran out — the next sync picks up where this
+      // one stopped, so it shrinks each time rather than staying put.
+      stillMissing: completed.filter((artist) => !artist.artworkUrl).length,
+    });
+    return completed;
+  }
+
   private async getLikedSongs(client: Innertube): Promise<{
     playlist: Playlist;
     tracks: Track[];
@@ -1921,6 +2098,42 @@ export class YouTubeMusicDataSource extends DataSource {
       },
       tracks,
     };
+  }
+
+  /**
+   * One library section, in full.
+   *
+   * The dedicated browse id is the reliable source — it returns the whole section, paginated.
+   * The chip on the library landing page is the fallback, because it depends on YouTube still
+   * shipping a chip with that exact English label, and when it doesn't the landing page hands
+   * back a short "recent activity" grid that looks like a complete library but isn't.
+   */
+  private async loadLibrarySection(
+    client: Innertube,
+    browseId: string,
+    libraryLanding: unknown,
+    filterName: string,
+    itemTypes: string[],
+  ): Promise<MusicItem[]> {
+    const acceptedTypes = new Set(itemTypes);
+    try {
+      const response = await this.executeMusicBrowse(client, { browseId });
+      const items = await this.collectAllMusicItems(client, response, acceptedTypes, browseId);
+      if (items.length > 0) return items;
+      logInternalWarn("YouTubeMusicDataSource.loadLibrarySection empty, falling back to filter", {
+        browseId,
+        filterName,
+      });
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.loadLibrarySection failed, falling back to filter", {
+        browseId,
+        filterName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const filtered = await this.applyLibraryFilter(client, libraryLanding, filterName);
+    return this.collectAllMusicItems(client, filtered, acceptedTypes, filterName);
   }
 
   private async applyLibraryFilter(
@@ -2483,9 +2696,9 @@ export class YouTubeMusicDataSource extends DataSource {
     if (cached && this.hasLibraryContent(cached)) {
       globalThis.setTimeout(() => {
         void this.refreshLibrary(cacheKey)
-          .then(({ changed, value }) => {
-            if (changed) onUpdate?.(value);
-          })
+          // Delivered whether or not the cache write reported a change: a failed write also
+          // reports "unchanged", and that used to throw away a perfectly good refresh.
+          .then(({ value }) => onUpdate?.(value))
           .catch((error) => {
             logInternalWarn("YouTubeMusicDataSource.getLibrary background refresh failed", {
               error: error instanceof Error ? error.message : String(error),
@@ -2540,20 +2753,47 @@ export class YouTubeMusicDataSource extends DataSource {
       throw new YouTubeMusicAuthError(authFailureMessage);
     }
 
-    const [albumLibrary, playlistLibrary] = await Promise.all([
-      this.applyLibraryFilter(client, libraryLanding, "Albums"),
-      this.applyLibraryFilter(client, libraryLanding, "Playlists"),
+    const [albumItems, playlistItems, artistItems, songItems, recentItems] = await Promise.all([
+      this.loadLibrarySection(client, "FEmusic_liked_albums", libraryLanding, "Albums", ["album"]),
+      this.loadLibrarySection(client, "FEmusic_liked_playlists", libraryLanding, "Playlists", ["playlist"]),
+      /*
+       * Artists are derivable from albums and liked songs, but only this section carries their
+       * photos — an artist reference on a track is a name and a channel id, nothing else.
+       * Rows here are typed `library_artist`, not `artist`: same artist, different page type.
+       */
+      this.loadLibrarySection(client, "FEmusic_library_corpus_track_artists", libraryLanding, "Artists", ["artist", "library_artist"]),
+      // The library's own Songs section. It overlaps Liked Songs but is not the same list —
+      // anything saved from an album lives here and in no playlist.
+      this.loadLibrarySection(client, "FEmusic_liked_videos", libraryLanding, "Songs", ["song", "video"]),
+      // ponytail: history is unbounded and only feeds a "recently played" strip — a few pages is
+      // already more than the UI shows. Raise if a full history view ever needs it.
+      this.collectAllMusicItems(client, historyResponse, new Set(["song", "video"]), "history", 3),
     ]);
 
-    const albumItems = this.collectMusicItems(albumLibrary, new Set(["album"]));
-    const recentItems = this.collectMusicItems(historyResponse, new Set(["song", "video"]));
     const parsedAlbums = this.uniqueById(albumItems.map((item) => this.toAlbum(item)).filter((item): item is Album => Boolean(item)));
+    const sectionArtists = this.uniqueById(
+      artistItems.map((item) => this.toArtist(item)).filter((item): item is Artist => Boolean(item)),
+    );
     const [albums, playlists, likedSongsResult] = await Promise.all([
       this.enrichMissingAlbumArtwork(client, parsedAlbums),
-      this.getCreatedPlaylists(client, playlistLibrary),
+      this.getCreatedPlaylists(client, playlistItems),
       this.getLikedSongs(client),
     ]);
     const recentlyPlayed = this.uniqueById(recentItems.map((item) => this.toTrack(item)).filter((item): item is Track => Boolean(item)));
+    const likedSongIds = new Set(likedSongsResult.tracks.map((track) => track.id));
+    const librarySongs = this.uniqueById(
+      songItems.map((item) => this.toTrack(item)).filter((item): item is Track => Boolean(item)),
+    ).filter((track) => !likedSongIds.has(track.id));
+    /*
+     * Every artist the library page can show, from the same three lists it builds its Artists
+     * tab out of. Leaving songs out of this left the artists you only have liked tracks by
+     * with no photo at all — nothing else in the sync ever looks them up.
+     */
+    const artists = await this.completeLibraryArtists(sectionArtists, [
+      ...albums.flatMap((album) => album.artists ?? []),
+      ...likedSongsResult.tracks.flatMap((track) => track.artists ?? []),
+      ...librarySongs.flatMap((track) => track.artists ?? []),
+    ]);
     const historyMessages = this.getResponseMessages(historyResponse);
     await this.cachePlaylistTracks(LIKED_SONGS_PLAYLIST_ID, likedSongsResult.tracks);
 
@@ -2567,9 +2807,11 @@ export class YouTubeMusicDataSource extends DataSource {
       albumCount: albums.length,
       playlistCount: playlists.length,
       likedSongCount: likedSongsResult.tracks.length,
+      librarySongCount: librarySongs.length,
       recentTrackCount: recentlyPlayed.length,
-      albumRenderers: this.getRendererCounts(albumLibrary),
-      playlistRenderers: this.getRendererCounts(playlistLibrary),
+      albumItemCount: albumItems.length,
+      playlistItemCount: playlistItems.length,
+      artistCount: artists.length,
       historyRenderers: this.getRendererCounts(historyResponse),
       libraryMessages,
       historyMessages,
@@ -2584,9 +2826,11 @@ export class YouTubeMusicDataSource extends DataSource {
         artworkUrl: this.musicAccountArtworkUrl ?? undefined,
       },
       albums,
+      artists,
       playlists,
       likedSongsPlaylist: likedSongsResult.playlist,
       likedSongs: likedSongsResult.tracks,
+      librarySongs,
       recentlyPlayed,
     };
   }
@@ -2932,6 +3176,60 @@ export class YouTubeMusicDataSource extends DataSource {
     return [...hydrated, ...artists.slice(priorityArtists.length)];
   }
 
+  /**
+   * The artist's YouTube channel avatar.
+   *
+   * Only reached when the music page carries no image at all, and the result is stored in that
+   * artist's cached page, so it costs one request per artist ever rather than per view. The
+   * `metadata.avatar` field only — a channel's header image is a banner of its own.
+   */
+  private async getChannelAvatar(channelId: string): Promise<string | undefined> {
+    if (!channelId.startsWith("UC")) return undefined;
+    try {
+      const client = await this.getWebClient();
+      const channel = await client.getChannel(channelId);
+      const metadata = channel.metadata as {
+        avatar?: Array<{ url?: string; width?: number; height?: number }>;
+      } | undefined;
+      return selectArtworkUrl(collectArtworkCandidates(metadata?.avatar));
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.getChannelAvatar failed", {
+        channelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * The picture for an artist, in strict order of preference:
+   *
+   *  1. `foreground_thumbnail` — the portrait, when the music page has one,
+   *  2. `thumbnail` — the page's own image, used as-is even where it is a wide banner,
+   *  3. the YouTube channel avatar, when the music page carries neither,
+   *  4. nothing, and the UI draws its placeholder.
+   *
+   * By field, not by shape: the music page's own image is preferred to the channel's whatever
+   * proportions it comes back in, and it is passed through uncropped.
+   */
+  private async resolveArtistArtwork(
+    artistId: string,
+    foregroundThumbnail: unknown,
+    thumbnail: unknown,
+  ): Promise<string | undefined> {
+    const portrait = selectArtworkUrl(collectArtworkCandidates(foregroundThumbnail));
+    const pageImage = selectArtworkUrl(collectArtworkCandidates(thumbnail));
+    const channelAvatar = portrait || pageImage ? undefined : await this.getChannelAvatar(artistId);
+    const artworkUrl = portrait ?? pageImage ?? channelAvatar;
+
+    logInternalInfo("YouTubeMusicDataSource.resolveArtistArtwork", {
+      artistId,
+      source: portrait ? "portrait" : pageImage ? "page-image" : channelAvatar ? "channel" : "none",
+      artworkUrl,
+    });
+    return artworkUrl;
+  }
+
   private async fetchArtistFresh(artistId: string): Promise<ArtistPage> {
     const client = await this.getMusicClient();
     const artistPage = await client.music.getArtist(artistId);
@@ -2953,24 +3251,32 @@ export class YouTubeMusicDataSource extends DataSource {
       header?.description?.toString(),
       ...(header?.description?.runs?.map((run) => run.text) ?? []),
     ].filter(Boolean).join(" ");
-    const artistItem = responseItems.find((item) => item.item_type === "artist");
+    /*
+     * The artist card for *this* artist, if the page even has one — not merely the first one
+     * on it. An artist page ends with "Fans might also like", so the first artist-typed item
+     * is usually somebody else, and taking their photo and subscriber count put a stranger's
+     * face on the page whenever this artist's own header carried no portrait.
+     */
+    const artistItem = responseItems.find((item) =>
+      item.item_type === "artist"
+      && this.normalizeArtistId(item.id ?? this.findBrowseId(item.endpoint)) === artistId);
     const subscriberCount = headerText.match(/[\d,.]+\s*[KMB]?\s+subscribers?/i)?.[0]
       ?? artistItem?.subscribers;
+    // A visual header hands back a plain array, an immersive one a node with `contents`.
     const headerThumbnail = Array.isArray(header?.thumbnail)
       ? header.thumbnail
       : header?.thumbnail?.contents;
+    const artworkUrl = await this.resolveArtistArtwork(
+      artistId,
+      header?.foreground_thumbnail,
+      headerThumbnail,
+    );
     const artist: Artist = {
       id: artistId,
       name: header?.title?.toString()
         || artistItem?.title?.toString()
         || "Artist",
-      artworkUrl: selectArtworkUrl(
-        collectArtworkCandidates(
-          headerThumbnail,
-          header?.foreground_thumbnail,
-          artistItem?.thumbnail,
-        ),
-      ),
+      artworkUrl,
       subscriberCount,
     };
 
@@ -3363,6 +3669,52 @@ export class YouTubeMusicDataSource extends DataSource {
       movedTrackId: movedTrack.id,
       toFront: !predecessorTrack,
     });
+  }
+
+  /**
+   * The playlists that already hold this song, straight from YouTube.
+   *
+   * This is the same call the web player's "Save to playlist" dialog makes: one request that
+   * comes back with every playlist and a flag for whether the song is in it. Reading it beats
+   * the alternative — fetching every playlist's contents — by an order of magnitude, and
+   * unlike the local record it also knows about songs added anywhere other than here.
+   */
+  async getPlaylistIdsContainingTrack(track: Track): Promise<string[]> {
+    if (!this.musicCookie || track.source === "local") return [];
+
+    const client = await this.getMusicClient();
+    const response = await client.actions.execute("/playlist/get_add_to_playlist", {
+      videoIds: [track.id],
+      excludeWatchLater: true,
+    }) as { data?: unknown };
+
+    const ids: string[] = [];
+    const seen = new WeakSet<object>();
+    const visit = (value: unknown) => {
+      if (!value || typeof value !== "object" || seen.has(value)) return;
+      seen.add(value);
+
+      const option = (value as { playlistAddToOptionRenderer?: unknown }).playlistAddToOptionRenderer;
+      if (option && typeof option === "object") {
+        const { playlistId, containsSelectedVideos } = option as {
+          playlistId?: string;
+          containsSelectedVideos?: string;
+        };
+        // "ALL" for a single song means it is in there; "SOME" only arises for a selection.
+        if (playlistId && containsSelectedVideos && containsSelectedVideos !== "NONE") {
+          ids.push(this.normalizePlaylistId(playlistId));
+        }
+      }
+
+      for (const child of Object.values(value)) visit(child);
+    };
+    visit(response.data);
+
+    logInternalInfo("YouTubeMusicDataSource.getPlaylistIdsContainingTrack", {
+      trackId: track.id,
+      playlistCount: ids.length,
+    });
+    return ids;
   }
 
   async addTrackToPlaylist(
@@ -3764,7 +4116,9 @@ export class YouTubeMusicDataSource extends DataSource {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    return null;
+
+    // Last resort, and the only source keyed by video id rather than by title and artist.
+    return this.fetchYouTubeMusicLyrics(track);
   }
 
   private async fetchProviderLyrics(track: Track): Promise<Lyrics | null> {
@@ -4793,43 +5147,11 @@ export class YouTubeMusicDataSource extends DataSource {
       const title = section.title?.trim() || `More ${index + 1}`;
       if (seenTitles.has(title)) continue;
 
-      const items = this.collectMusicItems(section.node, BROWSE_ITEM_TYPES);
-      const shelf: BrowseShelf = {
+      const shelf = this.toBrowseShelf(
         title,
-        tracks: [],
-        albums: [],
-        playlists: [],
-        artists: [],
-        links: this.collectBrowseLinks(section.node),
-      };
-
-      for (const item of items) {
-        switch (item.item_type) {
-          case "song":
-          case "video": {
-            const track = this.toTrack(item);
-            if (track) shelf.tracks.push(track);
-            break;
-          }
-          case "album": {
-            const album = this.toAlbum(item);
-            if (album) shelf.albums.push(album);
-            break;
-          }
-          case "playlist": {
-            const playlist = this.toPlaylist(item);
-            if (playlist) shelf.playlists.push(playlist);
-            break;
-          }
-          case "artist": {
-            const artist = this.toArtist(item);
-            if (artist) shelf.artists.push(artist);
-            break;
-          }
-          default:
-            break;
-        }
-      }
+        section.node,
+        this.collectBrowseLinks(section.node),
+      );
 
       const total = shelf.tracks.length + shelf.albums.length
         + shelf.playlists.length + shelf.artists.length + shelf.links.length;
@@ -5040,5 +5362,384 @@ export class YouTubeMusicDataSource extends DataSource {
       mimeType: payload.mimeType,
       sourceUrl: payload.url,
     };
+  }
+
+  /**
+   * Sorts every music item under `node` into one shelf.
+   *
+   * Shared by the browse surfaces and by getRelated, which receive the same carousel shapes
+   * from different endpoints. The classification is the whole job — item_type is the only
+   * thing distinguishing a song from an album inside a response.
+   */
+  private toBrowseShelf(title: string, node: unknown, links: BrowseLink[]): BrowseShelf {
+    const shelf: BrowseShelf = {
+      title,
+      tracks: [],
+      albums: [],
+      playlists: [],
+      artists: [],
+      links,
+    };
+
+    for (const item of this.collectMusicItems(node, BROWSE_ITEM_TYPES)) {
+      switch (item.item_type) {
+        case "song":
+        case "video": {
+          const track = this.toTrack(item);
+          if (track) shelf.tracks.push(track);
+          break;
+        }
+        case "album": {
+          const album = this.toAlbum(item);
+          if (album) shelf.albums.push(album);
+          break;
+        }
+        case "playlist": {
+          const playlist = this.toPlaylist(item);
+          if (playlist) shelf.playlists.push(playlist);
+          break;
+        }
+        case "artist": {
+          const artist = this.toArtist(item);
+          if (artist) shelf.artists.push(artist);
+          break;
+        }
+        default:
+          break;
+      }
+    }
+
+    return shelf;
+  }
+
+  /**
+   * Turns a pasted YouTube link into something Zuno can open.
+   *
+   * Nearly every link names its target in the URL itself, so parseYouTubeLink answers offline
+   * and the API is only consulted for the shapes it cannot: `@handles`, `/c/` vanity paths and
+   * anything else that needs YouTube to say what it points at.
+   */
+  async resolveLink(url: string): Promise<ResolvedLink | null> {
+    const local = parseYouTubeLink(url);
+    if (local) {
+      logInternalInfo("YouTubeMusicDataSource.resolveLink parsed locally", { kind: local.kind });
+      return local;
+    }
+    if (!looksLikeYouTubeLink(url)) return null;
+
+    try {
+      const client = await this.getWebClient();
+      const endpoint = await client.resolveURL(url);
+      const payload = endpoint.payload as {
+        videoId?: string;
+        playlistId?: string;
+        browseId?: string;
+      };
+
+      const resolved = this.toResolvedLink(payload);
+      logInternalInfo("YouTubeMusicDataSource.resolveLink resolved remotely", {
+        kind: resolved?.kind ?? null,
+      });
+      return resolved;
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.resolveLink failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  private toResolvedLink(payload: {
+    videoId?: string;
+    playlistId?: string;
+    browseId?: string;
+  }): ResolvedLink | null {
+    if (payload.videoId) return { kind: "track", id: payload.videoId };
+
+    const browseId = payload.browseId;
+    if (browseId?.startsWith("MPRE")) return { kind: "album", id: browseId };
+    if (browseId?.startsWith("UC")) return { kind: "artist", id: browseId };
+
+    const playlistId = payload.playlistId
+      ?? (browseId?.startsWith("VL") ? browseId.slice(2) : undefined);
+    if (playlistId) {
+      return playlistId.startsWith("OLAK5uy_")
+        ? { kind: "album", id: playlistId }
+        : { kind: "playlist", id: playlistId };
+    }
+
+    return null;
+  }
+
+  /**
+   * Discovery shelves for a track — similar artists, related playlists, more from the album.
+   *
+   * This is a different endpoint from getUpNext, which the player already uses: up-next is the
+   * autoplay queue, while this is the "Related" tab of the YouTube Music track page. Cached
+   * because it never changes for a given track within a session and costs a watchNext call
+   * plus a browse call to fetch.
+   */
+  async getRelated(track: Track): Promise<BrowseShelf[]> {
+    const cacheKey = `youtube-music:related:v1:${track.id}`;
+    const cached = await getCachedJson<BrowseShelf[]>(cacheKey);
+    if (cached?.length) return cached;
+
+    try {
+      const client = await this.getMusicClient();
+      const page = await client.music.getRelated(track.id);
+      const sections = this.collectBrowseSections(page);
+
+      const shelves: BrowseShelf[] = [];
+      const seenTitles = new Set<string>();
+      for (const [index, section] of sections.entries()) {
+        const title = section.title?.trim() || `Related ${index + 1}`;
+        if (seenTitles.has(title)) continue;
+
+        const shelf = this.toBrowseShelf(
+          title,
+          section.node,
+          this.collectBrowseLinks(section.node),
+        );
+        const total = shelf.tracks.length + shelf.albums.length
+          + shelf.playlists.length + shelf.artists.length;
+        if (total === 0) continue;
+
+        seenTitles.add(title);
+        shelves.push(shelf);
+      }
+
+      // A track with no related tab answers Message rather than a section list. That is a
+      // real answer, not a failure, so it is cached like any other.
+      if (shelves.length > 0) await setCachedJson(cacheKey, shelves);
+      logInternalInfo("YouTubeMusicDataSource.getRelated", {
+        trackId: track.id,
+        shelfCount: shelves.length,
+      });
+      return shelves;
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.getRelated unavailable", {
+        trackId: track.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  /**
+   * One filtered search.
+   *
+   * `search` samples every category at once and is what the results page opens with; this goes
+   * deep on one of them, which is how the category tabs get more than the handful of rows a
+   * mixed search returns.
+   */
+  async searchCategory(query: string, category: SearchCategory): Promise<SearchResults> {
+    const normalizedQuery = query.trim();
+    const empty: SearchResults = { artists: [], tracks: [], albums: [], playlists: [] };
+    if (!normalizedQuery) return empty;
+
+    const cacheKey = `youtube-music:search:${category}:v1:${normalizedQuery.toLocaleLowerCase()}`;
+    const cached = await getCachedJson<SearchResults>(cacheKey);
+    if (cached) return cached;
+
+    try {
+      const client = await this.getMusicClient();
+      const response = await client.music.search(normalizedQuery, { type: category });
+      const items = this.collectMusicItems(response.page, BROWSE_ITEM_TYPES);
+
+      const results: SearchResults = {
+        artists: this.uniqueById(
+          items
+            .filter((item) => item.item_type === "artist")
+            .map((item) => this.toArtist(item))
+            .filter((item): item is Artist => Boolean(item)),
+        ),
+        tracks: this.uniqueById(
+          items
+            .filter((item) => item.item_type === "song" || item.item_type === "video")
+            .map((item) => this.toTrack(item))
+            .filter((item): item is Track => Boolean(item)),
+        ),
+        albums: this.uniqueById(
+          items
+            .filter((item) => item.item_type === "album")
+            .map((item) => this.toAlbum(item))
+            .filter((item): item is Album => Boolean(item)),
+        ),
+        playlists: this.uniqueById(
+          items
+            .filter((item) => item.item_type === "playlist")
+            .map((item) => this.toPlaylist(item))
+            .filter((item): item is Playlist => Boolean(item)),
+        ),
+      };
+
+      await setCachedJson(cacheKey, results);
+      logInternalInfo("YouTubeMusicDataSource.searchCategory", {
+        category,
+        artistCount: results.artists.length,
+        trackCount: results.tracks.length,
+        albumCount: results.albums.length,
+        playlistCount: results.playlists.length,
+      });
+      return results;
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.searchCategory failed", {
+        category,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return empty;
+    }
+  }
+
+  /**
+   * How often YouTube may notify about an artist's uploads.
+   *
+   * Only meaningful while subscribed — YouTube stores the preference against the subscription
+   * and silently resets it when that goes away.
+   */
+  async setArtistNotificationLevel(
+    artistId: string,
+    level: ArtistNotificationLevel,
+  ): Promise<void> {
+    if (!this.musicCookie) {
+      throw new Error("Sign in to YouTube Music to change notifications.");
+    }
+
+    const client = await this.getWebClient();
+    const preference = level === "all"
+      ? "ALL"
+      : (level === "none" ? "NONE" : "PERSONALIZED");
+    await client.interact.setNotificationPreferences(artistId, preference);
+    logInternalInfo("YouTubeMusicDataSource.setArtistNotificationLevel", { artistId, level });
+  }
+
+  /** The account's notification inbox, newest first. Empty when signed out. */
+  async getNotifications(): Promise<FeedNotification[]> {
+    if (!this.musicCookie) return [];
+
+    try {
+      const client = await this.getWebClient();
+      const menu = await client.getNotifications();
+      const notifications = (menu.contents ?? []).map((item) => {
+        const payload = item.endpoint?.payload as { videoId?: string } | undefined;
+        return {
+          id: item.notification_id,
+          text: item.short_message?.toString() ?? "",
+          sentAtText: item.sent_time?.toString() || undefined,
+          thumbnailUrl: selectArtworkUrl(
+            collectArtworkCandidates(item.video_thumbnails ?? item.thumbnails ?? []),
+          ),
+          videoId: payload?.videoId,
+          read: Boolean(item.read),
+        } satisfies FeedNotification;
+      }).filter((item) => item.text.length > 0);
+
+      logInternalInfo("YouTubeMusicDataSource.getNotifications", {
+        count: notifications.length,
+      });
+      return notifications;
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.getNotifications unavailable", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  async getUnseenNotificationCount(): Promise<number> {
+    if (!this.musicCookie) return 0;
+
+    try {
+      const client = await this.getWebClient();
+      const count = await client.getUnseenNotificationsCount();
+      return Number.isFinite(count) ? count : 0;
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.getUnseenNotificationCount unavailable", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return 0;
+    }
+  }
+
+  /**
+   * A playlist's description text.
+   *
+   * Fetched on its own rather than carried on the Playlist object, because the library shelves
+   * that produce those objects do not include it — only the playlist's own page does. Cached,
+   * so opening a playlist twice costs one request.
+   */
+  async getPlaylistDescription(playlist: Playlist): Promise<string | null> {
+    const cacheKey = `youtube-music:playlist-description:v1:${playlist.id}`;
+    const cached = await getCachedJson<{ description: string }>(cacheKey);
+    if (cached) return cached.description || null;
+
+    try {
+      const client = await this.getMusicClient();
+      const page = await client.music.getPlaylist(playlist.id) as YouTubeMusicPlaylistPage;
+      const description = page.description?.toString().trim() ?? "";
+      await setCachedJson(cacheKey, { description });
+      return description || null;
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.getPlaylistDescription unavailable", {
+        playlistId: playlist.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  async setPlaylistDescription(playlist: Playlist, description: string): Promise<void> {
+    if (!this.musicCookie) {
+      throw new Error("Sign in to YouTube Music before editing playlists.");
+    }
+
+    const client = await this.getMusicClient();
+    await client.playlist.setDescription(this.editablePlaylistId(playlist.id), description);
+    // Overwrite the read cache rather than clearing it, so reopening the playlist shows the
+    // text that was just saved instead of refetching a page YouTube may not have updated yet.
+    await setCachedJson(`youtube-music:playlist-description:v1:${playlist.id}`, { description });
+    logInternalInfo("YouTubeMusicDataSource.setPlaylistDescription", {
+      playlistId: playlist.id,
+      length: description.length,
+    });
+  }
+
+  /**
+   * YouTube Music's own lyrics, as the last thing tried.
+   *
+   * Plain text with no timings, which is why it sits below every synced provider and below the
+   * caption transcript: those can highlight the current line and this cannot. It is still worth
+   * having because it is matched by video id rather than by title and artist, so it lands on
+   * exactly the tracks where text matching fails.
+   */
+  private async fetchYouTubeMusicLyrics(track: Track): Promise<Lyrics | null> {
+    try {
+      const client = await this.getMusicClient();
+      const shelf = await client.music.getLyrics(track.id);
+      const text = shelf?.description?.toString().trim();
+      if (!text) return null;
+
+      const lines = text
+        .split(/\r?\n/)
+        .map((line) => ({ text: line.trim() }))
+        .filter((line) => line.text.length > 0);
+      if (lines.length === 0) return null;
+
+      logInternalInfo("YouTubeMusicDataSource.getLyrics YouTube Music success", {
+        trackId: track.id,
+        lineCount: lines.length,
+      });
+      return {
+        lines,
+        timing: "none",
+        sourceLabel: shelf?.footer?.toString().trim() || "YouTube Music",
+      };
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.getLyrics YouTube Music unavailable", {
+        trackId: track.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
   }
 }

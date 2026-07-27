@@ -10,7 +10,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { CheckIcon, CloseIcon, DownloadIcon, HeartActiveIcon, HeartIcon, LinkIcon, ListIcon, PencilIcon, PlaylistAddIcon, PlaylistIcon, SearchIcon, SkipNextIcon, TrashIcon } from "@/ui/icons";
+import { CheckIcon, CloseIcon, CompassIcon, DownloadIcon, HeartActiveIcon, HeartIcon, LinkIcon, ListIcon, PencilIcon, PlaylistAddIcon, PlaylistIcon, SearchIcon, SkipNextIcon, TrashIcon } from "@/ui/icons";
 import type { Playlist, Track, TrackRating } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
 import { logInternalError } from "../../internal/logging";
@@ -33,6 +33,13 @@ import { Loader } from "@/components/motion/loader";
 /** Stable identity so useSyncExternalStore's server snapshot never loops. */
 const NO_PLAYLISTS: Playlist[] = [];
 const getNoPlaylists = () => NO_PLAYLISTS;
+
+const NO_MEMBERSHIP: ReadonlySet<string> = new Set();
+
+/** Playlist ids travel with and without a `VL` browse prefix; membership compares bare ids. */
+function barePlaylistId(playlistId: string): string {
+  return playlistId.replace(/^VL/, "");
+}
 
 const PICKER_ROW =
   "flex w-full items-center gap-2.5 rounded-lg p-1.5 transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
@@ -69,6 +76,8 @@ interface TrackContextMenuValue {
 interface TrackContextMenuProviderProps {
   children: ReactNode;
   libraryController: LibraryController;
+  /** Absent hides the "Show related" item, for surfaces with nowhere to navigate to. */
+  onOpenRelated?: (track: Track) => void;
 }
 
 const TrackContextMenuContext = createContext<TrackContextMenuValue | null>(null);
@@ -84,6 +93,7 @@ export function useTrackContextMenu(): TrackContextMenuValue {
 export function TrackContextMenuProvider({
   children,
   libraryController,
+  onOpenRelated,
 }: TrackContextMenuProviderProps) {
   const libraryState = useLibraryState();
   const playerState = usePlayerState();
@@ -107,6 +117,8 @@ export function TrackContextMenuProvider({
   const [editingTagsFor, setEditingTagsFor] = useState<Track | null>(null);
   /** Non-null when the picker is acting on a multi-selection rather than one song. */
   const [batchTracks, setBatchTracks] = useState<Track[] | null>(null);
+  /** Playlists YouTube says already hold this song, as answered for the open picker. */
+  const [remoteMembership, setRemoteMembership] = useState<ReadonlySet<string>>(NO_MEMBERSHIP);
 
   const localPlaylists = useSyncExternalStore(
     subscribeToLocalPlaylists,
@@ -140,9 +152,37 @@ export function TrackContextMenuProvider({
 
     return matching.map((playlist) => ({
       playlist,
-      isMember: track ? isTrackKnownInPlaylist(track, playlist) : false,
+      isMember: track
+        ? isTrackKnownInPlaylist(track, playlist)
+          || remoteMembership.has(barePlaylistId(playlist.id))
+        : false,
     }));
-  }, [libraryState.library?.playlists, localPlaylists, query, track]);
+  }, [libraryState.library?.playlists, localPlaylists, query, remoteMembership, track]);
+
+  /*
+   * The local record only knows about adds made here — anything added on the web, on a phone,
+   * or before this app existed had no tick. Asking YouTube when the picker opens is one
+   * request and covers all of it; the local record still draws the ticks in the meantime, and
+   * remains the whole answer for local playlists and for a source that cannot be asked.
+   */
+  useEffect(() => {
+    if (!isPickerOpen || !track || track.source === "local") {
+      setRemoteMembership(NO_MEMBERSHIP);
+      return;
+    }
+
+    let active = true;
+    void libraryController.getPlaylistIdsContainingTrack(track)
+      .then((ids) => {
+        if (active) setRemoteMembership(new Set(ids.map(barePlaylistId)));
+      })
+      .catch((error: unknown) => {
+        logInternalError("TrackContextMenu.playlistMembership failed", error);
+      });
+    return () => {
+      active = false;
+    };
+  }, [isPickerOpen, libraryController, track]);
 
   useEffect(() => {
     if (!menuPosition) return;
@@ -395,6 +435,9 @@ export function TrackContextMenuProvider({
       } else {
         showPersistentToast("Adding...");
         const result = await libraryController.addTrackToPlaylist(selectedTrack, playlist);
+        // Ticked straight away, so reopening the picker does not have to wait on another round
+        // trip to show what just happened.
+        setRemoteMembership((current) => new Set(current).add(barePlaylistId(playlist.id)));
         showToast(
           result === "already-present" ? "Already in playlist" : `Added to ${playlist.title}`,
         );
@@ -572,6 +615,22 @@ export function TrackContextMenuProvider({
             >
               <PencilIcon size={18} aria-hidden="true" />
               <span className="flex-1">Edit tags</span>
+            </button>
+          )}
+          {/* Streamed tracks only: a local file has no YouTube page to be related to. */}
+          {onOpenRelated && track && track.source !== "local" && (
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              onClick={() => {
+                const selected = track;
+                setMenuPosition(null);
+                onOpenRelated(selected);
+              }}
+            >
+              <CompassIcon size={18} aria-hidden="true" />
+              <span className="flex-1">Show related</span>
             </button>
           )}
           {canCopySelectedTrackLink && (

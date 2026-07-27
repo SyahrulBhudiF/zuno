@@ -15,8 +15,7 @@ import type { LibraryController } from "../../player/LibraryController";
 import type { PlayerControllerActions } from "../../player/playerStore";
 import { logInternalError } from "../../internal/logging";
 import { removeAllDownloads, useOfflineState } from "../../player/offlineStore";
-import { AlbumCard } from "../components/AlbumCard";
-import { TrackArtwork } from "../components/TrackArtwork";
+import { BrowseShelves } from "../components/BrowseShelves";
 import { TrackRow } from "../components/TrackRow";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
 import { useNowPlaying } from "../hooks/useNowPlaying";
@@ -40,47 +39,6 @@ function formatSize(bytes: number): string {
   if (bytes < 1024 ** 2) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
-}
-
-/** Horizontal shelves: a browse feed is a list of rows, and stacking them all vertically buries everything below the first. */
-const SHELF_ROW =
-  "flex gap-3 overflow-x-auto pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
-
-function ArtistTile({ artist, onOpen }: { artist: Artist; onOpen: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="flex w-32 shrink-0 flex-col items-center gap-2 rounded-xl p-2 text-center transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <TrackArtwork
-        className="size-24 rounded-full"
-        artworkUrl={artist.artworkUrl}
-        iconSize={28}
-        variant="artist"
-      />
-      <span className="line-clamp-2 text-xs font-medium text-foreground">{artist.name}</span>
-    </button>
-  );
-}
-
-function PlaylistTile({ playlist, onOpen }: { playlist: Playlist; onOpen: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="flex w-36 shrink-0 flex-col gap-2 rounded-xl p-2 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <TrackArtwork
-        className="size-32 rounded-lg"
-        artworkUrl={playlist.artworkUrl}
-        iconSize={28}
-        variant="playlist"
-      />
-      <span className="line-clamp-2 text-xs font-medium text-foreground">{playlist.title}</span>
-      <span className="truncate text-[11px] text-muted-foreground">{playlist.owner}</span>
-    </button>
-  );
 }
 
 /**
@@ -331,91 +289,15 @@ export function BrowsePage({
           YouTube Music returned nothing for this feed.
         </p>
       ) : (
-        page.shelves.map((shelf) => (
-          <section key={shelf.title} className="flex flex-col gap-3">
-            <h2 className="text-lg font-semibold text-foreground">{shelf.title}</h2>
-
-            {/* Songs read better as a list than as tiles, so they get rows even inside a feed
-                that is otherwise all artwork. */}
-            {shelf.tracks.length > 0 && (
-              <div className="flex flex-col gap-0.5">
-                {shelf.tracks.map((track, index) => (
-                  <TrackRow
-                    key={`${track.id}:${index}`}
-                    track={track}
-                    index={index}
-                    isCurrent={currentTrackId === track.id}
-                    isPlaying={isPlaying && currentTrackId === track.id}
-                    onSelect={() => playShelfTrack(shelf.tracks, track)}
-                    onContextMenu={(event) => openTrackMenu(event, track)}
-                    onQuickAdd={() => openPlaylistPicker(track)}
-                    onQuickAddToQueue={() => playerController.addToQueue(track)}
-                    showDownload
-
-                    showRating
-                  />
-                ))}
-              </div>
-            )}
-
-            {/* Chips lead to other feeds, so they read as filters rather than as content. */}
-            {shelf.links.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {shelf.links.map((link) => (
-                  <button
-                    key={link.browseId}
-                    type="button"
-                    onClick={() =>
-                      setDrillDown((stack) => [...stack, { browseId: link.browseId, title: link.title }])
-                    }
-                    className="rounded-full bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    {link.title}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {shelf.albums.length > 0 && (
-              <div className={SHELF_ROW}>
-                {shelf.albums.map((album) => (
-                  <div key={album.id} className="w-36 shrink-0">
-                    <AlbumCard
-                      artworkUrl={album.artworkUrl}
-                      title={album.title}
-                      subtitle={album.artist}
-                      onClick={() => onOpenAlbum(album)}
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {shelf.playlists.length > 0 && (
-              <div className={SHELF_ROW}>
-                {shelf.playlists.map((playlist) => (
-                  <PlaylistTile
-                    key={playlist.id}
-                    playlist={playlist}
-                    onOpen={() => onOpenPlaylist(playlist)}
-                  />
-                ))}
-              </div>
-            )}
-
-            {shelf.artists.length > 0 && (
-              <div className={SHELF_ROW}>
-                {shelf.artists.map((artist) => (
-                  <ArtistTile
-                    key={artist.id}
-                    artist={artist}
-                    onOpen={() => onOpenArtist(artist)}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-        ))
+        <BrowseShelves
+          shelves={page.shelves}
+          playerController={playerController}
+          onOpenAlbum={onOpenAlbum}
+          onOpenArtist={onOpenArtist}
+          onOpenPlaylist={onOpenPlaylist}
+          onFollowLink={(link) =>
+            setDrillDown((stack) => [...stack, { browseId: link.browseId, title: link.title }])}
+        />
       )}
     </div>
   );

@@ -64,6 +64,16 @@ export function Hero({
         style={{ background: "color-mix(in oklab, var(--color-background) 35%, transparent)" }}
         aria-hidden="true"
       />
+         <video
+        className="absolute inset-0 z-0 h-full w-full object-cover "
+        src="./bgvids.mp4"
+        autoPlay
+        muted
+        loop
+        playsInline
+        aria-hidden="true"
+      />
+
       <div
         className="pointer-events-none absolute inset-x-0 bottom-0 z-[1] h-80"
         style={{

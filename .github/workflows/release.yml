@@ -253,3 +253,29 @@ jobs:
 
           git commit -m "Offer $RELEASE_TAG through the updater"
           git push origin updater-channel
+
+  publish-winget:
+    name: Publish to winget
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Read release type
+        id: release_metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json isPrerelease --jq '"prerelease=" + (.isPrerelease | tostring)' \
+            >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Version defaults to the release tag with the leading `v` stripped.
+      - uses: vedantmgoyal9/winget-releaser@main
+        if: steps.release_metadata.outputs.prerelease == 'false'
+        with:
+          identifier: noFAYZ.Zuno
+          release-tag: ${{ env.RELEASE_TAG }}
+          installers-regex: '_x64-setup\.exe$'
+          token: ${{ secrets.WINGET_TOKEN }}

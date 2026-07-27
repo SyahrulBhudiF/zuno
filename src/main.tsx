@@ -28,6 +28,8 @@ import { applyPlatformAttributes } from "./ui/platform";
 import { hydrateArtworkCache } from "./internal/artworkCache";
 import { DiscordRpcService } from "./player/DiscordRPC";
 import { hydratePlaybackSettings } from "./player/playbackSettings";
+import { hydrateSessionRestoreSetting } from "./ui/settings/sessionRestore";
+import { hydrateToolbarItemSettings } from "./ui/settings/toolbarItems";
 
 logInternalInfo("main.bootstrap start");
 // Before React mounts: a resolution restored after first paint is a resolution that already
@@ -55,7 +57,11 @@ void Promise.all([
   hydrateDiscordSettings(),
   hydrateSidebarSettings(),
   hydrateKeyboardShortcuts(),
+  hydrateToolbarItemSettings(),
   hydratePlaybackSettings(),
+  // Read synchronously from local storage at boot, so this only backfills a machine whose
+  // local storage was cleared — it takes effect from the next launch.
+  hydrateSessionRestoreSetting(),
 ]).catch((error) => {
   logInternalError("settings hydration failed", error);
 });

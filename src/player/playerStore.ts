@@ -6,6 +6,7 @@ import { PlayerController } from "./PlayerController";
 import { SearchController } from "./SearchController";
 import { TabManager } from "./TabManager";
 import { loadAppSession } from "./appSession";
+import { readSessionRestoreEnabled } from "../ui/settings/sessionRestore";
 import {
   hydrateOfflineStore,
   setOfflineStreamResolver,
@@ -34,7 +35,11 @@ void hydrateOfflineStore();
 startOfflineProgressFeed();
 
 export const tabManager = new TabManager(dataSource);
-const restoredSession = loadAppSession();
+/*
+ * Read once, at module scope, before anything can toggle it. Restoring is all-or-nothing for a
+ * given launch — half a session is worse than none.
+ */
+const restoredSession = readSessionRestoreEnabled() ? loadAppSession() : null;
 if (restoredSession) {
   tabManager.restoreSession(restoredSession.player);
 }

@@ -7,6 +7,7 @@ import { recordPlay } from "./playHistory";
 import { getOfflineTrack, isTrackDownloaded } from "./offlineStore";
 import { DiscordRpcService } from "./DiscordRPC";
 import {
+  MAX_CROSSFADE_SEC,
   readPlaybackSettings,
   savePlaybackSettings,
   type PlaybackSettings,
@@ -20,6 +21,17 @@ import {
  * single most common combination — was unreachable.
  */
 export type PlaybackOrderMode = "in-order" | "repeat-one" | "repeat-all";
+
+/** How often playback position is checked for an upcoming transition. */
+const TRANSITION_TICK_MS = 250;
+
+/**
+ * How early the next track is cued.
+ *
+ * Long enough to absorb a slow cue on a bad connection, short enough that skipping around does
+ * not preload a string of tracks nobody reaches.
+ */
+const PRELOAD_LEAD_SEC = 20;
 
 export type PlayerStatus = "idle" | "loading" | "playing" | "paused" | "error";
 
@@ -150,6 +162,10 @@ export class PlayerController {
   private playbackOrderMode: PlaybackOrderMode = "in-order";
   private shuffleEnabled = false;
   private isPlaylistMode = false;
+  private crossfadeSec = 0;
+  private gaplessEnabled = true;
+  private transitionTimerId: number | null = null;
+  private transitioning = false;
 
   private state: PlayerState = {
     status: "idle",
@@ -249,6 +265,19 @@ export class PlayerController {
     if (settings.playbackRate !== undefined) {
       this.audioEngine.setPlaybackRate(settings.playbackRate);
     }
+    /*
+     * Absent means "leave alone", not "reset".
+     *
+     * Callers pass partial settings — the volume slider sends only volume and mute — so
+     * defaulting the missing fields here would silently turn crossfading off every time
+     * somebody touched the volume.
+     */
+    if (settings.crossfadeSec !== undefined) {
+      this.crossfadeSec = Math.min(MAX_CROSSFADE_SEC, Math.max(0, settings.crossfadeSec));
+    }
+    if (settings.gaplessEnabled !== undefined) {
+      this.gaplessEnabled = settings.gaplessEnabled;
+    }
     this.state = {
       ...this.state,
       volume: this.audioEngine.getVolume(),
@@ -258,8 +287,14 @@ export class PlayerController {
       savePlaybackSettings({
         volume: this.state.volume,
         muted: this.state.muted,
+        // Read back off the engine rather than off `settings`: a partial apply would otherwise
+        // persist a default over a value the user had chosen.
+        playbackRate: this.audioEngine.getPlaybackRate(),
+        crossfadeSec: this.crossfadeSec,
+        gaplessEnabled: this.gaplessEnabled,
       });
     }
+    this.syncTransitionTicker();
   }
 
   async loadTrack(track: Track): Promise<void> {
@@ -290,8 +325,15 @@ export class PlayerController {
   ): Promise<boolean> {
     const requestId = ++this.playTrackRequestId;
     logInternalInfo("PlayerController.playTrackById start", { videoId });
-    this.audioEngine.stop();
-    this.audioEngine.silenceCompetingPlayback();
+    /*
+     * Stopping tears down the standby deck along with everything else, which would throw away
+     * the very thing that makes the next track start instantly. When the track being asked for
+     * is the one already cued, the transition in ensureTrackLoaded takes over the handover.
+     */
+    if (!this.audioEngine.hasPreloaded(videoId)) {
+      this.audioEngine.stop();
+      this.audioEngine.silenceCompetingPlayback();
+    }
     this.loadedTrackId = null;
     this.pendingSeekTime = null;
     this.setState({ status: "loading", error: null });
@@ -980,6 +1022,28 @@ export class PlayerController {
 
     try {
       const startedAt = performance.now();
+      /*
+       * The next track was cued on the standby deck while this one was still playing, so the
+       * handover is a volume ramp between two live players — no load, and no silence between
+       * them. A zero-length fade is the gapless case and swaps in the same tick.
+       */
+      if (this.usesIframePlayback(track) && this.audioEngine.hasPreloaded(track.id)) {
+        const swapped = await this.audioEngine.transitionToPreloaded(
+          track.id,
+          this.crossfadeSec * 1000,
+        );
+        if (swapped) {
+          this.loadedTrackId = track.id;
+          this.pendingSeekTime = null;
+          logInternalInfo("PlayerController.ensureTrackLoaded preloaded deck", {
+            trackId: track.id,
+            crossfadeSec: this.crossfadeSec,
+            durationMs: Math.round(performance.now() - startedAt),
+          });
+          return;
+        }
+      }
+
       if (track.source === "local") {
         const audioData = await this.dataSource.getStreamData?.(track);
         if (!audioData) {
@@ -1069,7 +1133,89 @@ export class PlayerController {
       trackId: partial.currentTrack?.id ?? this.state.currentTrack?.id ?? null,
     });
     this.state = { ...this.state, ...partial };
+    this.syncTransitionTicker();
     this.emit();
+  }
+
+  /**
+   * The next track, only when it is knowable without asking the network.
+   *
+   * Radio continuations and queue-end recommendations are deliberately excluded: they are
+   * fetched at the moment the queue runs out, so there is nothing to preload and nothing to
+   * crossfade into. Repeat-one is excluded because the "next" track is the current one, and
+   * handing the deck to itself is not a transition.
+   */
+  private peekNextTrack(): Track | null {
+    if (this.playbackOrderMode === "repeat-one") return null;
+
+    const next = this.queue.all[this.queue.currentIndex + 1] ?? null;
+    if (!next || next.id === this.state.currentTrack?.id) return null;
+    return next;
+  }
+
+  /**
+   * Whether a track plays through the IFrame deck rather than an audio element.
+   *
+   * Only the IFrame path has a deck to preload. Offline and local files are read from disk
+   * with no load gap worth hiding, and handing one of those to the standby deck would play the
+   * streamed version of a track the user downloaded on purpose.
+   */
+  private usesIframePlayback(track: Track): boolean {
+    return track.source !== "local"
+      && !isTrackDownloaded(track.id)
+      && !this.audioEngine.usesNativeAudio();
+  }
+
+  private syncTransitionTicker(): void {
+    const wanted = this.state.status === "playing"
+      && this.isTabActive
+      && (this.gaplessEnabled || this.crossfadeSec > 0);
+
+    if (wanted === (this.transitionTimerId !== null)) return;
+
+    if (!wanted) {
+      if (this.transitionTimerId !== null) globalThis.clearInterval(this.transitionTimerId);
+      this.transitionTimerId = null;
+      return;
+    }
+    this.transitionTimerId = globalThis.setInterval(
+      () => this.onTransitionTick(),
+      TRANSITION_TICK_MS,
+    );
+  }
+
+  /**
+   * Preloads the next track, and starts the crossfade when one is configured.
+   *
+   * Gapless needs no trigger of its own: the track is allowed to end normally and
+   * ensureTrackLoaded finds the deck already cued, so nothing of the outro is lost. Crossfade
+   * is the only case that has to interrupt, because overlapping two tracks means starting the
+   * second one before the first has finished.
+   */
+  private onTransitionTick(): void {
+    if (this.transitioning || this.state.status !== "playing" || !this.isTabActive) return;
+
+    const duration = this.audioEngine.getDuration();
+    const remaining = duration - this.audioEngine.getCurrentTime();
+    if (!(duration > 0) || !Number.isFinite(remaining) || remaining <= 0) return;
+
+    const next = this.peekNextTrack();
+    if (!next || !this.usesIframePlayback(next)) return;
+
+    if (remaining <= PRELOAD_LEAD_SEC) this.audioEngine.preloadNext(next.id);
+
+    if (this.crossfadeSec <= 0 || remaining > this.crossfadeSec) return;
+    if (!this.audioEngine.hasPreloaded(next.id)) return;
+
+    logInternalInfo("PlayerController.crossfade starting", {
+      fromTrackId: this.state.currentTrack?.id ?? null,
+      toTrackId: next.id,
+      crossfadeSec: this.crossfadeSec,
+    });
+    this.transitioning = true;
+    void this.handleTrackEnded().finally(() => {
+      this.transitioning = false;
+    });
   }
 
   private appendHistory(track: Track): Track[] {
@@ -1241,6 +1387,7 @@ export class PlayerController {
 
   suspendForTabSwitch(): void {
     this.isTabActive = false;
+    this.syncTransitionTicker();
     if (this.state.status === "playing") {
       this.audioEngine.suspend();
     }
@@ -1248,6 +1395,7 @@ export class PlayerController {
 
   async resumeFromTabSwitch(): Promise<void> {
     this.isTabActive = true;
+    this.syncTransitionTicker();
     if (this.state.status !== "playing" || !this.state.currentTrack) return;
 
     try {
@@ -1262,6 +1410,7 @@ export class PlayerController {
 
   dispose(): void {
     this.isTabActive = false;
+    this.syncTransitionTicker();
     this.audioEngine.setOnEnded(null);
     this.audioEngine.dispose();
     this.listeners.clear();

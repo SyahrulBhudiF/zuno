@@ -12,6 +12,7 @@ import { TrackArtwork } from "../components/TrackArtwork";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
 import { HomeDestinations, type HomeDestinationHandlers } from "../components/HomeDestinations";
 import { ArtistLinks } from "../components/ArtistLinks";
+import { usePlayHistory } from "../../player/playHistory";
 
 const FALLBACK_QUERIES = [
   "new music",
@@ -96,6 +97,17 @@ export function HomePage({
     [libraryState.library],
   );
   const recentTrackKey = recentlyPlayed.map((track) => track.id).join(":");
+  /*
+   * What is shown as "Recently played": this session's plays first, then YouTube's history.
+   * The library snapshot only refreshes on start-up, so on its own the row sat unchanged
+   * however much you listened. Suggestions still seed from the snapshot alone — keying them
+   * on the live list would refetch them after every song.
+   */
+  const playHistory = usePlayHistory();
+  const recentPlays = useMemo(
+    () => uniqueTracks([...playHistory.map((entry) => entry.track), ...recentlyPlayed]),
+    [playHistory, recentlyPlayed],
+  );
   const isWaitingForLibrary = !libraryState.library
     && (
       libraryState.status === "restoring"
@@ -168,8 +180,8 @@ export function HomePage({
     suggestionCacheKey,
   ]);
 
-  const compactRecent = useMemo(() => recentlyPlayed.slice(0, 6), [recentTrackKey]);
-  const largeRecent = useMemo(() => recentlyPlayed.slice(6), [recentTrackKey]);
+  const compactRecent = useMemo(() => recentPlays.slice(0, 6), [recentPlays]);
+  const largeRecent = useMemo(() => recentPlays.slice(6, 24), [recentPlays]);
   const topSuggestions = suggestions.slice(0, 11);
   const moreSuggestions = suggestions.slice(11, 23);
   const surpriseSuggestions = suggestions.slice(11);
@@ -281,7 +293,7 @@ export function HomePage({
                 type="button"
                 className="group/row flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 onContextMenu={(event) => openTrackMenu(event, track)}
-                onClick={() => playTrack(track, recentlyPlayed)}
+                onClick={() => playTrack(track, recentPlays)}
               >
                 <TrackArtwork
                   className="size-11 shrink-0 rounded-md object-cover"
@@ -330,7 +342,7 @@ export function HomePage({
                 title={track.title}
                 subtitleContent={<ArtistLinks artists={track.artists} fallback={track.artist} />}
                 onContextMenu={(event) => openTrackMenu(event, track)}
-                onClick={() => playTrack(track, recentlyPlayed)}
+                onClick={() => playTrack(track, recentPlays)}
               />
             ))}
           </div>

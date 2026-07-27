@@ -48,6 +48,7 @@ export interface Playlist {
   id: string;
   title: string;
   owner: string;
+  description?: string;
   artworkUrl?: string;
   kind?: "playlist" | "liked-songs" | "local";
   isSaved?: boolean;
@@ -71,11 +72,53 @@ export interface Artist {
 export interface ArtistPage {
   artist: Artist;
   subscribed?: boolean;
+  /** Only meaningful while subscribed; YouTube resets it to "personalized" on unsubscribe. */
+  notificationLevel?: ArtistNotificationLevel;
   popularSongs: Track[];
   allSongs: Track[];
   releases: Album[];
   playlists: Playlist[];
 }
+
+/**
+ * How much YouTube may notify about an artist's uploads.
+ *
+ * "personalized" is YouTube's default and means "whatever the algorithm thinks", which is why
+ * it is a distinct value rather than a midpoint between all and none.
+ */
+export type ArtistNotificationLevel = "all" | "personalized" | "none";
+
+/** One entry from the account's notification inbox. */
+export interface FeedNotification {
+  id: string;
+  text: string;
+  sentAtText?: string;
+  thumbnailUrl?: string;
+  /** Present when the notification points at a specific video. */
+  videoId?: string;
+  read: boolean;
+}
+
+/**
+ * Where a pasted YouTube link points, once resolved.
+ *
+ * Deliberately narrow: these are the four things Zuno can open. A link to anything else
+ * resolves to null so the caller can fall back to treating the text as a search.
+ */
+export type ResolvedLink =
+  | { kind: "track"; id: string }
+  | { kind: "album"; id: string }
+  | { kind: "playlist"; id: string }
+  | { kind: "artist"; id: string };
+
+/**
+ * A search filter YouTube Music can actually encode.
+ *
+ * These five are what the protobuf `musicSearchType` field accepts. Podcasts, episodes and
+ * profiles exist as filters on the website but ride an opaque params blob rather than this
+ * enum, so they are not offered here.
+ */
+export type SearchCategory = "song" | "video" | "album" | "artist" | "playlist";
 
 /** A category chip that leads to another browse feed. */
 export interface BrowseLink {
@@ -141,8 +184,15 @@ export interface AccountOption {
 export interface LibrarySnapshot {
   account: AccountProfile;
   albums: Album[];
+  /** Optional: sources that cannot enumerate artists let the UI derive them from albums. */
+  artists?: Artist[];
   playlists: Playlist[];
   likedSongsPlaylist: Playlist;
   likedSongs: Track[];
+  /**
+   * Songs saved to the library that are not in Liked Songs — kept apart from `likedSongs`
+   * because that list is what decides whether a track shows as liked.
+   */
+  librarySongs?: Track[];
   recentlyPlayed: Track[];
 }

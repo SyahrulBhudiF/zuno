@@ -19,7 +19,10 @@ import {
 import { Button } from "@/components/motion/button";
 import { libraryController, useLibraryState } from "../../player/playerStore";
 import { AccountAvatar, AccountSwitcher } from "./AccountSwitcher";
+import { DownloadsPanel } from "./DownloadsPanel";
 import { FloatingPanel } from "./FloatingPanel";
+import { NotificationsPanel } from "./NotificationsPanel";
+import { useToolbarItemVisible } from "../settings/toolbarItems";
 import { motion } from "motion/react";
 import appIcon from "../../../assets/img/Logo.png";
 
@@ -35,8 +38,12 @@ interface TitleBarProps {
   onSwitchTab: (tabId: string) => void;
   onReorderTab: (draggedTabId: string, targetTabId: string, insertAfter: boolean) => void;
   onOpenSettings: () => void;
+  onOpenDownloads?: () => void;
   onboardingFirstTabId?: string;
 }
+
+const ACCOUNT_PANEL_ITEM =
+  "flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left text-sm text-foreground transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
 
 /** macOS-style traffic lights vs Windows-style square controls. */
 const WINDOW_BUTTON_BASE =
@@ -54,17 +61,29 @@ export function TitleBar({
   onSwitchTab,
   onReorderTab,
   onOpenSettings,
+  onOpenDownloads,
   onboardingFirstTabId,
 }: TitleBarProps) {
   const appWindow = getCurrentWindow();
   const libraryState = useLibraryState();
   const account = libraryState.library?.account;
   const isSignedIn = libraryState.status === "ready" && Boolean(account);
+  // Startup restores the session before it can say whether there is one — "Not signed in" is
+  // the wrong answer while that is still happening.
+  const isConnecting = !isSignedIn
+    && (libraryState.status === "restoring"
+      || libraryState.status === "loading"
+      || libraryState.status === "authorizing");
   const [isAccountPanelOpen, setIsAccountPanelOpen] = useState(false);
   const nativeWindowControls = useNativeWindowControls();
   const windowsStyleWindowControls = useWindowsStyleWindowControls();
   const discordEnabled = useDiscordPresenceEnabled();
   const lastFmEnabled = useLastFmScrobblingEnabled();
+  const notificationsVisible = useToolbarItemVisible("notifications");
+  const downloadsVisible = useToolbarItemVisible("downloads");
+  const discordVisible = useToolbarItemVisible("discord");
+  const lastFmVisible = useToolbarItemVisible("lastfm");
+  const githubVisible = useToolbarItemVisible("github");
   const homePointerRef = useRef<{
     pointerId: number;
     startX: number;
@@ -211,6 +230,11 @@ export function TitleBar({
           toggle rather than only a setting buried in a panel. Dimmed when off so the current
           state reads at a glance without a label.
         */}
+        {notificationsVisible && (
+          <NotificationsPanel signedIn={libraryState.status === "ready"} />
+        )}
+        {downloadsVisible && <DownloadsPanel onOpenDownloads={onOpenDownloads} />}
+        {discordVisible && (
         <Tooltip
           side="bottom"
           content={discordEnabled ? "Discord presence on" : "Discord presence off"}
@@ -234,6 +258,8 @@ export function TitleBar({
             />
           </Button>
         </Tooltip>
+        )}
+        {lastFmVisible && (
         <Tooltip
           side="bottom"
           content={lastFmEnabled ? "Last.fm scrobbling on" : "Last.fm scrobbling off"}
@@ -257,7 +283,9 @@ export function TitleBar({
             />
           </Button>
         </Tooltip>
+        )}
 
+        {githubVisible && (
         <Tooltip side="bottom" content="Source on GitHub">
           <Button
             variant='ghost'
@@ -268,6 +296,7 @@ export function TitleBar({
             <GitHubIcon size={16} aria-hidden="true"  />
           </Button>
         </Tooltip>
+        )}
         <Tooltip side="bottom" content="Settings">
         <Button
             variant='ghost'
@@ -288,7 +317,7 @@ export function TitleBar({
           open={isAccountPanelOpen}
           onOpenChange={setIsAccountPanelOpen}
           side="bottom"
-          className="w-54"
+          className="w-64"
           trigger={
             <Tooltip side="bottom" content={isSignedIn ? account?.name || "Account" : "Sign in"}>
               <button
@@ -313,23 +342,67 @@ export function TitleBar({
           }
         >
           {isSignedIn ? (
-            <AccountSwitcher
-              libraryController={libraryController}
-              onSwitched={() => setIsAccountPanelOpen(false)}
-              showSingle
-            />
+            <div className="flex flex-col gap-1">
+              {/* Who you are, before what you can do about it: the avatar in the toolbar is
+                  ambiguous on its own, and this line is the answer to the click. */}
+              <div className="flex items-center gap-2.5 px-1 py-1.5">
+                <AccountAvatar artworkUrl={account?.artworkUrl} className="size-9" iconSize={18} />
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate text-sm font-medium text-foreground">
+                    {account?.name || "YouTube Music"}
+                  </span>
+                  <span className="truncate text-xs text-muted-foreground">Signed in</span>
+                </span>
+              </div>
+
+              <span className="my-0.5 h-px bg-border" aria-hidden="true" />
+
+              <AccountSwitcher
+                libraryController={libraryController}
+                onSwitched={() => setIsAccountPanelOpen(false)}
+              />
+
+              <button
+                type="button"
+                className={ACCOUNT_PANEL_ITEM}
+                onClick={() => {
+                  setIsAccountPanelOpen(false);
+                  onOpenSettings();
+                }}
+              >
+                <SettingsIcon size={16} aria-hidden="true" />
+                Account settings
+              </button>
+            </div>
           ) : (
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-foreground transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-              onClick={() => {
-                setIsAccountPanelOpen(false);
-                onOpenSettings();
-              }}
-            >
-              <LoginIcon size={17} aria-hidden="true" />
-              Sign in to YouTube Music
-            </button>
+            /*
+             * Signed out, this panel is the way in, so it says what signing in gets you rather
+             * than only offering a verb. The button hands off to settings because that screen
+             * is where the device-code prompt is rendered — starting the flow from here would
+             * put the code somewhere nobody is looking.
+             */
+            <div className="flex flex-col items-center gap-1 px-2 pb-2 pt-3 text-center">
+              <span className="grid size-11 place-items-center rounded-full bg-primary/10 text-primary">
+                <LoginIcon size={20} aria-hidden="true" />
+              </span>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {isConnecting ? "Connecting…" : "Not signed in"}
+              </p>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {isConnecting
+                  ? "Restoring your YouTube Music session."
+                  : "Connect YouTube Music for your library, playlists and likes."}
+              </p>
+              <Button
+                className="mt-2 w-full"
+                onClick={() => {
+                  setIsAccountPanelOpen(false);
+                  onOpenSettings();
+                }}
+              >
+                Sign in
+              </Button>
+            </div>
           )}
         </FloatingPanel>
       </div>

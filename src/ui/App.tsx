@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { MotionConfig } from "motion/react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Album, Artist, Playlist, SearchResults, Track } from "../datasource/types";
+import { looksLikeYouTubeLink } from "../datasource/youtube/links";
 import { useDisableContextMenu } from "./hooks/useDisableContextMenu";
 import { HomePage } from "./pages/HomePage";
 
@@ -18,6 +19,8 @@ const AlbumView = lazy(() => import("./pages/AlbumView").then((m) => ({ default:
 const ArtistView = lazy(() => import("./pages/ArtistView").then((m) => ({ default: m.ArtistView })));
 const PlaylistView = lazy(() =>
   import("./pages/PlaylistView").then((m) => ({ default: m.PlaylistView })));
+const RelatedPage = lazy(() =>
+  import("./pages/RelatedPage").then((m) => ({ default: m.RelatedPage })));
 const SearchResultsPage = lazy(() =>
   import("./pages/SearchResultsPage").then((m) => ({ default: m.SearchResultsPage })));
 const LibraryPage = lazy(() =>
@@ -145,6 +148,7 @@ function getNavigationState(tab: Tab): TabViewState | null {
     album: tab.album,
     artist: tab.artist,
     playlist: tab.playlist,
+    relatedTrack: tab.relatedTrack,
     searchQuery: tab.searchQuery,
     searchResults: tab.searchResults,
     mixedSearchResults: tab.mixedSearchResults,
@@ -160,6 +164,8 @@ function getNavigationKey(state: TabViewState): string {
       return `artist:${state.artist?.id ?? state.artist?.name ?? ""}`;
     case "playlist":
       return `playlist:${state.playlist?.id ?? ""}`;
+    case "related":
+      return `related:${state.relatedTrack?.id ?? ""}`;
     case "search":
       return `search:${state.searchQuery ?? ""}`;
     case "home":
@@ -181,6 +187,7 @@ function applyNavigationState(tab: Tab, state: TabViewState): Tab {
     album: state.album,
     artist: state.artist,
     playlist: state.playlist,
+    relatedTrack: state.relatedTrack,
     searchQuery: state.searchQuery,
     searchResults: state.searchResults,
     mixedSearchResults: state.mixedSearchResults,
@@ -855,6 +862,15 @@ export default function App() {
     });
   };
 
+  const handleNavigateRelated = (track: Track) => {
+    playerUIStore.setLyricsOpen(false);
+    navigateTab(activeTabId, {
+      title: `Related to ${track.title}`,
+      view: "related",
+      relatedTrack: track,
+    });
+  };
+
   const createTab = () => {
     playerUIStore.setLyricsOpen(false);
     const newId = nextTabId.toString();
@@ -892,8 +908,80 @@ export default function App() {
     setNextTabId((currentId) => currentId + 1);
   };
 
+  /**
+   * Opens a pasted YouTube link instead of searching for its text.
+   *
+   * Searching for a URL returns nothing useful, so a link in the search box is treated as a
+   * request to go there. Anything that fails to resolve falls through to an ordinary search,
+   * which is the behaviour without this.
+   */
+  const handleOpenLink = async (url: string, openInNewTab: boolean): Promise<boolean> => {
+    let resolved: Awaited<ReturnType<typeof libraryController.resolveLink>> = null;
+    try {
+      resolved = await libraryController.resolveLink(url);
+    } catch {
+      return false;
+    }
+    if (!resolved) return false;
+
+    playerUIStore.setLyricsOpen(false);
+    if (resolved.kind === "track") {
+      await playerController.playTrackById(resolved.id);
+      return true;
+    }
+
+    if (resolved.kind === "artist") {
+      const page = await libraryController.getArtist(resolved.id);
+      handleNavigateArtist(page.artist, openInNewTab);
+      return true;
+    }
+
+    if (resolved.kind === "album") {
+      /*
+       * The link carries an id and nothing else, so the header would read "Album" until the
+       * page loaded. Fetching the tracks first — a request the album view then serves from
+       * cache — supplies a real title and cover from the first row.
+       */
+      const stub: Album = { id: resolved.id, title: "Album", artist: "" };
+      const tracks = await libraryController.getAlbumTracks(stub).catch(() => [] as Track[]);
+      handleNavigateAlbum({
+        ...stub,
+        title: tracks[0]?.album ?? stub.title,
+        artist: tracks[0]?.artist ?? "",
+        artworkUrl: tracks[0]?.artworkUrl,
+      });
+      return true;
+    }
+
+    // ponytail: a playlist link has no title until its page loads, and the tracks do not
+    // carry one. Fetch the playlist header here if the placeholder ever becomes a complaint.
+    const saved = libraryController.getState().library?.playlists.find(
+      (item) => item.id.replace(/^VL/, "") === resolved.id.replace(/^VL/, ""),
+    );
+    handleNavigatePlaylist(saved ?? {
+      id: resolved.id,
+      title: "Playlist",
+      owner: "",
+    });
+    return true;
+  };
+
   const handleSearch = (query: string, openInNewTab: boolean) => {
     playerUIStore.setLyricsOpen(false);
+
+    if (looksLikeYouTubeLink(query)) {
+      void handleOpenLink(query, openInNewTab).then((opened) => {
+        // Not a link Zuno can open after all — fall back to searching for the text, so a
+        // paste that resolves to nothing still does something.
+        if (!opened) runSearch(query, openInNewTab);
+      });
+      return;
+    }
+
+    runSearch(query, openInNewTab);
+  };
+
+  const runSearch = (query: string, openInNewTab: boolean) => {
     let targetTabId = activeTabId;
 
     if (openInNewTab) {
@@ -1727,7 +1815,10 @@ useEffect(() => {
   return (
     <MotionConfig reducedMotion={paperPcMode ? "always" : "user"}>
     <ArtistNavigationProvider onNavigate={handleNavigateArtist}>
-    <TrackContextMenuProvider libraryController={libraryController}>
+    <TrackContextMenuProvider
+      libraryController={libraryController}
+      onOpenRelated={handleNavigateRelated}
+    >
     <PlaylistContextMenuProvider libraryController={libraryController}>
     {/*
       `ring-inset` is load-bearing: the window is transparent, so an outward ring would be
@@ -1757,6 +1848,7 @@ useEffect(() => {
         onSwitchTab={handleSwitchTab}
         onReorderTab={handleReorderTab}
         onOpenSettings={handleOpenSettings}
+        onOpenDownloads={() => handleOpenBrowse("downloads")}
         onboardingFirstTabId={onboardingStep ? onboardingFirstTabId : undefined}
       />
       
@@ -1836,6 +1928,15 @@ useEffect(() => {
                 playlist={activeTab.playlist}
                 playerController={playerController}
                 libraryController={libraryController}
+              />
+            )}
+            {activeTab?.view === "related" && activeTab.relatedTrack && (
+              <RelatedPage
+                track={activeTab.relatedTrack}
+                playerController={playerController}
+                onOpenAlbum={handleNavigateAlbum}
+                onOpenArtist={(artist) => handleNavigateArtist(artist)}
+                onOpenPlaylist={handleNavigatePlaylist}
               />
             )}
             {activeTab?.view === "search" && (

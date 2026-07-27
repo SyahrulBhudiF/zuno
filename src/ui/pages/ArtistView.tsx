@@ -1,15 +1,29 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { SpinnerSteps } from "@/components/motion/loader";
-import { CheckIcon, CopyIcon, UserIcon, UserPlusIcon } from "@/ui/icons";
-import type { Album, Artist, ArtistPage, Playlist, Track } from "../../datasource/types";
-import { getArtworkUrlCandidates } from "../../datasource/youtube/artwork";
+import { CheckIcon, CopyIcon, UserPlusIcon } from "@/ui/icons";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/motion/select";
+import type {
+  Album,
+  Artist,
+  ArtistNotificationLevel,
+  ArtistPage,
+  Playlist,
+  Track,
+} from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
 import type { PlayerControllerActions } from "../../player/playerStore";
 import { shuffleTracks } from "../../player/shuffleTracks";
 import { AlbumCard } from "../components/AlbumCard";
 import { ArtistLinks } from "../components/ArtistLinks";
 import { MediaHeader } from "../components/MediaHeader";
+import { TrackArtwork } from "../components/TrackArtwork";
 import { TrackRow } from "../components/TrackRow";
 import { useNowPlaying } from "../hooks/useNowPlaying";
 import { usePlaylistContextMenu } from "../components/PlaylistContextMenu";
@@ -61,6 +75,13 @@ export function ArtistView({
   const [filter, setFilter] = useState<ReleaseFilter>("all");
   const [isSubscribing, setIsSubscribing] = useState(false);
   const [isSubscribed, setIsSubscribed] = useState(false);
+  /*
+   * "personalized" is YouTube's default for a new subscription, and the artist page does not
+   * report the stored level — so this starts at the default and tracks whatever the user
+   * chooses here rather than claiming to know what the account already holds.
+   */
+  const [notificationLevel, setNotificationLevel] =
+    useState<ArtistNotificationLevel>("personalized");
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
 
@@ -103,18 +124,11 @@ export function ArtistView({
   ) ?? [];
 
   const displayedArtist = page?.artist ?? artist;
-  const artistArtworkCandidates = useMemo(
-    () => getArtworkUrlCandidates(displayedArtist?.artworkUrl),
-    [displayedArtist?.artworkUrl],
-  );
-  const [artistArtworkIndex, setArtistArtworkIndex] = useState(0);
-  const currentArtistArtworkUrl = artistArtworkCandidates[artistArtworkIndex];
   const popularSongs = page?.popularSongs.slice(0, 6) ?? [];
 
   useEffect(() => {
-    setArtistArtworkIndex(0);
     setIsSubscribed(page?.subscribed ?? false);
-  }, [displayedArtist?.artworkUrl, displayedArtist?.id, page?.subscribed]);
+  }, [page?.subscribed]);
 
   useEffect(() => () => {
     if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
@@ -159,6 +173,33 @@ export function ArtistView({
     if (started) playerController.setShuffleEnabled(true);
   };
 
+  /**
+   * Changes how often YouTube notifies about this artist.
+   *
+   * Optimistic, and deliberately so: YouTube does not report the current level on the artist
+   * page, so local state is the only record of the choice within a session. A failure puts the
+   * previous value back rather than leaving the control showing something that was refused.
+   */
+  const changeNotificationLevel = async (level: ArtistNotificationLevel) => {
+    const previous = notificationLevel;
+    setNotificationLevel(level);
+    try {
+      await libraryController.setArtistNotificationLevel(displayedArtist, level);
+      showToast(
+        level === "all"
+          ? "Notifying you about every release"
+          : level === "none" ? "Notifications off" : "Notifications set to personalized",
+      );
+    } catch (notificationError) {
+      setNotificationLevel(previous);
+      showToast(
+        notificationError instanceof Error
+          ? notificationError.message
+          : "Unable to change notifications.",
+      );
+    }
+  };
+
   const toggleArtistSubscription = async () => {
     if (isSubscribing) return;
     const nextSubscribed = !isSubscribed;
@@ -166,6 +207,9 @@ export function ArtistView({
     try {
       await libraryController.setArtistSubscribed(displayedArtist, nextSubscribed);
       setIsSubscribed(nextSubscribed);
+      // Unsubscribing drops the preference server-side; showing the old level after
+      // resubscribing would claim a setting that no longer exists.
+      if (!nextSubscribed) setNotificationLevel("personalized");
     } catch (subscribeError) {
       showToast(
         subscribeError instanceof Error
@@ -209,30 +253,21 @@ export function ArtistView({
         circularArtwork
         /* Supplied even though artworkSlot draws the image: MediaHeader publishes this to
            the ambient store, which is what tints the chrome above the page. */
-        artworkUrl={currentArtistArtworkUrl}
+        artworkUrl={displayedArtist.artworkUrl}
+        /*
+         * The same component every other cover in the app uses. Its own ladder ends by
+         * refetching the image through Tauri and painting the bytes, which is what rescues a
+         * url the webview refuses to load directly — the hand-rolled <img> here had no such
+         * step, and looped back to the first candidate forever once they had all failed.
+         */
         artworkSlot={
-          <div className="size-44 shrink-0 overflow-hidden rounded-full bg-card shadow-2xl ring-1 ring-white/10">
-            {currentArtistArtworkUrl ? (
-              <img
-                key={currentArtistArtworkUrl}
-                className="size-full object-cover"
-                src={currentArtistArtworkUrl}
-                alt=""
-                onError={() => {
-                  setArtistArtworkIndex((prev) => prev + 1);
-                  // If every candidate failed, fall back to the raw URL once more — it can
-                  // work without the size parameters appended to the variants.
-                  if (artistArtworkIndex >= artistArtworkCandidates.length - 1) {
-                    setArtistArtworkIndex(0);
-                  }
-                }}
-              />
-            ) : (
-              <span className="grid size-full place-items-center text-muted-foreground">
-                <UserIcon size={72} strokeWidth={1.4} />
-              </span>
-            )}
-          </div>
+          <TrackArtwork
+            className="size-44 shrink-0 rounded-full bg-card shadow-2xl ring-1 ring-white/10"
+            artworkUrl={displayedArtist.artworkUrl}
+            iconSize={72}
+            variant="artist"
+            loading="eager"
+          />
         }
         actionsDisabled={isLoading || Boolean(error) || !page?.allSongs.length}
         isPlaying={isCurrentCollection && isPlaying}
@@ -245,25 +280,50 @@ export function ArtistView({
           if (songs.length > 0) openPlaylistPicker(songs[0], songs);
         }}
         actions={
-          <button
-            className="flex items-center gap-2 rounded-full bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            type="button"
-            disabled={isLoading || Boolean(error) || isSubscribing}
-            onClick={() => void toggleArtistSubscription()}
-          >
-            {isSubscribing ? (
-              <SpinnerSteps size={18} color="currentColor" />
-            ) : isSubscribed ? (
-              <CheckIcon size={18} />
-            ) : (
-              <UserPlusIcon size={18} />
+          <div className="flex items-center gap-2">
+            <button
+              className="flex items-center gap-2 rounded-full bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              type="button"
+              disabled={isLoading || Boolean(error) || isSubscribing}
+              onClick={() => void toggleArtistSubscription()}
+            >
+              {isSubscribing ? (
+                <SpinnerSteps size={18} color="currentColor" />
+              ) : isSubscribed ? (
+                <CheckIcon size={18} />
+              ) : (
+                <UserPlusIcon size={18} />
+              )}
+              <span>
+                {isSubscribing
+                  ? isSubscribed ? "Unsubscribing..." : "Subscribing..."
+                  : isSubscribed ? "Subscribed" : "Subscribe"}
+              </span>
+            </button>
+
+            {/*
+              Only while subscribed: YouTube stores the preference against the subscription and
+              discards it when that goes away, so offering the control otherwise would accept a
+              choice it then silently drops.
+            */}
+            {isSubscribed && (
+              <Select
+                className="w-44"
+                value={notificationLevel}
+                onValueChange={(value) =>
+                  void changeNotificationLevel(value as ArtistNotificationLevel)}
+              >
+                <SelectTrigger aria-label={`Notifications for ${displayedArtist.name}`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All new releases</SelectItem>
+                  <SelectItem value="personalized">Personalized</SelectItem>
+                  <SelectItem value="none">No notifications</SelectItem>
+                </SelectContent>
+              </Select>
             )}
-            <span>
-              {isSubscribing
-                ? isSubscribed ? "Unsubscribing..." : "Subscribing..."
-                : isSubscribed ? "Subscribed" : "Subscribe"}
-            </span>
-          </button>
+          </div>
         }
       />
 

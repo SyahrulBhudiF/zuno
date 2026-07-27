@@ -6,10 +6,11 @@ import type {
   Album,
   Artist,
   Playlist,
+  SearchCategory,
   SearchResults,
   Track,
 } from "../../datasource/types";
-import type { PlayerControllerActions } from "../../player/playerStore";
+import { libraryController, type PlayerControllerActions } from "../../player/playerStore";
 import { AlbumCard } from "../components/AlbumCard";
 import { ArtistLinks } from "../components/ArtistLinks";
 import { TrackArtwork } from "../components/TrackArtwork";
@@ -33,13 +34,21 @@ type SelectableItem =
 
 type SearchScope = "all" | "songs" | "artists" | "albums" | "playlists";
 
-const SCOPES: Array<{ value: SearchScope; label: string; field: keyof SearchResults }> = [
+const SCOPES: Array<{
+  value: SearchScope;
+  label: string;
+  field: keyof SearchResults;
+  /** The filter YouTube Music runs for a deep search of this scope. */
+  category?: SearchCategory;
+}> = [
   { value: "all", label: "All", field: "tracks" },
-  { value: "songs", label: "Songs", field: "tracks" },
-  { value: "artists", label: "Artists", field: "artists" },
-  { value: "albums", label: "Albums", field: "albums" },
-  { value: "playlists", label: "Playlists", field: "playlists" },
+  { value: "songs", label: "Songs", field: "tracks", category: "song" },
+  { value: "artists", label: "Artists", field: "artists", category: "artist" },
+  { value: "albums", label: "Albums", field: "albums", category: "album" },
+  { value: "playlists", label: "Playlists", field: "playlists", category: "playlist" },
 ];
+
+const EMPTY_RESULTS: SearchResults = { artists: [], tracks: [], albums: [], playlists: [] };
 
 function buildFlatItems(results: SearchResults, songsFirst: boolean): SelectableItem[] {
   const items: SelectableItem[] = [];
@@ -91,19 +100,73 @@ export function SearchResultsPage({
   useEffect(() => setScope("all"), [query]);
 
   /*
+   * A filtered search, run when a category tab is opened.
+   *
+   * The mixed search that fills this page samples every category, so its "Songs" shelf is a
+   * handful of rows rather than the answer to "show me the songs". Asking YouTube Music for
+   * one category returns a proper list, which is the whole point of the tab.
+   */
+  const [deepResults, setDeepResults] = useState<SearchResults | null>(null);
+  const [isDeepLoading, setIsDeepLoading] = useState(false);
+
+  useEffect(() => {
+    const category = SCOPES.find((item) => item.value === scope)?.category;
+    if (!category || !query.trim()) {
+      setDeepResults(null);
+      setIsDeepLoading(false);
+      return;
+    }
+
+    // Guards against a slow request for one tab landing after the user has moved to another.
+    let active = true;
+    setDeepResults(null);
+    setIsDeepLoading(true);
+    void libraryController.searchCategory(query, category)
+      .then((fetched) => {
+        if (active) setDeepResults(fetched);
+      })
+      .catch(() => {
+        // Falling back to the mixed results is a worse answer, not a broken one.
+        if (active) setDeepResults(null);
+      })
+      .finally(() => {
+        if (active) setIsDeepLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [query, scope]);
+
+  /*
    * Scoping filters the results *before* anything else reads them, so the flat list that
    * drives keyboard selection contains exactly what is on screen. Filtering only at render
    * would leave arrow-down walking through hidden entries.
    */
   const scopedResults = useMemo<SearchResults>(() => {
     if (scope === "all") return results;
-    return {
+
+    // The deep search is already filtered; the mixed results still need narrowing, and stand
+    // in while the deep one is loading or after it has failed.
+    const source = deepResults ?? results;
+    const narrowed: SearchResults = {
+      artists: scope === "artists" ? source.artists : [],
+      tracks: scope === "songs" ? source.tracks : [],
+      albums: scope === "albums" ? source.albums : [],
+      playlists: scope === "playlists" ? source.playlists : [],
+    };
+    const total = narrowed.artists.length + narrowed.tracks.length
+      + narrowed.albums.length + narrowed.playlists.length;
+    // A deep search that came back empty is not a reason to show nothing when the mixed
+    // search had something for this category.
+    return total > 0 || !deepResults ? narrowed : {
+      ...EMPTY_RESULTS,
       artists: scope === "artists" ? results.artists : [],
       tracks: scope === "songs" ? results.tracks : [],
       albums: scope === "albums" ? results.albums : [],
       playlists: scope === "playlists" ? results.playlists : [],
     };
-  }, [results, scope]);
+  }, [deepResults, results, scope]);
 
   const availableScopes = useMemo(
     () => SCOPES.filter(
@@ -284,7 +347,7 @@ export function SearchResultsPage({
         )}
       </header>
 
-      {isLoading ? (
+      {isLoading || (isDeepLoading && !hasResults) ? (
         <SearchLoadingSpinner />
       ) : !hasResults ? (
         <p className="px-2 py-10 text-center text-sm text-muted-foreground">No results found.</p>

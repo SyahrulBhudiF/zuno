@@ -94,6 +94,133 @@ function PlaylistLoadingSpinner({ label }: { label: string }) {
   );
 }
 
+/**
+ * A playlist's description, editable in place when the playlist is the user's own.
+ *
+ * Collapsed to three lines by default. Descriptions are frequently a wall of text pasted from
+ * somewhere else, and letting one push the track list off the screen would be a worse default
+ * than hiding the tail behind a click.
+ */
+function PlaylistDescription({
+  playlist,
+  libraryController,
+}: {
+  playlist: Playlist;
+  libraryController: LibraryController;
+}) {
+  const canEdit = Boolean(playlist.isEditable) && !isLocalPlaylist(playlist);
+  /*
+   * Fetched rather than read off the prop. The library shelves that produce Playlist objects
+   * carry a title, an owner and a cover but never the description — only the playlist's own
+   * page has it, so asking for it is the only way to show one that already exists.
+   */
+  const [description, setDescription] = useState(playlist.description?.trim() ?? "");
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(description);
+  const [isSaving, setIsSaving] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  // A different playlist means a different description; keeping the old draft would offer to
+  // save one playlist's text onto another.
+  useEffect(() => {
+    let active = true;
+    setIsEditing(false);
+    setExpanded(false);
+    const initial = playlist.description?.trim() ?? "";
+    setDescription(initial);
+    setDraft(initial);
+
+    void libraryController.getPlaylistDescription(playlist).then((fetched) => {
+      if (!active || fetched === null) return;
+      setDescription(fetched);
+      setDraft(fetched);
+    }).catch(() => {
+      // A missing description is indistinguishable from an empty one to the reader.
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [libraryController, playlist]);
+
+  if (!description && !canEdit) return null;
+
+  if (isEditing) {
+    return (
+      <div className="flex flex-col gap-2">
+        <textarea
+          className="min-h-20 w-full resize-y rounded-xl bg-white/[0.04] px-3 py-2 text-sm text-foreground outline-none ring-1 ring-white/10 placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          value={draft}
+          autoFocus
+          maxLength={5000}
+          placeholder="Describe this playlist"
+          onChange={(event) => setDraft(event.target.value)}
+          aria-label="Playlist description"
+        />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="rounded-full bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            disabled={isSaving}
+            onClick={() => {
+              setIsSaving(true);
+              void libraryController.setPlaylistDescription(playlist, draft)
+                .then(() => {
+                  setDescription(draft.trim());
+                  setIsEditing(false);
+                })
+                .catch((error: unknown) => {
+                  logInternalError("PlaylistView.setPlaylistDescription failed", error);
+                })
+                .finally(() => setIsSaving(false));
+            }}
+          >
+            {isSaving ? "Saving..." : "Save"}
+          </button>
+          <button
+            type="button"
+            className="rounded-full px-4 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            disabled={isSaving}
+            onClick={() => {
+              setDraft(description);
+              setIsEditing(false);
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-start gap-2">
+      {description ? (
+        <p
+          className={cn(
+            "min-w-0 flex-1 whitespace-pre-wrap text-sm text-muted-foreground",
+            !expanded && "line-clamp-3",
+          )}
+          onClick={() => setExpanded((previous) => !previous)}
+        >
+          {description}
+        </p>
+      ) : (
+        <p className="min-w-0 flex-1 text-sm italic text-muted-foreground">No description yet.</p>
+      )}
+      {canEdit && (
+        <button
+          type="button"
+          className="shrink-0 rounded-full px-3 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={() => setIsEditing(true)}
+        >
+          {description ? "Edit" : "Add description"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function PlaylistView({ playlist, playerController, libraryController }: PlaylistViewProps) {
   const { openPlaylistPicker, openTrackMenu } = useTrackContextMenu();
   const { openPlaylistMenu } = usePlaylistContextMenu();
@@ -603,6 +730,7 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
           downloadCounts={downloadCounts}
           downloadBusy={isCollectingAll}
         />
+        <PlaylistDescription playlist={playlist} libraryController={libraryController} />
       </div>
       {isLoading && <PlaylistLoadingSpinner label="Loading songs" />}
       {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}

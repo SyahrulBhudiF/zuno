@@ -7,6 +7,18 @@ import {
   useSyncExternalStore,
 } from "react";
 import { Switch } from "@/components/motion/switch";
+import { RangeSlider } from "@/components/motion/range-slider";
+import {
+  MAX_CROSSFADE_SEC,
+  setCrossfadeSec,
+  setGaplessEnabled,
+  useCrossfadeSec,
+  useGaplessEnabled,
+} from "../settings/playbackTransitions";
+import {
+  setSessionRestoreEnabled,
+  useSessionRestoreEnabled,
+} from "../settings/sessionRestore";
 import {
   Select,
   SelectContent,
@@ -16,7 +28,6 @@ import {
 } from "@/components/motion/select";
 import {
   BugIcon,
-  CoffeeIcon,
   FolderAddIcon,
   FolderIcon,
   FolderOpenIcon,
@@ -26,6 +37,7 @@ import {
   LogFileIcon,
   LogoutIcon,
   PaletteIcon,
+  PlayIcon,
   QueuePanelIcon,
   RefreshIcon,
   StarIcon,
@@ -70,6 +82,11 @@ import {
   useExtraPlayerControlsAlwaysVisible,
 } from "../settings/playerControls";
 import { setPaperPcMode, usePaperPcMode } from "../settings/paperPcMode";
+import {
+  setToolbarItemVisible,
+  TOOLBAR_ITEMS,
+  useToolbarItemVisible,
+} from "../settings/toolbarItems";
 import {
   setNativeWindowControls,
   setWindowsStyleWindowControls,
@@ -138,8 +155,6 @@ import {
   useOfflineState,
 } from "../../player/offlineStore";
 
-const KOFI_URL = "https://ko-fi.com/totally2late";
-
 /*
  * Label + description pair used by every settings row.
  *
@@ -200,6 +215,19 @@ function SettingRow({
       </span>
       <span className="flex shrink-0 items-center gap-2 pt-0.5">{children(labelId)}</span>
     </div>
+  );
+}
+
+/** Its own component so each row can hold its own subscription rather than one per item here. */
+function ToolbarItemToggle({ item }: { item: (typeof TOOLBAR_ITEMS)[number] }) {
+  const visible = useToolbarItemVisible(item.id);
+  return (
+    <SettingToggle
+      title={item.label}
+      description={item.description}
+      checked={visible}
+      onCheckedChange={(checked) => setToolbarItemVisible(item.id, checked)}
+    />
   );
 }
 
@@ -271,11 +299,11 @@ function SettingsCardHeader({
   );
 }
 
-/** Quiet outbound links at the foot of the page. */
-const SETTINGS_FOOTER_LINK =
+/** Quiet outbound links in the page header. */
+const SETTINGS_LINK =
   "flex items-center gap-2 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-md";
 
-type SettingsTab = "about" | "appearance" | "system" | "shortcuts" | "window";
+type SettingsTab = "about" | "appearance" | "playback" | "system" | "shortcuts" | "window";
 
 const SETTINGS_TABS: Array<{
   id: SettingsTab;
@@ -285,6 +313,12 @@ const SETTINGS_TABS: Array<{
 }> = [
   { id: "about", label: "Account", description: "Sign-in, integrations, updates", icon: UserIcon },
   { id: "appearance", label: "Appearance", description: "Theme and motion", icon: PaletteIcon },
+  {
+    id: "playback",
+    label: "Playback",
+    description: "Transitions and session",
+    icon: PlayIcon,
+  },
   { id: "system", label: "Library", description: "Cache and local files", icon: FolderIcon },
   { id: "window", label: "Window", description: "Chrome and mini player", icon: QueuePanelIcon },
   { id: "shortcuts", label: "Shortcuts", description: "Keyboard bindings", icon: KeyIcon },
@@ -357,6 +391,9 @@ export function SettingsPage({
   const miniPlayerEnabled = useMiniPlayerEnabled();
   const miniPlayerHoverAction = useMiniPlayerHoverAction();
   const sidebarMode = useSidebarMode();
+  const crossfadeSec = useCrossfadeSec();
+  const gaplessEnabled = useGaplessEnabled();
+  const sessionRestoreEnabled = useSessionRestoreEnabled();
   const extraPlayerControlsAlwaysVisible = useExtraPlayerControlsAlwaysVisible();
   const compactPlayerBar = useCompactPlayerBar();
   const windowsStyleWindowControls = useWindowsStyleWindowControls();
@@ -701,11 +738,36 @@ export function SettingsPage({
 
   return (
     <main className="flex min-h-0 flex-1 flex-col gap-7">
-      <header className="flex flex-col gap-1.5">
-        <h1>Settings</h1>
-        <p className="text-sm text-muted-foreground">
-          Manage your account, library, appearance, and window behaviour.
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+        <div className="flex flex-col gap-1.5">
+          <h1>Settings</h1>
+          <p className="text-sm text-muted-foreground">
+            Manage your account, library, appearance, and window behaviour.
+          </p>
+        </div>
+
+        {/*
+          Quiet text links, not filled buttons: they are destinations you leave the app for,
+          and at that weight they can sit up here without competing with the categories.
+        */}
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+          <button
+            className={SETTINGS_LINK}
+            type="button"
+            onClick={() => void openUrl(GITHUB_REPOSITORY_URL)}
+          >
+            <StarIcon size={16} aria-hidden="true" />
+            Star on GitHub
+          </button>
+          <button
+            className={SETTINGS_LINK}
+            type="button"
+            onClick={() => void openUrl(GITHUB_NEW_ISSUE_URL)}
+          >
+            <BugIcon size={16} aria-hidden="true" />
+            Report an issue
+          </button>
+        </div>
       </header>
 
       {/* Vertical nav rather than a pill row: it has room for a description per
@@ -1539,6 +1601,82 @@ export function SettingsPage({
         </div>
       )}
 
+      {activeTab === "playback" && (
+        <div className="flex flex-col gap-5" role="tabpanel" aria-label="Playback settings">
+          <section className={SETTINGS_CARD} aria-labelledby="playback-settings-title">
+            <SettingsCardHeader
+              title="Transitions"
+              titleId="playback-settings-title"
+              icon={<PlayIcon size={18} aria-hidden="true" />}
+              description="How one track becomes the next."
+            />
+
+            <SettingToggle
+              title="Gapless playback"
+              description="Load the next track while the current one is still playing, so albums and live sets run without a pause between songs."
+              checked={gaplessEnabled}
+              onCheckedChange={setGaplessEnabled}
+            />
+
+            <SettingRow
+              title="Crossfade"
+              description={
+                crossfadeSec > 0
+                  ? `Overlap each track with the next by ${crossfadeSec} second${
+                    crossfadeSec === 1 ? "" : "s"
+                  }.`
+                  : "Off. Move the slider to overlap the end of each track with the start of the next."
+              }
+            >
+              {(labelId) => (
+                <span className="flex items-center gap-3">
+                  <RangeSlider
+                    className="w-44"
+                    value={crossfadeSec}
+                    min={0}
+                    max={MAX_CROSSFADE_SEC}
+                    step={1}
+                    onValueChange={setCrossfadeSec}
+                    aria-label="Crossfade length in seconds"
+                  />
+                  <span
+                    id={labelId}
+                    className="w-10 shrink-0 text-right text-sm tabular-nums text-muted-foreground"
+                  >
+                    {crossfadeSec > 0 ? `${crossfadeSec}s` : "Off"}
+                  </span>
+                </span>
+              )}
+            </SettingRow>
+
+            {/*
+              Crossfading a downloaded track is not possible: offline files play through an
+              audio element rather than the deck pair the overlap needs. Saying so beats
+              leaving people to wonder why it only sometimes works.
+            */}
+            <p className="text-sm text-muted-foreground">
+              Both apply to streamed tracks. Downloaded and local files always play back to back.
+            </p>
+          </section>
+
+          <section className={SETTINGS_CARD} aria-labelledby="session-settings-title">
+            <SettingsCardHeader
+              title="Session"
+              titleId="session-settings-title"
+              icon={<QueuePanelIcon size={18} aria-hidden="true" />}
+              description="What comes back when you reopen Zuno."
+            />
+
+            <SettingToggle
+              title="Restore tabs and queues"
+              description="Reopen your tabs, queues and playback position on launch. Playback always starts paused."
+              checked={sessionRestoreEnabled}
+              onCheckedChange={setSessionRestoreEnabled}
+            />
+          </section>
+        </div>
+      )}
+
       {activeTab === "appearance" && (
         <div className="flex flex-col gap-5" role="tabpanel" aria-label="Appearance settings">
           <section className={SETTINGS_CARD} aria-labelledby="theme-settings-title">
@@ -1594,6 +1732,19 @@ export function SettingsPage({
             </div>
           </section>
 
+          <section className={SETTINGS_CARD} aria-labelledby="toolbar-settings-title">
+            <div className="min-w-0">
+              <h2 className="text-lg" id="toolbar-settings-title">Title bar</h2>
+              <p className="text-sm text-muted-foreground">
+                Which optional buttons sit next to the window controls.
+              </p>
+            </div>
+
+            {TOOLBAR_ITEMS.map((item) => (
+              <ToolbarItemToggle key={item.id} item={item} />
+            ))}
+          </section>
+
           <section className={SETTINGS_CARD} aria-labelledby="motion-settings-title">
             <div className="min-w-0">
               <h2 className="text-lg" id="motion-settings-title">Motion &amp; performance</h2>
@@ -1612,38 +1763,6 @@ export function SettingsPage({
         </div>
       )}
 
-          {/*
-            Support and feedback links live at the foot of the content column rather than as
-            a row of filled buttons above the nav. They are destinations you leave the app
-            for — quiet text links are the honest weight for that, and it stops them
-            competing with the categories for first read.
-          */}
-          <footer className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-            <button
-              className={SETTINGS_FOOTER_LINK}
-              type="button"
-              onClick={() => void openUrl(KOFI_URL)}
-            >
-              <CoffeeIcon size={16} aria-hidden="true" />
-              Buy me a coffee
-            </button>
-            <button
-              className={SETTINGS_FOOTER_LINK}
-              type="button"
-              onClick={() => void openUrl(GITHUB_REPOSITORY_URL)}
-            >
-              <StarIcon size={16} aria-hidden="true" />
-              Star on GitHub
-            </button>
-            <button
-              className={SETTINGS_FOOTER_LINK}
-              type="button"
-              onClick={() => void openUrl(GITHUB_NEW_ISSUE_URL)}
-            >
-              <BugIcon size={16} aria-hidden="true" />
-              Report an issue
-            </button>
-          </footer>
         </div>
       </div>
     </main>

@@ -1,6 +1,6 @@
 import type { Album, Artist, Playlist, SearchResults, Track } from "../../datasource/types";
 
-export type TabView = "home" | "album" | "artist" | "playlist" | "search" | "history" | "browse" | "library" | "settings";
+export type TabView = "home" | "album" | "artist" | "playlist" | "related" | "search" | "history" | "browse" | "library" | "settings";
 export type NavigableTabView = Exclude<TabView, "settings">;
 
 export interface TabViewState {
@@ -9,6 +9,8 @@ export interface TabViewState {
   album?: Album;
   artist?: Artist;
   playlist?: Playlist;
+  /** The track a "related" view is about. */
+  relatedTrack?: Track;
   searchQuery?: string;
   searchResults?: Track[];
   mixedSearchResults?: SearchResults;
@@ -29,6 +31,7 @@ export interface Tab {
   album?: Album;
   artist?: Artist;
   playlist?: Playlist;
+  relatedTrack?: Track;
   searchQuery?: string;
   searchResults?: Track[];
   mixedSearchResults?: SearchResults;
