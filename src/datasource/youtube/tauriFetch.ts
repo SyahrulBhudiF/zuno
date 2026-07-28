@@ -6,7 +6,64 @@ type ProxyHttpResponse = {
   status: number;
   headers: Record<string, string>;
   body_base64: string;
+  /** Present only when the response rotated the session cookie. */
+  cookie?: string;
 };
+
+/**
+ * The session cookie as it stands right now.
+ *
+ * Google rotates SIDCC and the SIDTS pair continuously, and Rust folds every `Set-Cookie` back
+ * into the stored session — so anything derived from the cookie has to read it from here rather
+ * than from whatever an Innertube client captured when it was constructed hours ago.
+ */
+let liveCookie: string | null = null;
+
+export function getLiveCookie(): string | null {
+  return liveCookie;
+}
+
+export function setLiveCookie(cookie: string | null): void {
+  liveCookie = cookie;
+}
+
+/**
+ * Notified when YouTube rejects an authenticated InnerTube call outright.
+ *
+ * One place rather than at each call site: a like, a subscribe, a playlist edit and a library
+ * sync all fail the same way when the session dies, and every one of them used to report it as
+ * its own unrelated error while the app kept claiming to be signed in.
+ */
+let onAuthRejected: (() => void) | null = null;
+
+export function setAuthRejectedHandler(handler: (() => void) | null): void {
+  onAuthRejected = handler;
+}
+
+/**
+ * Reports a rejection that carried no status code to give it away.
+ *
+ * YouTube's usual answer to a dead session is not a 401 — it is a perfectly ordinary 200 whose
+ * body is the signed-out version of the page. Callers that can recognise that shape report it
+ * here so it lands in the same place as the honest failures.
+ */
+export function notifyAuthRejected(): void {
+  onAuthRejected?.();
+}
+
+/**
+ * Notified when YouTube answers an authenticated call *as* the signed-in user.
+ *
+ * The counterpart to onAuthRejected, and the only honest basis for showing an account as
+ * connected. The app used to infer that from having library data on screen, which a cache with
+ * no expiry could satisfy indefinitely after the session behind it had died.
+ */
+let onAuthConfirmed: ((at: number) => void) | null = null;
+let lastConfirmedAt = 0;
+
+export function setAuthConfirmedHandler(handler: ((at: number) => void) | null): void {
+  onAuthConfirmed = handler;
+}
 
 type TauriFetchInit = RequestInit & {
   timeoutMs?: number;
@@ -117,7 +174,9 @@ async function applyCookieAuth(
   const origin = headers["x-youtube-client-name"] === "67"
     ? "https://music.youtube.com"
     : "https://www.youtube.com";
-  const sapisid = getSapisidAuthCookie(headers.cookie);
+  // The live cookie, not the session's copy — the proxy sends the live one, so the hash has to
+  // be built from the same SAPISID that actually goes out.
+  const sapisid = getSapisidAuthCookie(liveCookie ?? headers.cookie);
   if (sapisid) {
     const timestamp = Math.floor(Date.now() / 1000);
     const hash = await sha1Hex(`${timestamp} ${sapisid} ${origin}`);
@@ -210,6 +269,28 @@ export async function tauriFetch(input: RequestInfo | URL, init?: TauriFetchInit
 
     if (!proxyResponse) {
       throw new Error("Tauri proxy_http_request returned undefined response");
+    }
+
+    if (proxyResponse.cookie) {
+      liveCookie = proxyResponse.cookie;
+    }
+
+    // Only for requests that carried credentials: the download client is deliberately
+    // anonymous, and a 401 there says nothing about the user's session.
+    if (proxyResponse.status === 401 && headers.cookie) {
+      logInternalInfo("tauriFetch.authRejected", { url });
+      onAuthRejected?.();
+    }
+
+    const authenticatedApiCall = headers.cookie
+      && new URL(url).pathname.startsWith("/youtubei/");
+    if (authenticatedApiCall && proxyResponse.status >= 200 && proxyResponse.status < 300) {
+      const now = Date.now();
+      // Throttled: this fires on every API call, and the UI only needs it to be roughly current.
+      if (now - lastConfirmedAt >= 30_000) {
+        lastConfirmedAt = now;
+        onAuthConfirmed?.(now);
+      }
     }
 
     const bodyBytes = fromBase64(proxyResponse.body_base64);

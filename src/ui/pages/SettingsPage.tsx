@@ -170,6 +170,21 @@ const SETTING_LABEL =
 const SETTINGS_CARD = "flex flex-col gap-5 rounded-2xl bg-card/50 p-6";
 
 /**
+ * How long ago YouTube last answered as this account, in words.
+ *
+ * Deliberately visible rather than internal: with no telemetry, this one line is what turns
+ * "liking songs stopped working" into a report somebody can act on.
+ */
+function formatSessionAge(confirmedAt: number | null): string {
+  if (confirmedAt === null) return "not yet";
+  const minutes = Math.floor((Date.now() - confirmedAt) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+}
+
+/**
  * Text field. Preflight strips the browser's default input chrome, and these two fields were
  * left bare by the CSS Modules migration — they rendered as invisible text on the card.
  */
@@ -415,7 +430,10 @@ export function SettingsPage({
     getLocalPlaylists,
   );
   const account = libraryState.library?.account;
-  const isSignedIn = libraryState.status === "ready" && account;
+  // Confirmed by YouTube rather than inferred from cached data — see LibraryState.
+  const isSignedIn = libraryState.status === "ready"
+    && account
+    && libraryState.sessionConfirmedAt !== null;
   const authBusy = libraryState.status === "restoring"
     || libraryState.status === "authorizing"
     || libraryState.status === "loading";
@@ -849,7 +867,9 @@ export function SettingsPage({
                   {isSignedIn ? account?.name || "YouTube Music" : "Not signed in"}
                 </span>
                 <span className="truncate text-sm text-muted-foreground">
-                  {isSignedIn ? "Your library and listening history are available." : "Sign in to load your library."}
+                  {isSignedIn
+                    ? `Session confirmed ${formatSessionAge(libraryState.sessionConfirmedAt)}.`
+                    : "Sign in to load your library."}
                 </span>
               </div>
 

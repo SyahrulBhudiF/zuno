@@ -1,4 +1,4 @@
-import type { DataSource } from "../datasource/DataSource";
+import { AuthExpiredError, type DataSource } from "../datasource/DataSource";
 import type {
   AccountOption,
   Album,
@@ -20,6 +20,7 @@ import type {
   TrackRating,
 } from "../datasource/types";
 import { logInternalError, logInternalInfo } from "../internal/logging";
+import { getAppSetting, setAppSetting } from "../internal/appSettings";
 import { forgetTrackInPlaylist, rememberTrackInPlaylist } from "./playlistMembership";
 import {
   addLocalPlaylistPath,
@@ -45,6 +46,15 @@ export interface LibraryState {
   library: LibrarySnapshot | null;
   pendingLikeTrackIds: ReadonlySet<string>;
   error: string | null;
+  /**
+   * When YouTube last answered as the signed-in user, or null if it has not this run.
+   *
+   * The only trustworthy basis for showing an account as connected. `library` cannot serve that
+   * purpose: it is restored from a cache with no expiry, so it stays populated long after the
+   * session behind it has died — which is exactly how the app came to claim a working
+   * connection while every action against it silently failed.
+   */
+  sessionConfirmedAt: number | null;
 }
 
 type Listener = () => void;
@@ -55,6 +65,12 @@ type Listener = () => void;
  */
 const LIBRARY_REFRESH_TIMEOUT_MS = 120_000;
 const SIGN_IN_REFRESH_RETRY_DELAYS_MS = [0, 1_500, 5_000];
+/**
+ * Silent recovery opens a hidden webview, so it is rate-limited rather than reflexive. Long
+ * enough that a genuinely dead session settles into the sign-in prompt instead of retrying at
+ * it, short enough that a transient rejection heals itself within one sitting.
+ */
+const SESSION_RECOVERY_COOLDOWN_MS = 5 * 60_000;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timeoutId: number | undefined;
@@ -93,9 +109,12 @@ export class LibraryController {
     library: null,
     pendingLikeTrackIds: new Set(),
     error: null,
+    sessionConfirmedAt: null,
   };
 
   private dislikedTrackIds: Set<string> = readDislikedTrackIds();
+  private sessionRecoveryPromise: Promise<void> | null = null;
+  private lastSessionRecoveryAt = 0;
 
   constructor(private readonly dataSource: DataSource) {}
 
@@ -113,8 +132,93 @@ export class LibraryController {
       return this.initializationPromise;
     }
 
-    this.initializationPromise = this.restoreSession();
+    this.dataSource.onAuthExpired?.(() => this.markSessionExpired());
+    this.dataSource.onAuthConfirmed?.((at) => this.setState({ sessionConfirmedAt: at }));
+    this.initializationPromise = this.hydrateDislikedTrackIds().then(() => this.restoreSession());
     return this.initializationPromise;
+  }
+
+  /** Recovers dislikes from durable storage before the library is applied against them. */
+  private async hydrateDislikedTrackIds(): Promise<void> {
+    const stored = await getAppSetting<unknown>(DISLIKED_TRACKS_STORAGE_KEY);
+    const ids = Array.isArray(stored)
+      ? stored.filter((id): id is string => typeof id === "string")
+      : null;
+
+    if (ids && ids.length > 0) {
+      this.dislikedTrackIds = new Set(ids);
+      this.persistDislikedTrackIds();
+      return;
+    }
+    if (this.dislikedTrackIds.size > 0) this.persistDislikedTrackIds();
+  }
+
+  /**
+   * The session was rejected. Try to fix it without the user before admitting to it.
+   *
+   * Recovery is attempted at most once per cooldown and never twice at a time, so a burst of
+   * rejected requests — which is the normal shape of this failure — cannot turn into a burst of
+   * hidden webviews.
+   */
+  private markSessionExpired(): void {
+    if (this.state.status === "signed-out" || this.state.status === "authorizing") return;
+    if (this.sessionRecoveryPromise) return;
+
+    const canRecover = this.dataSource.refreshSession
+      && Date.now() - this.lastSessionRecoveryAt >= SESSION_RECOVERY_COOLDOWN_MS;
+    if (!canRecover) {
+      this.setSessionExpired();
+      return;
+    }
+
+    this.lastSessionRecoveryAt = Date.now();
+    this.sessionRecoveryPromise = this.recoverSessionSilently().finally(() => {
+      this.sessionRecoveryPromise = null;
+    });
+  }
+
+  private async recoverSessionSilently(): Promise<void> {
+    logInternalInfo("LibraryController silent session recovery start");
+    try {
+      if (await this.dataSource.refreshSession?.()) {
+        logInternalInfo("LibraryController silent session recovery succeeded");
+        // A catch-up, not a resync: the cache survived, so this returns almost at once and
+        // then quietly brings the library up to date behind it.
+        await this.refresh({ suppressFailure: true });
+        return;
+      }
+    } catch (error) {
+      logInternalError("LibraryController silent session recovery failed", error);
+      /*
+       * A renewed cookie YouTube still refuses is an expired session; anything else is an
+       * ordinary failure and says nothing about the sign-in. Both have to resolve the status,
+       * because markSessionExpired suppresses itself while a recovery is in flight — which is
+       * this one — and would otherwise leave the library stuck loading forever.
+       */
+      if (!(error instanceof AuthExpiredError)) {
+        this.setFailure("Unable to load your YouTube Music library.", error);
+        return;
+      }
+    }
+
+    this.setSessionExpired();
+  }
+
+  /**
+   * Say plainly that the session is gone, and stop pretending otherwise.
+   *
+   * The cached library is deliberately kept. It is still the user's library and still worth
+   * looking at — what was wrong before was the *header* claiming a working connection while
+   * every action against it failed.
+   */
+  private setSessionExpired(): void {
+    logInternalInfo("LibraryController session expired");
+    this.setState({
+      status: "signed-out",
+      authPrompt: null,
+      error: "Your YouTube Music session expired. Sign in again to sync and to like songs.",
+      sessionConfirmedAt: null,
+    });
   }
 
   async recoverConnection(): Promise<void> {
@@ -184,6 +288,7 @@ export class LibraryController {
         library: null,
         pendingLikeTrackIds: new Set(),
         error: null,
+        sessionConfirmedAt: null,
       });
     } catch (error) {
       this.setFailure("Unable to sign out.", error);
@@ -223,14 +328,26 @@ export class LibraryController {
     this.setState({ status: "loading", authPrompt: null, error: null });
     try {
       const library = await withTimeout(
-        this.dataSource.getLibrary((updatedLibrary) => {
-          this.setState({ status: "ready", library: updatedLibrary, authPrompt: null, error: null });
-        }),
+        this.dataSource.getLibrary(
+          (updatedLibrary) => {
+            this.setState({ status: "ready", library: updatedLibrary, authPrompt: null, error: null });
+          },
+          (error) => {
+            // A background refresh, so there is no caller to throw to — this is the only way an
+            // expired session behind a cache hit ever becomes visible.
+            if (error instanceof AuthExpiredError) this.markSessionExpired();
+          },
+        ),
         LIBRARY_REFRESH_TIMEOUT_MS,
         "YouTube Music library sync timed out.",
       );
       this.applyLibrary(library);
     } catch (error) {
+      if (error instanceof AuthExpiredError) {
+        this.markSessionExpired();
+        if (options.suppressFailure) throw error;
+        return;
+      }
       if (options.suppressFailure) throw error;
       this.setFailure("Unable to load your YouTube Music library.", error);
     }
@@ -826,6 +943,12 @@ export class LibraryController {
     } catch {
       // Quota or privacy mode: the rating still reached YouTube, only the local mirror is lost.
     }
+    /*
+     * And durably, outside webview storage. YouTube keeps the rating but exposes no way to read
+     * dislikes back, so this list is the only record that exists anywhere — losing it is not
+     * something a resync can undo.
+     */
+    void setAppSetting(DISLIKED_TRACKS_STORAGE_KEY, [...this.dislikedTrackIds]);
   }
 
   private setFailure(message: string, error: unknown) {

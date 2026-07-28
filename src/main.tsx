@@ -28,6 +28,7 @@ import { applyPlatformAttributes } from "./ui/platform";
 import { hydrateArtworkCache } from "./internal/artworkCache";
 import { DiscordRpcService } from "./player/DiscordRPC";
 import { hydratePlaybackSettings } from "./player/playbackSettings";
+import { hydratePlayHistory } from "./player/playHistory";
 import { hydrateSessionRestoreSetting } from "./ui/settings/sessionRestore";
 import { hydrateToolbarItemSettings } from "./ui/settings/toolbarItems";
 
@@ -59,6 +60,7 @@ void Promise.all([
   hydrateKeyboardShortcuts(),
   hydrateToolbarItemSettings(),
   hydratePlaybackSettings(),
+  hydratePlayHistory(),
   // Read synchronously from local storage at boot, so this only backfills a machine whose
   // local storage was cleared — it takes effect from the next launch.
   hydrateSessionRestoreSetting(),

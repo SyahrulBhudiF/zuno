@@ -19,6 +19,20 @@ import type {
   TrackRating,
 } from "./types";
 
+/**
+ * The stored session is no longer accepted and only a fresh sign-in will fix it.
+ *
+ * Distinct from an ordinary failure because the answer is different: a network error is worth
+ * retrying, an expired session is not. Sources throw this so the controller can say so instead
+ * of leaving a stale cached library on screen looking signed in.
+ */
+export class AuthExpiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AuthExpiredError";
+  }
+}
+
 export type StreamData = {
   bytes?: ArrayBuffer;
   mimeType?: string;
@@ -37,13 +51,29 @@ export abstract class DataSource {
   getSearchSuggestions?(query: string, onUpdate?: (suggestions: string[]) => void): Promise<string[]>;
   getStreamData?(track: Track): Promise<StreamData>;
   restoreSession?(): Promise<boolean>;
+  /**
+   * Renews an expired session without involving the user. False means it genuinely lapsed and
+   * only a sign-in will do. Must not discard caches — the point is to avoid a full resync.
+   */
+  refreshSession?(): Promise<boolean>;
+  /** Registers a listener for the source discovering its stored session is no longer accepted. */
+  onAuthExpired?(handler: () => void): void;
+  /** Registers a listener for the source being answered *as* the signed-in user. */
+  onAuthConfirmed?(handler: (at: number) => void): void;
   signIn?(onPrompt: (prompt: AuthPrompt) => void): Promise<void>;
   signOut?(): Promise<void>;
   /** Channels available on the signed-in account. Absent when the source has no such notion. */
   listAccounts?(): Promise<AccountOption[]>;
   selectAccount?(id: string): Promise<void>;
   getCachedLibrary?(): Promise<LibrarySnapshot | null>;
-  getLibrary?(onUpdate?: (library: LibrarySnapshot) => void): Promise<LibrarySnapshot>;
+  /**
+   * `onError` reports a *background* refresh failure — the one case the return value cannot
+   * cover, because a cached library resolves the promise before the network is consulted.
+   */
+  getLibrary?(
+    onUpdate?: (library: LibrarySnapshot) => void,
+    onError?: (error: unknown) => void,
+  ): Promise<LibrarySnapshot>;
   getAlbumTracks?(album: Album, onUpdate?: (tracks: Track[]) => void): Promise<Track[]>;
   setAlbumSaved?(album: Album, saved: boolean): Promise<void>;
   getArtist?(artistId: string, onUpdate?: (artist: ArtistPage) => void): Promise<ArtistPage>;

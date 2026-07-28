@@ -67,7 +67,11 @@ export function TitleBar({
   const appWindow = getCurrentWindow();
   const libraryState = useLibraryState();
   const account = libraryState.library?.account;
-  const isSignedIn = libraryState.status === "ready" && Boolean(account);
+  // Confirmed by YouTube, not merely by having a library on screen — a cache with no expiry
+  // will happily supply one long after the session behind it stopped working.
+  const isSignedIn = libraryState.status === "ready"
+    && Boolean(account)
+    && libraryState.sessionConfirmedAt !== null;
   // Startup restores the session before it can say whether there is one — "Not signed in" is
   // the wrong answer while that is still happening.
   const isConnecting = !isSignedIn

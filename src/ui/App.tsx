@@ -246,15 +246,11 @@ function clearLocalOnboardingComplete(): void {
 }
 
 async function hasStoredYoutubeSession(): Promise<boolean> {
-  const [credentials, cookie] = await Promise.allSettled([
-    invoke<string | null>("load_youtube_credentials"),
-    invoke<string | null>("load_youtube_music_cookie"),
-  ]);
-
-  return (
-    credentials.status === "fulfilled" && credentials.value !== null
-    || cookie.status === "fulfilled" && cookie.value !== null
-  );
+  // The cookie is the session. This used to also consult an OAuth credential, which nothing in
+  // the app has ever written — a branch that could only ever be false, dressed as a second way
+  // of being signed in.
+  const cookie = await Promise.allSettled([invoke<string | null>("load_youtube_music_cookie")]);
+  return cookie[0].status === "fulfilled" && cookie[0].value !== null;
 }
 
 export default function App() {

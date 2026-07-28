@@ -9,6 +9,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -117,12 +118,35 @@ const YOUTUBE_COOKIE_ENCRYPTION_KEY_USER: &str = "youtube-music-cookie-encryptio
 const YOUTUBE_COOKIE_ENCRYPTED_FILE: &str = "youtube-music-session-v1.bin";
 const YOUTUBE_LOGIN_WINDOW: &str = "youtube-music-login";
 const YOUTUBE_LOGIN_URL: &str = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F";
+/// Storage partition for the sign-in webview, so clearing it cannot touch the app's own.
+///
+/// `clear_all_browsing_data` is a *profile*-wide operation on every platform — WebView2 calls
+/// `ClearBrowsingDataAll` on the profile, WKWebView empties the shared default data store — and
+/// every webview in the process shares one profile by default. The login window used to clear
+/// that shared profile twice per sign-in cycle, which wiped the main window's localStorage:
+/// the downloads manifest, local playlists, play history, tabs, shortcuts, the lot. Worse, a
+/// lost manifest made the next launch delete every downloaded file as an orphan.
+const YOUTUBE_LOGIN_DATA_DIR: &str = "youtube-login-webview";
+/// The same partition across launches, so the login window is not a fresh profile every time.
+#[cfg(target_os = "macos")]
+const YOUTUBE_LOGIN_DATA_STORE_ID: [u8; 16] = [
+    0x7a, 0x75, 0x6e, 0x6f, 0x6c, 0x6f, 0x67, 0x69, 0x6e, 0x77, 0x65, 0x62, 0x76, 0x69, 0x65, 0x77,
+];
 const YOUTUBE_PLAYER_API_URL: &str = "https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false";
 const YOUTUBE_MUSIC_PLAYER_API_URL: &str = "https://music.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8&prettyPrint=false";
 #[cfg(target_os = "macos")]
 const MACOS_LOGIN_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15";
 const YOUTUBE_COOKIE_CHUNK_SIZE: usize = 900;
 const YOUTUBE_COOKIE_MAX_CHUNKS: usize = 16;
+/// How often a rotated cookie is written back to secure storage.
+///
+/// Not on every response: Google rotates SIDCC on almost all of them, and the Windows
+/// credential store takes sixteen writes per save. Rotation matters on a scale of hours, so
+/// persisting a few minutes behind the live value costs nothing — the first change after a
+/// launch is written immediately, which is what a short session needs.
+const YOUTUBE_COOKIE_PERSIST_INTERVAL: Duration = Duration::from_secs(300);
+/// Seconds a silent renewal may spend before giving up and asking the user.
+const YOUTUBE_SILENT_REFRESH_POLLS: u32 = 12;
 const DEFAULT_CACHE_MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const CURRENT_LOG_FILE_NAME: &str = "current.log";
 
@@ -130,6 +154,128 @@ static APP_LOG_FILE: OnceLock<Mutex<Option<File>>> = OnceLock::new();
 
 struct CacheLock(Mutex<()>);
 struct AppSettingsLock(Mutex<()>);
+
+/// The live YouTube cookie, kept current from every response that rotates it.
+///
+/// The signed-in session used to be a snapshot taken once at sign-in and replayed forever,
+/// with every `Set-Cookie` thrown away. Google rotates `SIDCC` and `__Secure-*PSIDTS`
+/// continuously and stops trusting a session that keeps presenting stale ones, so the app
+/// quietly lost its authentication overnight while still looking signed in. This is the one
+/// authoritative copy: `proxy_http_request` stamps outgoing requests from it and folds every
+/// `Set-Cookie` back into it.
+#[derive(Default)]
+struct CookieJarState {
+    cookie: Option<String>,
+    persisted_at: Option<Instant>,
+}
+
+struct YoutubeCookieJar(Mutex<CookieJarState>);
+
+fn parse_cookie_header(header: &str) -> Vec<(String, String)> {
+    header
+        .split(';')
+        .filter_map(|part| part.trim().split_once('='))
+        .map(|(name, value)| (name.trim().to_string(), value.trim().to_string()))
+        .collect()
+}
+
+fn serialize_cookie_pairs(pairs: &[(String, String)]) -> String {
+    pairs
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Folds one `Set-Cookie` value into the jar, reporting whether anything changed.
+///
+/// Only the leading `name=value` matters. The attributes after it describe where a browser
+/// should send the cookie, and this jar has exactly one destination.
+fn apply_set_cookie(pairs: &mut Vec<(String, String)>, set_cookie: &str) -> bool {
+    let Some((name, value)) = set_cookie
+        .split(';')
+        .next()
+        .and_then(|pair| pair.split_once('='))
+    else {
+        return false;
+    };
+    let name = name.trim().to_string();
+    let value = value.trim().to_string();
+    if name.is_empty() {
+        return false;
+    }
+
+    // Google clears a cookie by echoing it back empty or as a tombstone rather than by
+    // omitting it. Keeping those would keep presenting a value the server has retired.
+    if value.is_empty() || value == "EXPIRED" || value == "deleted" {
+        let before = pairs.len();
+        pairs.retain(|(existing, _)| existing != &name);
+        return pairs.len() != before;
+    }
+
+    match pairs.iter_mut().find(|(existing, _)| existing == &name) {
+        Some(entry) if entry.1 == value => false,
+        Some(entry) => {
+            entry.1 = value;
+            true
+        }
+        None => {
+            pairs.push((name, value));
+            true
+        }
+    }
+}
+
+fn is_youtube_cookie_host(url: &url::Url) -> bool {
+    url.host_str()
+        .is_some_and(|host| host == "youtube.com" || host.ends_with(".youtube.com"))
+}
+
+/// Merges rotated cookies into the jar, returning the new header when it changed.
+fn refresh_youtube_cookie_jar(
+    app: &tauri::AppHandle,
+    jar: &YoutubeCookieJar,
+    set_cookies: &[String],
+) -> Option<String> {
+    let (merged, should_persist) = {
+        let mut state = jar.0.lock().ok()?;
+        // No stored session means an anonymous request; it has no jar to update.
+        let mut pairs = parse_cookie_header(state.cookie.as_deref()?);
+        // Every cookie is applied; `any` would stop at the first change and drop the rest.
+        let mut changed = false;
+        for set_cookie in set_cookies {
+            changed |= apply_set_cookie(&mut pairs, set_cookie);
+        }
+        if !changed {
+            return None;
+        }
+
+        let merged = serialize_cookie_pairs(&pairs);
+        state.cookie = Some(merged.clone());
+        let should_persist = state
+            .persisted_at
+            .is_none_or(|at| at.elapsed() >= YOUTUBE_COOKIE_PERSIST_INTERVAL);
+        if should_persist {
+            state.persisted_at = Some(Instant::now());
+        }
+        (merged, should_persist)
+    };
+
+    // Outside the guard: the keyring write is slow and every other request wants the jar.
+    if should_persist {
+        match save_youtube_music_cookie(app, &merged) {
+            Ok(()) => eprintln!(
+                "[internal][tauri][info] youtube cookie rotated and persisted bytes={}",
+                merged.len()
+            ),
+            Err(error) => eprintln!(
+                "[internal][tauri][warn] youtube cookie persist failed: {}",
+                error.message
+            ),
+        }
+    }
+    Some(merged)
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1260,33 +1406,21 @@ fn delete_youtube_music_cookie_entries() -> Result<(), CommandError> {
     Ok(())
 }
 
-#[tauri::command]
-fn save_youtube_credentials(credentials_json: String) -> Result<(), CommandError> {
-    youtube_keyring_entry()?
-        .set_password(&credentials_json)
-        .map_err(|error| CommandError {
-            message: format!("credential save failed: {error}"),
-        })
-}
-
-#[tauri::command]
-fn load_youtube_credentials() -> Result<Option<String>, CommandError> {
-    match youtube_keyring_entry()?.get_password() {
-        Ok(credentials) => Ok(Some(credentials)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(CommandError {
-            message: format!("credential load failed: {error}"),
-        }),
-    }
-}
-
-#[tauri::command]
-fn delete_youtube_credentials() -> Result<(), CommandError> {
-    match youtube_keyring_entry()?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(CommandError {
-            message: format!("credential delete failed: {error}"),
-        }),
+/// Clears the OAuth credential left behind by the version of the app that used one.
+///
+/// Nothing writes that entry any more — sign-in is entirely cookie-based — but an install old
+/// enough to predate the change may still be holding one in the keyring. Removing it on sign-out
+/// is the only reason this key is still known about; there is no command for it, because a
+/// command implies a second way of being signed in and there is no such thing.
+fn delete_legacy_youtube_credentials() {
+    if let Ok(entry) = youtube_keyring_entry() {
+        match entry.delete_credential() {
+            Ok(()) => eprintln!("[internal][tauri][info] removed legacy OAuth credential"),
+            Err(keyring::Error::NoEntry) => {}
+            Err(error) => eprintln!(
+                "[internal][tauri][warn] legacy OAuth credential delete failed: {error}"
+            ),
+        }
     }
 }
 
@@ -1375,15 +1509,14 @@ fn load_encrypted_youtube_music_cookie(
         })
 }
 
-#[tauri::command]
-fn load_youtube_music_cookie(app: tauri::AppHandle) -> Result<Option<String>, CommandError> {
+fn read_stored_youtube_music_cookie(app: &tauri::AppHandle) -> Result<Option<String>, CommandError> {
     #[cfg(target_os = "macos")]
     {
-        if let Some(cookie) = load_encrypted_youtube_music_cookie(&app)? {
+        if let Some(cookie) = load_encrypted_youtube_music_cookie(app)? {
             return Ok(Some(cookie));
         }
         if let Some(cookie) = load_youtube_music_cookie_entries()? {
-            save_youtube_music_cookie(&app, &cookie)?;
+            save_youtube_music_cookie(app, &cookie)?;
             delete_youtube_music_cookie_entries()?;
             return Ok(Some(cookie));
         }
@@ -1395,6 +1528,19 @@ fn load_youtube_music_cookie(app: tauri::AppHandle) -> Result<Option<String>, Co
         let _ = app;
         load_youtube_music_cookie_entries()
     }
+}
+
+#[tauri::command]
+fn load_youtube_music_cookie(
+    app: tauri::AppHandle,
+    jar: tauri::State<'_, YoutubeCookieJar>,
+) -> Result<Option<String>, CommandError> {
+    let cookie = read_stored_youtube_music_cookie(&app)?;
+    if let Ok(mut state) = jar.0.lock() {
+        state.cookie = cookie.clone();
+        state.persisted_at = None;
+    }
+    Ok(cookie)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -1410,124 +1556,156 @@ fn cookie_domain_matches(host: &str, cookie_domain: Option<&str>) -> bool {
             .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
-#[tauri::command]
-async fn sign_in_youtube_music(app: tauri::AppHandle) -> Result<String, CommandError> {
-    eprintln!("[internal][tauri][info] sign_in_youtube_music start");
+/// Builds the sign-in webview on its own storage partition.
+///
+/// `loaded` is raised once a navigation finishes, which the silent refresh needs: cookies read
+/// before the page has actually loaded are the same stale ones we already hold.
+fn build_login_window(
+    app: &tauri::AppHandle,
+    visible: bool,
+    loaded: Arc<AtomicBool>,
+) -> Result<tauri::WebviewWindow, CommandError> {
     if let Some(existing) = app.get_webview_window(YOUTUBE_LOGIN_WINDOW) {
-        eprintln!("[internal][tauri][info] sign_in_youtube_music closing existing login window");
         let _ = existing.close();
     }
 
-    let login_url = YOUTUBE_LOGIN_URL.parse().map_err(|error| CommandError {
-        message: format!("invalid YouTube Music sign-in URL: {error}"),
-    })?;
     let blank_url = "about:blank".parse().map_err(|error| CommandError {
         message: format!("invalid blank login URL: {error}"),
     })?;
     let window_builder = tauri::WebviewWindowBuilder::new(
-        &app,
+        app,
         YOUTUBE_LOGIN_WINDOW,
         tauri::WebviewUrl::External(blank_url),
     )
     .title("Sign in to YouTube Music")
-    .inner_size(520.0, 760.0);
+    .visible(visible)
+    .skip_taskbar(!visible)
+    .inner_size(520.0, 760.0)
+    .on_page_load(move |_window, payload| {
+        if payload.event() == tauri::webview::PageLoadEvent::Finished {
+            loaded.store(true, Ordering::Relaxed);
+        }
+    });
+    // See YOUTUBE_LOGIN_DATA_DIR: without its own partition, clearing this window's data
+    // clears the main window's storage too.
+    #[cfg(not(target_os = "macos"))]
+    let window_builder = window_builder.data_directory(
+        app.path()
+            .app_local_data_dir()
+            .map_err(|error| CommandError {
+                message: format!("sign-in data directory unavailable: {error}"),
+            })?
+            .join(YOUTUBE_LOGIN_DATA_DIR),
+    );
     #[cfg(target_os = "macos")]
-    let window_builder = window_builder.user_agent(MACOS_LOGIN_USER_AGENT);
-    let window = window_builder.build().map_err(|error| CommandError {
+    let window_builder = window_builder
+        .user_agent(MACOS_LOGIN_USER_AGENT)
+        // macOS 14+ only; older versions fall back to the shared store, as they did before.
+        .data_store_identifier(YOUTUBE_LOGIN_DATA_STORE_ID);
+
+    window_builder.build().map_err(|error| CommandError {
         message: format!("unable to open YouTube Music sign-in: {error}"),
-    })?;
-    eprintln!("[internal][tauri][info] sign_in_youtube_music login window created");
-    window
-        .clear_all_browsing_data()
+    })
+}
+
+/// The session cookie as the login webview currently holds it, if it holds one at all.
+fn harvest_session_cookie(
+    window: &tauri::WebviewWindow,
+) -> Result<Option<String>, CommandError> {
+    #[cfg(target_os = "macos")]
+    let cookies = window
+        .cookies()
         .map_err(|error| CommandError {
-            message: format!("unable to clear previous YouTube Music sign-in data: {error}"),
-        })?;
-    eprintln!("[internal][tauri][info] sign_in_youtube_music cleared login webview data");
+            message: format!("unable to read YouTube Music session: {error}"),
+        })?
+        .into_iter()
+        .filter(|cookie| cookie_domain_matches("music.youtube.com", cookie.domain()))
+        .collect::<Vec<_>>();
+    #[cfg(not(target_os = "macos"))]
+    let cookies = {
+        let cookie_url: url::Url = "https://music.youtube.com/"
+            .parse()
+            .map_err(|error| CommandError {
+                message: format!("invalid YouTube Music cookie URL: {error}"),
+            })?;
+        window
+            .cookies_for_url(cookie_url)
+            .map_err(|error| CommandError {
+                message: format!("unable to read YouTube Music session: {error}"),
+            })?
+    };
+
+    let cookie_names = cookies
+        .iter()
+        .map(|cookie| cookie.name())
+        .collect::<std::collections::HashSet<_>>();
+    let has_auth_cookie = ["SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"]
+        .iter()
+        .any(|name| cookie_names.contains(name));
+    let on_music_page = window
+        .url()
+        .map(|url| url.domain() == Some("music.youtube.com"))
+        .unwrap_or(false);
+    if !has_auth_cookie || !on_music_page {
+        return Ok(None);
+    }
+
+    Ok(Some(
+        cookies
+            .iter()
+            .map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
+            .collect::<Vec<_>>()
+            .join("; "),
+    ))
+}
+
+fn store_session_cookie(
+    app: &tauri::AppHandle,
+    jar: &YoutubeCookieJar,
+    cookie: &str,
+) -> Result<(), CommandError> {
+    save_youtube_music_cookie(app, cookie)?;
+    if let Ok(mut state) = jar.0.lock() {
+        state.cookie = Some(cookie.to_string());
+        state.persisted_at = Some(Instant::now());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn sign_in_youtube_music(
+    app: tauri::AppHandle,
+    jar: tauri::State<'_, YoutubeCookieJar>,
+) -> Result<String, CommandError> {
+    eprintln!("[internal][tauri][info] sign_in_youtube_music start");
+    /*
+     * Deliberately *not* cleared here any more.
+     *
+     * The partition is now the app's durable record of who is signed in — the thing
+     * refresh_youtube_music_cookie renews the session from without troubling the user. Wiping
+     * it on every sign-in threw that away and made a full interactive login the only way back.
+     * Sign-out still clears it, which is where "forget me" belongs.
+     */
+    let window = build_login_window(&app, true, Arc::new(AtomicBool::new(false)))?;
+    eprintln!("[internal][tauri][info] sign_in_youtube_music login window created");
+
+    let login_url = YOUTUBE_LOGIN_URL.parse().map_err(|error| CommandError {
+        message: format!("invalid YouTube Music sign-in URL: {error}"),
+    })?;
     window.navigate(login_url).map_err(|error| CommandError {
         message: format!("unable to navigate to YouTube Music sign-in: {error}"),
     })?;
     eprintln!("[internal][tauri][info] sign_in_youtube_music navigated to Google sign-in");
 
-    #[cfg(not(target_os = "macos"))]
-    let cookie_url: url::Url =
-        "https://music.youtube.com/"
-            .parse()
-            .map_err(|error| CommandError {
-                message: format!("invalid YouTube Music cookie URL: {error}"),
-            })?;
-
     for poll in 1..=300 {
-        #[cfg(target_os = "macos")]
-        let cookies = window
-            .cookies()
-            .map_err(|error| CommandError {
-                message: format!("unable to read YouTube Music session: {error}"),
-            })?
-            .into_iter()
-            .filter(|cookie| cookie_domain_matches("music.youtube.com", cookie.domain()))
-            .collect::<Vec<_>>();
-        #[cfg(not(target_os = "macos"))]
-        let cookies = window
-            .cookies_for_url(cookie_url.clone())
-            .map_err(|error| CommandError {
-                message: format!("unable to read YouTube Music session: {error}"),
-            })?;
-        let cookie_names = cookies
-            .iter()
-            .map(|cookie| cookie.name())
-            .collect::<std::collections::HashSet<_>>();
-        let has_auth_cookie = ["SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"]
-            .iter()
-            .any(|name| cookie_names.contains(name));
-        let on_music_page = window
-            .url()
-            .map(|url| url.domain() == Some("music.youtube.com"))
-            .unwrap_or(false);
-        let signed_in = has_auth_cookie && on_music_page;
-        let current_url = window
-            .url()
-            .map(|url| url.to_string())
-            .unwrap_or_else(|error| format!("[url unavailable: {error}]"));
-        let cookie_metadata = cookies
-            .iter()
-            .map(|cookie| {
-                format!(
-                    "{}(domain={:?},path={:?},secure={:?},http_only={:?})",
-                    cookie.name(),
-                    cookie.domain(),
-                    cookie.path(),
-                    cookie.secure(),
-                    cookie.http_only()
-                )
-            })
-            .collect::<Vec<_>>();
-        eprintln!(
-            "[internal][tauri][debug] sign_in_youtube_music poll={} url={} cookie_count={} cookies={:?} has_auth_cookie={} on_music_page={} signed_in={}",
-            poll,
-            current_url,
-            cookies.len(),
-            cookie_metadata,
-            has_auth_cookie,
-            on_music_page,
-            signed_in
-        );
-
-        if signed_in {
-            let cookie_header = cookies
-                .iter()
-                .map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
-                .collect::<Vec<_>>()
-                .join("; ");
+        if let Some(cookie_header) = harvest_session_cookie(&window)? {
             eprintln!(
-                "[internal][tauri][info] sign_in_youtube_music detected session poll={} cookie_count={} credential_bytes={}",
+                "[internal][tauri][info] sign_in_youtube_music detected session poll={} credential_bytes={}",
                 poll,
-                cookies.len(),
                 cookie_header.len()
             );
-            save_youtube_music_cookie(&app, &cookie_header)?;
-            eprintln!("[internal][tauri][info] sign_in_youtube_music credential saved");
+            store_session_cookie(&app, &jar, &cookie_header)?;
             let _ = window.close();
-            eprintln!("[internal][tauri][info] sign_in_youtube_music login window close requested");
             return Ok(cookie_header);
         }
 
@@ -1550,11 +1728,76 @@ async fn sign_in_youtube_music(app: tauri::AppHandle) -> Result<String, CommandE
     })
 }
 
+/// Renews the session from the sign-in partition without involving the user.
+///
+/// The partition holds a real browser session that Google keeps alive on its own terms, so
+/// loading music.youtube.com in it is usually enough to mint a working cookie again. Returns
+/// `None` when that fails — which means the sign-in genuinely lapsed and only the user can fix
+/// it. Deliberately short: this runs while somebody is waiting to press Like, and a hidden
+/// window that needs interaction is a window that is never going to finish.
 #[tauri::command]
-async fn delete_youtube_music_cookie(app: tauri::AppHandle) -> Result<(), CommandError> {
+async fn refresh_youtube_music_cookie(
+    app: tauri::AppHandle,
+    jar: tauri::State<'_, YoutubeCookieJar>,
+) -> Result<Option<String>, CommandError> {
+    eprintln!("[internal][tauri][info] refresh_youtube_music_cookie start");
+    let loaded = Arc::new(AtomicBool::new(false));
+    let window = build_login_window(&app, false, loaded.clone())?;
+
+    let music_url = "https://music.youtube.com/"
+        .parse()
+        .map_err(|error| CommandError {
+            message: format!("invalid YouTube Music URL: {error}"),
+        })?;
+    window.navigate(music_url).map_err(|error| CommandError {
+        message: format!("unable to open YouTube Music silently: {error}"),
+    })?;
+
+    for poll in 1..=YOUTUBE_SILENT_REFRESH_POLLS {
+        // Only after a load: harvesting early returns the same stale cookie we came in with,
+        // because nothing has been through a round trip to Google yet.
+        if loaded.load(Ordering::Relaxed) {
+            if let Some(cookie_header) = harvest_session_cookie(&window)? {
+                eprintln!(
+                    "[internal][tauri][info] refresh_youtube_music_cookie renewed poll={} credential_bytes={}",
+                    poll,
+                    cookie_header.len()
+                );
+                store_session_cookie(&app, &jar, &cookie_header)?;
+                let _ = window.close();
+                return Ok(Some(cookie_header));
+            }
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
+
+    let _ = window.close();
+    eprintln!("[internal][tauri][info] refresh_youtube_music_cookie found no usable session");
+    Ok(None)
+}
+
+#[tauri::command]
+async fn delete_youtube_music_cookie(
+    app: tauri::AppHandle,
+    jar: tauri::State<'_, YoutubeCookieJar>,
+) -> Result<(), CommandError> {
     eprintln!("[internal][tauri][info] delete_youtube_music_cookie start");
-    if let Some(window) = app.get_webview_window(YOUTUBE_LOGIN_WINDOW) {
+    if let Ok(mut state) = jar.0.lock() {
+        state.cookie = None;
+        state.persisted_at = None;
+    }
+    delete_legacy_youtube_credentials();
+    /*
+     * Sign-out is the one place the sign-in partition is wiped, because it is the only place
+     * the user has said "forget me". The window is built purely to reach the profile behind
+     * it — clearing it is what makes the next sign-in offer a fresh account chooser instead of
+     * silently resuming the account that just left.
+     */
+    if let Ok(window) = build_login_window(&app, false, Arc::new(AtomicBool::new(false))) {
         let _ = window.clear_all_browsing_data();
+        // The clear is asynchronous underneath and reports through a handler nobody waits on;
+        // closing the webview out from under it can leave the profile half-cleared.
+        thread::sleep(Duration::from_millis(750));
         let _ = window.close();
     }
 
@@ -1604,6 +1847,9 @@ struct ProxyHttpResponse {
     status: u16,
     headers: HashMap<String, String>,
     body_base64: String,
+    /// The rotated cookie, when this response changed it. Absent means "unchanged".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cookie: Option<String>,
 }
 
 #[derive(Clone)]
@@ -2859,7 +3105,9 @@ async fn try_youtube_api(
 
 #[tauri::command]
 async fn proxy_http_request(
-    input: ProxyHttpRequestInput,
+    app: tauri::AppHandle,
+    jar: tauri::State<'_, YoutubeCookieJar>,
+    mut input: ProxyHttpRequestInput,
 ) -> Result<ProxyHttpResponse, CommandError> {
     let started_at = Instant::now();
     let request_url = url::Url::parse(&input.url).map_err(|error| CommandError {
@@ -2878,6 +3126,33 @@ async fn proxy_http_request(
         input.headers.len(),
         input.body_base64.is_some()
     );
+
+    /*
+     * Outgoing cookies come from the jar, not from the caller.
+     *
+     * youtubei.js bakes the cookie into a session when the client is constructed, so a session
+     * that has been alive for hours would otherwise keep replaying whatever was current when it
+     * was built. Only requests that already carry a Cookie header are stamped: the download
+     * client is deliberately anonymous and has to stay that way.
+     */
+    let youtube_host = is_youtube_cookie_host(&request_url);
+    if youtube_host {
+        let live_cookie = jar
+            .0
+            .lock()
+            .ok()
+            .and_then(|state| state.cookie.clone());
+        if let Some(live_cookie) = live_cookie {
+            if let Some(key) = input
+                .headers
+                .keys()
+                .find(|key| key.eq_ignore_ascii_case("cookie"))
+                .cloned()
+            {
+                input.headers.insert(key, live_cookie);
+            }
+        }
+    }
 
     eprintln!("[internal][tauri][debug] proxy_http_request headers:");
     for (key, value) in &input.headers {
@@ -2955,6 +3230,22 @@ async fn proxy_http_request(
         }
     }
 
+    // Read before the map above flattens them: a response sets several cookies at once, and a
+    // HashMap keeps only the last.
+    let refreshed_cookie = if youtube_host {
+        let set_cookies = response
+            .headers()
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok().map(str::to_string))
+            .collect::<Vec<_>>();
+        (!set_cookies.is_empty())
+            .then(|| refresh_youtube_cookie_jar(&app, &jar, &set_cookies))
+            .flatten()
+    } else {
+        None
+    };
+
     let body = response.bytes().await.map_err(|error| {
         eprintln!(
             "[internal][tauri][error] proxy_http_request body read failed url={} error={}",
@@ -3003,6 +3294,7 @@ async fn proxy_http_request(
         status,
         headers,
         body_base64: STANDARD.encode(body),
+        cookie: refreshed_cookie,
     })
 }
 
@@ -3090,6 +3382,7 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .manage(CacheLock(Mutex::new(())))
         .manage(AppSettingsLock(Mutex::new(())))
+        .manage(YoutubeCookieJar(Mutex::new(CookieJarState::default())))
         .manage(discord_manager)
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -3203,11 +3496,9 @@ pub fn run() {
             offline_audio_prune,
             fetch_youtube_music_audio,
             proxy_http_request,
-            save_youtube_credentials,
-            load_youtube_credentials,
-            delete_youtube_credentials,
             load_youtube_music_cookie,
             sign_in_youtube_music,
+            refresh_youtube_music_cookie,
             delete_youtube_music_cookie,
             cache_get,
             cache_set,
@@ -3241,7 +3532,51 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{audio_url_with_range, cookie_domain_matches, sanitize_log_url, signed_content_length};
+    use super::{
+        apply_set_cookie, audio_url_with_range, cookie_domain_matches, is_youtube_cookie_host,
+        parse_cookie_header, sanitize_log_url, serialize_cookie_pairs, signed_content_length,
+    };
+
+    /// The whole point of the jar: a rotated value replaces the stale one, a new value joins,
+    /// an unchanged value reports no change, and a tombstone drops the cookie.
+    #[test]
+    fn set_cookie_merges_rotations_into_the_stored_session() {
+        let mut pairs = parse_cookie_header("SAPISID=keepme; SIDCC=old; YSC=stay");
+
+        assert!(apply_set_cookie(
+            &mut pairs,
+            "SIDCC=new; expires=Fri, 01 Jan 2027 00:00:00 GMT; path=/; secure",
+        ));
+        assert!(apply_set_cookie(&mut pairs, "__Secure-3PSIDTS=fresh; path=/"));
+        // Same value again is not a rotation, and must not trigger a keyring write.
+        assert!(!apply_set_cookie(&mut pairs, "SIDCC=new; path=/"));
+        // Order is preserved, so a merged header still reads like the one YouTube issued.
+        assert_eq!(
+            serialize_cookie_pairs(&pairs),
+            "SAPISID=keepme; SIDCC=new; YSC=stay; __Secure-3PSIDTS=fresh"
+        );
+
+        assert!(apply_set_cookie(
+            &mut pairs,
+            "YSC=EXPIRED; expires=Thu, 01 Jan 1970 00:00:00 GMT",
+        ));
+        assert_eq!(
+            serialize_cookie_pairs(&pairs),
+            "SAPISID=keepme; SIDCC=new; __Secure-3PSIDTS=fresh"
+        );
+        // Dropping something already gone is not a change either.
+        assert!(!apply_set_cookie(&mut pairs, "YSC=; max-age=0"));
+    }
+
+    #[test]
+    fn only_youtube_hosts_touch_the_cookie_jar() {
+        let youtube = |url: &str| is_youtube_cookie_host(&url::Url::parse(url).unwrap());
+        assert!(youtube("https://music.youtube.com/youtubei/v1/browse"));
+        assert!(youtube("https://youtube.com/"));
+        // A suffix match alone would hand the session to a lookalike domain.
+        assert!(!youtube("https://notyoutube.com/"));
+        assert!(!youtube("https://rr6.googlevideo.com/videoplayback"));
+    }
 
     #[test]
     fn audio_url_with_range_appends_without_disturbing_the_signature() {

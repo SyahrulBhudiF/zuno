@@ -3,7 +3,7 @@ import { ClientType, Innertube, Platform, Types, YTNodes } from "youtubei.js";
 import { clearCache, getCachedJson, setCachedJson } from "../../internal/cache";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../../internal/logging";
 import { mintPoToken } from "./poToken";
-import { DataSource, type StreamData } from "../DataSource";
+import { AuthExpiredError, DataSource, type StreamData } from "../DataSource";
 import type {
   AccountOption,
   ArtistNotificationLevel,
@@ -36,7 +36,14 @@ import {
   selectFormatForQuality,
   type AudioQuality,
 } from "../../internal/audioQuality";
-import { tauriFetch } from "./tauriFetch";
+import {
+  getLiveCookie,
+  notifyAuthRejected,
+  setAuthConfirmedHandler,
+  setAuthRejectedHandler,
+  setLiveCookie,
+  tauriFetch,
+} from "./tauriFetch";
 
 type ClientLabel = "music" | "web" | "download";
 type NativeAudioPayload = {
@@ -290,18 +297,25 @@ const PLAYLIST_PAGE_SESSION_TTL_MS = 10 * 60_000;
 const PLAYLIST_TRACK_CACHE_VERSION = "v4";
 const PLAYLIST_EMPTY_RETRY_DELAYS_MS = [0, 600, 1_500];
 
-class YouTubeMusicAuthError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "YouTubeMusicAuthError";
-  }
-}
+class YouTubeMusicAuthError extends AuthExpiredError {}
 
 export class YouTubeMusicDataSource extends DataSource {
   private musicClientPromise: Promise<Innertube> | null = null;
   private webClientPromise: Promise<Innertube> | null = null;
   private downloadClientPromise: Promise<Innertube> | null = null;
-  private musicCookie: string | null = null;
+  /*
+   * An accessor rather than a field, so the ~30 readers of `this.musicCookie` observe the
+   * rotations the proxy folds in instead of the value captured at sign-in. Both sides of the
+   * process now agree on one cookie: Rust stamps it onto requests, this reads it back.
+   */
+  private get musicCookie(): string | null {
+    return getLiveCookie();
+  }
+
+  private set musicCookie(cookie: string | null) {
+    setLiveCookie(cookie);
+  }
+
   private musicAccountIndex = 0;
   private musicOnBehalfOfUser: string | null = null;
   private musicSerializedDelegationContext: string | null = null;
@@ -2387,6 +2401,16 @@ export class YouTubeMusicDataSource extends DataSource {
         is_disabled?: boolean;
         is_selected?: boolean;
       }>;
+      /*
+       * Zero accounts on a session that has a cookie is not an account without channels — the
+       * switcher endpoint answers 200 with an empty stub when it does not recognise you. This
+       * was the visible symptom of the expired session: an empty channel list and no error.
+       */
+      if (accountItems.length === 0 && this.musicCookie) {
+        logInternalWarn("YouTubeMusicDataSource.getAccountCandidates signed-out stub");
+        notifyAuthRejected();
+      }
+
       const candidates = accountItems
         .filter((item) => !item.is_disabled)
         .flatMap((item, index): AccountCandidate[] => {
@@ -2625,6 +2649,14 @@ export class YouTubeMusicDataSource extends DataSource {
     return best;
   }
 
+  onAuthExpired(handler: () => void): void {
+    setAuthRejectedHandler(handler);
+  }
+
+  onAuthConfirmed(handler: (at: number) => void): void {
+    setAuthConfirmedHandler(handler);
+  }
+
   async restoreSession(): Promise<boolean> {
     logInternalInfo("YouTubeMusicDataSource.restoreSession start");
     try {
@@ -2644,6 +2676,35 @@ export class YouTubeMusicDataSource extends DataSource {
       logInternalError("YouTubeMusicDataSource.restoreSession failed", error);
       return false;
     }
+  }
+
+  /**
+   * Renews the session from the sign-in webview's own Google session, invisibly.
+   *
+   * Deliberately does not clear the cache the way signIn does. The account has not changed, so
+   * everything cached is still correct — dropping it would turn a silent renewal into the full
+   * library resync this exists to avoid.
+   */
+  async refreshSession(): Promise<boolean> {
+    logInternalInfo("YouTubeMusicDataSource.refreshSession start");
+    const cookie = await invoke<string | null>("refresh_youtube_music_cookie");
+    if (!cookie) {
+      logInternalInfo("YouTubeMusicDataSource.refreshSession no session to renew");
+      return false;
+    }
+
+    this.musicCookie = cookie;
+    /*
+     * Only the clients are rebuilt, not the account selection: this is the same person on the
+     * same channel, and resetMusicSessionSelection would throw away their chosen channel.
+     */
+    this.accountCandidateCache = null;
+    this.musicClientPromise = null;
+    this.webClientPromise = null;
+    logInternalInfo("YouTubeMusicDataSource.refreshSession success", {
+      credentialBytes: cookie.length,
+    });
+    return true;
   }
 
   async signIn(onPrompt: (prompt: AuthPrompt) => void): Promise<void> {
@@ -2672,7 +2733,6 @@ export class YouTubeMusicDataSource extends DataSource {
   async signOut(): Promise<void> {
     logInternalInfo("YouTubeMusicDataSource.signOut start");
     await invoke("delete_youtube_music_cookie");
-    await invoke("delete_youtube_credentials");
     try {
       await clearCache();
     } catch (error) {
@@ -2689,7 +2749,10 @@ export class YouTubeMusicDataSource extends DataSource {
     return getCachedJson<LibrarySnapshot>(LIBRARY_CACHE_KEY);
   }
 
-  async getLibrary(onUpdate?: (library: LibrarySnapshot) => void): Promise<LibrarySnapshot> {
+  async getLibrary(
+    onUpdate?: (library: LibrarySnapshot) => void,
+    onError?: (error: unknown) => void,
+  ): Promise<LibrarySnapshot> {
     const cacheKey = LIBRARY_CACHE_KEY;
     const cached = await getCachedJson<LibrarySnapshot>(cacheKey);
 
@@ -2703,6 +2766,12 @@ export class YouTubeMusicDataSource extends DataSource {
             logInternalWarn("YouTubeMusicDataSource.getLibrary background refresh failed", {
               error: error instanceof Error ? error.message : String(error),
             });
+            /*
+             * Reported rather than only logged. A cached library resolves this call before the
+             * network is touched, so an expired session used to end here as a warning while the
+             * app went on showing yesterday's library under a signed-in header.
+             */
+            onError?.(error);
           });
       }, 0);
       return cached;
@@ -2749,8 +2818,17 @@ export class YouTubeMusicDataSource extends DataSource {
     const { libraryLanding, historyResponse } = bestLibrary;
     const libraryMessages = this.getResponseMessages(libraryLanding);
     const authFailureMessage = this.getLibraryAuthFailureMessage(libraryLanding, historyResponse);
-    if (authFailureMessage && this.getLibrarySignal(libraryLanding, historyResponse) <= 0) {
-      throw new YouTubeMusicAuthError(authFailureMessage);
+    if (authFailureMessage) {
+      /*
+       * Reported whatever the signal says. Throwing still waits for the library to come back
+       * empty — a partial answer is worth keeping — but "YouTube told us to sign in" is a fact
+       * about the session, not about how much content happened to survive it, and hiding it
+       * behind the threshold is what let a half-working session look healthy.
+       */
+      notifyAuthRejected();
+      if (this.getLibrarySignal(libraryLanding, historyResponse) <= 0) {
+        throw new YouTubeMusicAuthError(authFailureMessage);
+      }
     }
 
     const [albumItems, playlistItems, artistItems, songItems, recentItems] = await Promise.all([
@@ -3961,6 +4039,13 @@ export class YouTubeMusicDataSource extends DataSource {
       const response = await this.executeTrackRatingCommand(client, track.id, rating);
 
       if (!response.success) {
+        // A rejected identity is not a rejected rating: saying "could not like this song" for
+        // it sends the user looking for a problem with the song.
+        if (response.status_code === 401 || response.status_code === 403) {
+          throw new YouTubeMusicAuthError(
+            "YouTube Music no longer accepts the saved sign-in. Sign in again to rate songs.",
+          );
+        }
         throw new Error(`YouTube returned HTTP ${response.status_code}.`);
       }
 
@@ -4000,6 +4085,7 @@ export class YouTubeMusicDataSource extends DataSource {
         trackId: track.id,
         rating,
       });
+      if (error instanceof AuthExpiredError) throw error;
       throw new Error(
         rating === "like"
           ? "YouTube Music could not like this song."

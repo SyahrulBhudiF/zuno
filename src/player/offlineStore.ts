@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Track } from "../datasource/types";
 import { logInternalError, logInternalInfo, logInternalWarn } from "../internal/logging";
+import { getAppSetting, setAppSetting } from "../internal/appSettings";
 import { getDownloadQuality, type AudioQuality } from "../internal/audioQuality";
 
 const MANIFEST_KEY = "zuno.offline-manifest.v1";
@@ -64,16 +65,31 @@ function emit(): void {
   for (const listener of listeners) listener();
 }
 
+function asManifest(parsed: unknown): Record<string, OfflineEntry> | null {
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, OfflineEntry>
+    : null;
+}
+
 function readManifest(): Record<string, OfflineEntry> {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(MANIFEST_KEY) ?? "{}");
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, OfflineEntry>;
-    }
+    return asManifest(JSON.parse(localStorage.getItem(MANIFEST_KEY) ?? "{}")) ?? {};
   } catch {
     // A corrupt manifest is rebuilt from disk by reconcile() below.
+    return {};
   }
-  return {};
+}
+
+/**
+ * The same manifest, kept outside webview storage.
+ *
+ * Downloads are the one thing here that cannot be re-derived: the audio is on disk but the
+ * titles and artists that make it playable live only in this manifest, and losing it used to
+ * mean the next launch deleted gigabytes as untracked orphans. Local storage is not a safe
+ * enough home for that on its own.
+ */
+async function readDurableManifest(): Promise<Record<string, OfflineEntry>> {
+  return asManifest(await getAppSetting<unknown>(MANIFEST_KEY)) ?? {};
 }
 
 function writeManifest(entries: Record<string, OfflineEntry>): void {
@@ -84,6 +100,7 @@ function writeManifest(entries: Record<string, OfflineEntry>): void {
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  void setAppSetting(MANIFEST_KEY, entries);
 }
 
 function setState(next: Partial<OfflineState>): void {
@@ -110,40 +127,57 @@ export function setOfflineMaxBytes(maxBytes: number): void {
 }
 
 /**
+ * Matches the manifest against what is actually on disk.
+ *
+ * Disk decides availability — it is the only thing that determines whether a track will play —
+ * but the manifest decides what is *known*, and the two disagreements are not symmetric. An
+ * entry with no file is dropped; a file with no entry is only an orphan when there was a
+ * manifest to be absent from. No manifest at all reads as a lost manifest rather than an empty
+ * library, and deleting the user's downloads on that guess cannot be undone.
+ */
+export function reconcileManifest(
+  manifest: Record<string, OfflineEntry>,
+  onDisk: ReadonlyArray<{ trackId: string; byteLength: number }>,
+): { entries: Record<string, OfflineEntry>; orphans: string[] } {
+  const byId = new Map(onDisk.map((entry) => [entry.trackId, entry.byteLength]));
+  const entries: Record<string, OfflineEntry> = {};
+
+  for (const [trackId, entry] of Object.entries(manifest)) {
+    const byteLength = byId.get(trackId);
+    if (byteLength === undefined) continue;
+    entries[trackId] = { ...entry, byteLength };
+  }
+
+  const orphans = Object.keys(manifest).length === 0
+    ? []
+    : [...byId.keys()].filter((trackId) => !entries[trackId]);
+  return { entries, orphans };
+}
+
+/**
  * Reconciles the manifest against what is actually on disk.
  *
  * The two can drift: a manifest write can fail, the app can be killed mid-download, or the
- * data directory can be cleared out from underneath us. Disk wins — it is the only thing that
- * determines whether a track will actually play.
+ * data directory can be cleared out from underneath us.
  */
 export async function hydrateOfflineStore(): Promise<void> {
   if (hydrated) return;
   hydrated = true;
 
-  const manifest = readManifest();
+  // Both copies, because either one alone can be the survivor: local storage is the hot path,
+  // the durable file is what is left when local storage is cleared out from underneath us.
+  const manifest = { ...(await readDurableManifest()), ...readManifest() };
   try {
     const onDisk = await invoke<Array<{ trackId: string; byteLength: number }>>(
       "offline_audio_list",
     );
-    const byId = new Map(onDisk.map((entry) => [entry.trackId, entry.byteLength]));
-    const reconciled: Record<string, OfflineEntry> = {};
-
-    for (const [trackId, entry] of Object.entries(manifest)) {
-      const byteLength = byId.get(trackId);
-      // Dropped when the file is gone: showing it as available would fail at play time.
-      if (byteLength === undefined) continue;
-      reconciled[trackId] = { ...entry, byteLength };
+    const { entries, orphans } = reconcileManifest(manifest, onDisk);
+    for (const trackId of orphans) {
+      void invoke("offline_audio_remove", { trackId }).catch(() => {});
     }
 
-    // Files with no manifest entry are unplayable anyway — we have no metadata for them.
-    for (const [trackId] of byId) {
-      if (!reconciled[trackId]) {
-        void invoke("offline_audio_remove", { trackId }).catch(() => {});
-      }
-    }
-
-    commitEntries(reconciled);
-    logInternalInfo("offlineStore.hydrate", { count: Object.keys(reconciled).length });
+    commitEntries(entries);
+    logInternalInfo("offlineStore.hydrate", { count: Object.keys(entries).length });
   } catch (error) {
     logInternalWarn("offlineStore.hydrate failed", {
       error: error instanceof Error ? error.message : String(error),

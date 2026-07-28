@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { Track } from "../datasource/types";
 import { logInternalWarn } from "../internal/logging";
+import { getAppSetting, setAppSetting } from "../internal/appSettings";
 
 const STORAGE_KEY = "zuno.play-history.v1";
 
@@ -23,6 +24,16 @@ const listeners = new Set<() => void>();
 let cachedRaw: string | null = null;
 let cached: PlayHistoryEntry[] = [];
 
+function normalize(parsed: unknown): PlayHistoryEntry[] | null {
+  if (!Array.isArray(parsed)) return null;
+  return parsed.filter((entry): entry is PlayHistoryEntry =>
+    Boolean(entry)
+    && typeof entry === "object"
+    && typeof (entry as PlayHistoryEntry).playedAt === "number"
+    && Boolean((entry as PlayHistoryEntry).track?.id),
+  );
+}
+
 function read(): PlayHistoryEntry[] {
   if (typeof window === "undefined") return [];
   const raw = localStorage.getItem(STORAGE_KEY);
@@ -33,21 +44,32 @@ function read(): PlayHistoryEntry[] {
   if (!raw) return cached;
 
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      cached = parsed.filter((entry): entry is PlayHistoryEntry =>
-        Boolean(entry)
-        && typeof entry === "object"
-        && typeof (entry as PlayHistoryEntry).playedAt === "number"
-        && Boolean((entry as PlayHistoryEntry).track?.id),
-      );
-    }
+    cached = normalize(JSON.parse(raw)) ?? [];
   } catch (error) {
     logInternalWarn("playHistory.read failed", {
       error: error instanceof Error ? error.message : String(error),
     });
   }
   return cached;
+}
+
+/**
+ * Restores the history from durable storage, which local storage is not.
+ *
+ * What you listened to cannot be recovered from anywhere else — YouTube's own history is a
+ * different list, and this one is the only record of it. That makes it worth a second copy
+ * outside the webview, where a cleared profile cannot reach it.
+ */
+export async function hydratePlayHistory(): Promise<void> {
+  const stored = normalize(await getAppSetting<unknown>(STORAGE_KEY));
+  if (stored && stored.length > 0) {
+    // Through write(), so the mirror is refreshed and anything already rendered is told.
+    write(stored);
+    return;
+  }
+
+  const local = read();
+  if (local.length > 0) void setAppSetting(STORAGE_KEY, local);
 }
 
 function write(entries: PlayHistoryEntry[]): void {
@@ -62,6 +84,7 @@ function write(entries: PlayHistoryEntry[]): void {
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  void setAppSetting(STORAGE_KEY, trimmed);
   for (const listener of listeners) listener();
 }
 
