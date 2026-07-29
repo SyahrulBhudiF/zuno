@@ -70,8 +70,11 @@ jobs:
           mkdir -p ~/.ssh
           echo "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
           chmod 600 ~/.ssh/aur
-          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur"
+          # `accept-new` rather than a keyscan: a keyscan that returns nothing fails silently
+          # and leaves an empty known_hosts, which is what broke the first run. This trusts
+          # the host on first contact and pins it for the rest of the job, and unlike
+          # StrictHostKeyChecking=no it still rejects a key that changes mid-run.
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
 
           git config --global user.name "${{ github.actor }}"
           git config --global user.email "${{ github.actor }}@users.noreply.github.com"
