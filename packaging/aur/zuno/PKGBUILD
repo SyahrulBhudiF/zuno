@@ -1,7 +1,6 @@
 # Maintainer: Faizan Asad <m.faizanasad97@gmail.com>
 
-pkgname=zuno-bin
-_appname=zuno
+pkgname=zuno
 pkgver=1.2.1
 pkgrel=1
 pkgdesc="YouTube Music as a focused desktop app — tabs, offline downloads, synced lyrics"
@@ -20,7 +19,8 @@ depends=(
 # Playback runs through WebKitGTK, which decodes via GStreamer. Unlike the AppImage — which
 # ships its own WebKitGTK and needs its plugins bundled with it — this package uses the
 # system's, so the plugins are ordinary dependencies and there is no bundle to get wrong.
-# gst-libav is what supplies the AAC and H.264 decoding YouTube streams need.
+# gst-libav supplies the AAC and H.264 decoding YouTube streams need; without it playback
+# fails with "GStreamer element appsink not found" and player error 5.
 depends+=(
   'gst-plugins-base'
   'gst-plugins-good'
@@ -34,8 +34,9 @@ optdepends=(
   'libnotify: desktop notifications'
 )
 
-provides=("${_appname}=${pkgver}")
-conflicts=("${_appname}")
+# Installs the same files as the community-maintained binary package, so the two cannot
+# be installed together.
+conflicts=('zuno-bin')
 
 # The binary is already stripped and relocation-sensitive; leave it alone.
 options=('!strip' '!emptydirs')
@@ -48,6 +49,6 @@ package() {
   bsdtar -O -xf "${pkgname}-${pkgver}.deb" data.tar.gz | bsdtar -C "${pkgdir}" -xf -
 
   install -Dm644 "${pkgdir}/usr/share/applications/Zuno.desktop" \
-    "${pkgdir}/usr/share/applications/${_appname}.desktop"
+    "${pkgdir}/usr/share/applications/${pkgname}.desktop"
   rm -f "${pkgdir}/usr/share/applications/Zuno.desktop"
 }

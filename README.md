@@ -190,7 +190,21 @@ bugs. The log also lives at `~/.local/share/com.zuno.desktop/logs/current.log`.
 
 ### macOS notes
 
-macOS may show a Keychain prompt. Zuno stores one encryption key in its own Keychain entry,
+**"Apple is not able to verify that it is free from malware."** The macOS builds are not
+signed with an Apple Developer ID, so Gatekeeper blocks them on first launch. This is not a
+malware finding — it means the binary is unsigned. Drag Zuno to Applications, then either:
+
+- Open **System Settings → Privacy & Security**, scroll to the message about Zuno, and click
+  **Open Anyway**, or
+- clear the quarantine flag yourself:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Zuno.app
+```
+
+Build from source if you would rather not trust a prebuilt binary.
+
+macOS may also show a Keychain prompt. Zuno stores one encryption key in its own Keychain entry,
 and your YouTube Music session is encrypted with that key before being written to the app
 data directory. Choosing **Always Allow** avoids repeated prompts.
 

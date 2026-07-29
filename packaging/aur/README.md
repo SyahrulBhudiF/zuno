@@ -1,6 +1,6 @@
 # AUR packaging
 
-`zuno-bin` repackages the published `.deb` for Arch. It is the source of truth for what gets
+`zuno` repackages the published `.deb` for Arch. It is the source of truth for what gets
 pushed to the AUR — edit it here, then mirror it into the AUR repo (below), so the packaging
 lives with the project rather than only in a separate git remote nobody reviews.
 
@@ -13,6 +13,15 @@ the lookup happens inside the bundle.
 
 This package uses the system WebKitGTK and the system GStreamer, so the plugins are ordinary
 `depends` and there is no bundle to get wrong. That is also why it works on 1.2.1.
+
+## On the name
+
+Arch convention suffixes prebuilt-binary packages with `-bin`, and `zuno-bin` is already
+taken by a community maintainer (`9M2PJU`) tracking the same releases. This package uses the
+bare name and declares `conflicts=('zuno-bin')`, since the two install the same files. If the
+naming ever becomes contentious, the clean resolutions are to ask for co-maintainership of
+`zuno-bin`, or to make this a genuine from-source PKGBUILD, which is what the bare name is
+meant to signal.
 
 ## Publishing
 
