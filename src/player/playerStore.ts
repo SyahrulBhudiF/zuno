@@ -1,8 +1,8 @@
-import { useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 import { logInternalInfo } from "../internal/logging";
 import { YouTubeMusicDataSource } from "../datasource/youtube/YouTubeMusicDataSource";
 import { LibraryController } from "./LibraryController";
-import { PlayerController } from "./PlayerController";
+import { PlayerController, type PlayerState } from "./PlayerController";
 import { SearchController } from "./SearchController";
 import { TabManager } from "./TabManager";
 import { loadAppSession } from "./appSession";
@@ -182,26 +182,88 @@ class ActivePlayerController implements PlayerControllerActions {
 
 export const playerController: PlayerControllerActions = new ActivePlayerController();
 
+/*
+ * Hoisted, not inline.
+ *
+ * `useSyncExternalStore` treats a new `subscribe` identity as a new subscription: it tears
+ * the old one down and re-establishes it in a layout effect. Written inline these were a
+ * fresh closure on every render, so every consumer re-subscribed on every render for the
+ * life of the app.
+ */
+const subscribeToPlayer = (listener: () => void) => tabManager.subscribe(listener);
+const subscribeToLibrary = (listener: () => void) => libraryController.subscribe(listener);
+const getPlayerState = () => tabManager.getActiveState();
+const getPlayerSession = () => tabManager.getActiveSession();
+const getLibraryState = () => libraryController.getState();
+
+/** Re-exported so selector call sites need one import, not two. */
+export { shallowEqual } from "../internal/shallowEqual";
+
+/**
+ * Subscribes to a slice of a store instead of the whole thing.
+ *
+ * The player state is one object, so `usePlayerState` re-renders its consumer on any change
+ * to any field — dragging the volume slider used to re-render the entire application,
+ * because the root subscribes to the same object as the volume control does.
+ *
+ * The cache is what makes an object-returning selector legal here: `useSyncExternalStore`
+ * compares snapshots with `Object.is` and calls `getSnapshot` more than once per render, so
+ * a selector building a fresh object every call would loop forever and warn. Holding the
+ * previous value when the comparison says nothing changed is what keeps it stable.
+ */
+function useStoreSelector<S, T>(
+  subscribe: (listener: () => void) => () => void,
+  getState: () => S,
+  select: (state: S) => T,
+  isEqual: (a: T, b: T) => boolean = Object.is,
+): T {
+  /* Both are read through refs because callers pass inline arrows: as dependencies they
+     would change identity every render and defeat the memoisation they exist to provide. */
+  const selectRef = useRef(select);
+  selectRef.current = select;
+  const isEqualRef = useRef(isEqual);
+  isEqualRef.current = isEqual;
+  const cacheRef = useRef<{ state: S; value: T } | null>(null);
+
+  const getSnapshot = useCallback(() => {
+    const state = getState();
+    const cached = cacheRef.current;
+    if (cached && Object.is(cached.state, state)) return cached.value;
+
+    const next = selectRef.current(state);
+    if (cached && isEqualRef.current(cached.value, next)) {
+      // Same selection, new state object: keep the old reference so React sees no change.
+      cacheRef.current = { state, value: cached.value };
+      return cached.value;
+    }
+    cacheRef.current = { state, value: next };
+    return next;
+  }, [getState]);
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
 export function usePlayerState() {
-  return useSyncExternalStore(
-    (listener) => tabManager.subscribe(listener),
-    () => tabManager.getActiveState(),
-    () => tabManager.getActiveState(),
-  );
+  return useSyncExternalStore(subscribeToPlayer, getPlayerState, getPlayerState);
+}
+
+/**
+ * Prefer this over `usePlayerState` in anything that reads one or two fields.
+ *
+ * Pass `shallowEqual` when the selector returns an object; the default `Object.is` is right
+ * for the common case of selecting a single field or a derived boolean.
+ */
+export function usePlayerSelector<T>(
+  select: (state: PlayerState) => T,
+  isEqual?: (a: T, b: T) => boolean,
+): T {
+  return useStoreSelector(subscribeToPlayer, getPlayerState, select, isEqual);
 }
 
 export function usePlayerSession() {
-  return useSyncExternalStore(
-    (listener) => tabManager.subscribe(listener),
-    () => tabManager.getActiveSession(),
-    () => tabManager.getActiveSession(),
-  );
+  return useSyncExternalStore(subscribeToPlayer, getPlayerSession, getPlayerSession);
 }
 
 export function useLibraryState() {
-  return useSyncExternalStore(
-    (listener) => libraryController.subscribe(listener),
-    () => libraryController.getState(),
-    () => libraryController.getState(),
-  );
+  return useSyncExternalStore(subscribeToLibrary, getLibraryState, getLibraryState);
 }

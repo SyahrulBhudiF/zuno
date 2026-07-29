@@ -1,0 +1,53 @@
+# Typecheck and self-checks on every push and pull request.
+#
+# release.yml was the only workflow, and it runs `tsc` solely as part of `npm run build` at
+# tag time — so a type error could sit on main until someone cut a version. This is the gate
+# that was missing, kept deliberately cheap: no Rust toolchain, no bundling, no artifacts.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Self-checks
+        run: npm run check
+
+  # Windows rather than Ubuntu: the crate pulls in Tauri, and building it on Linux needs
+  # webkit2gtk and friends installed first. Windows needs nothing, and it is the platform
+  # these tests — cookie jar merging, range headers, URL sanitising — actually ship on.
+  rust:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test

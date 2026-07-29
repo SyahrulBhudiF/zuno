@@ -15,16 +15,30 @@ type NativeMediaAction =
 
 const usesNativeWindowsMediaSession =
   isTauri() && /Windows/i.test(navigator.userAgent);
+/*
+ * macOS goes through MPNowPlayingInfoCenter rather than the WebView's media session, because
+ * only the native centre reaches Control Center, the lock screen and the F7-F9 keys. The Rust
+ * side (`macos_media.rs`) has always been built and registered — it simply had no caller, so
+ * the app was invisible to macOS media controls.
+ *
+ * Linux is deliberately absent: WebKitGTK bridges `navigator.mediaSession` to MPRIS on its
+ * own, so the fallback below already puts Zuno on the desktop's media widget. A native D-Bus
+ * server would be a second implementation of something the platform is already doing.
+ */
+const usesNativeMacosMediaSession =
+  isTauri() && /Macintosh|Mac OS X/i.test(navigator.userAgent);
 const usesNativeMediaSession =
-  usesNativeWindowsMediaSession;
+  usesNativeWindowsMediaSession || usesNativeMacosMediaSession;
 
 function getNativeMediaCommand(): string | null {
   if (usesNativeWindowsMediaSession) return "update_windows_media_session";
+  if (usesNativeMacosMediaSession) return "update_macos_media_session";
   return null;
 }
 
 function getNativeMediaControlEvent(): string | null {
   if (usesNativeWindowsMediaSession) return "windows-media-control";
+  if (usesNativeMacosMediaSession) return "macos-media-control";
   return null;
 }
 
@@ -40,8 +54,17 @@ function getClampedPosition(duration: number, position: number): number {
   return Math.min(duration, safePosition);
 }
 
+/**
+ * Only the two fields this actually reads.
+ *
+ * Taking the whole `PlayerState` made every caller a subscriber to all of it — including
+ * volume, which commits on every pointer move — to satisfy a signature that never looked at
+ * more than the track and the status.
+ */
+type MediaSessionState = Pick<PlayerState, "currentTrack" | "status">;
+
 export function useMediaSession(
-  state: PlayerState,
+  state: MediaSessionState,
   controller: PlayerControllerActions,
 ): void {
   const nativeMediaCommand = useMemo(getNativeMediaCommand, []);

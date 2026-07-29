@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { usePlayerState } from "../../../player/playerStore";
+import { shallowEqual, usePlayerSelector } from "../../../player/playerStore";
 import { playerController } from "../../../player/playerStore";
 import { playerUIStore, usePlayerUIState } from "../../stores/playerUIStore";
 
@@ -40,7 +40,10 @@ function formatTime(seconds: number): string {
 }
 
 export function SeekBar() {
-  const state = usePlayerState();
+  const state = usePlayerSelector(
+    (player) => ({ currentTrack: player.currentTrack, status: player.status }),
+    shallowEqual,
+  );
   const uiState = usePlayerUIState();
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);

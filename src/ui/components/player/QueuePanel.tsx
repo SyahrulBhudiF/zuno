@@ -14,7 +14,12 @@ import { Loader } from "@/components/motion/loader";
 import { libraryController } from "../../../player/playerStore";
 import { logInternalError } from "../../../internal/logging";
 import type { Track } from "../../../datasource/types";
-import { usePlayerSession, playerController, usePlayerState } from "../../../player/playerStore";
+import {
+  playerController,
+  shallowEqual,
+  usePlayerSelector,
+  usePlayerSession,
+} from "../../../player/playerStore";
 import {
   toggleQueuePanelCollapsed,
   useQueuePanelCollapsed,
@@ -260,7 +265,10 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
 
   const collapsed = useQueuePanelCollapsed();
   const playerSession = usePlayerSession();
-  const playerState = usePlayerState();
+  const playerState = usePlayerSelector(
+    (player) => ({ currentTrack: player.currentTrack, status: player.status }),
+    shallowEqual,
+  );
   const currentTrack = playerState.currentTrack;
   const isPlaying = playerState.status === "playing";
 

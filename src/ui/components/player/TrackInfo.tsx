@@ -3,7 +3,7 @@ import { SpinnerSteps } from "@/components/motion/loader";
 import { Marquee } from "@/components/motion/marquee";
 import { cn } from "@/lib/utils";
 import { HeartActiveIcon, HeartBrokenIcon, HeartIcon } from "@/ui/icons";
-import { usePlayerState } from "../../../player/playerStore";
+import { shallowEqual, usePlayerSelector } from "../../../player/playerStore";
 import { useLibraryState } from "../../../player/playerStore";
 import { usePlayerUIState } from "../../stores/playerUIStore";
 import { TrackArtwork } from "../TrackArtwork";
@@ -11,7 +11,7 @@ import { ArtistLinks } from "../ArtistLinks";
 import { useTrackContextMenu } from "../TrackContextMenu";
 
 export function TrackInfo() {
-  const state = usePlayerState();
+  const state = usePlayerSelector((player) => ({ currentTrack: player.currentTrack }), shallowEqual);
   const libraryState = useLibraryState();
   const uiState = usePlayerUIState();
   const { openTrackMenu, toggleTrackLike } = useTrackContextMenu();

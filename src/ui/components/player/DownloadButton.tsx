@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
 import { SpinnerSteps } from "@/components/motion/loader";
 import { CheckActiveIcon, DownloadIcon } from "@/ui/icons";
-import { usePlayerState } from "../../../player/playerStore";
+import { usePlayerSelector } from "../../../player/playerStore";
 import {
   cancelDownload,
   queueDownload,
@@ -23,9 +23,8 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
  * context menu, so the two can never disagree about what a click means.
  */
 export function DownloadButton() {
-  const playerState = usePlayerState();
+  const track = usePlayerSelector((state) => state.currentTrack);
   const offline = useOfflineState();
-  const track = playerState.currentTrack;
 
   // Local files are already on disk; a download control for them is a button that lies.
   if (!track || track.source === "local") return null;

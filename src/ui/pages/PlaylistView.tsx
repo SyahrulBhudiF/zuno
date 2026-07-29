@@ -706,13 +706,17 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
             />
           ) : undefined}
           actionsDisabled={isLoading || Boolean(error) || tracks.length === 0}
-          isPlaying={isCurrentCollection && isPlaying}
-          isLoading={isCurrentCollection && isPlayerLoading}
-          onPlay={() => void togglePlayCollection()}
+          playback={{
+            onToggle: () => void togglePlayCollection(),
+            isPlaying: isCurrentCollection && isPlaying,
+            isLoading: isCurrentCollection && isPlayerLoading,
+          }}
           onShuffle={() => void playShuffled()}
-          onPlayInLoop={() => void playInLoop()}
-          isLooping={isCurrentCollection && playbackOrderMode === "repeat-all"}
-                    /*
+          loop={{
+            onPlay: () => void playInLoop(),
+            isActive: isCurrentCollection && playbackOrderMode === "repeat-all",
+          }}
+          /*
            * Whole-collection actions page in the rest of the playlist first. Acting on the
            * loaded `tracks` alone would quietly cover only what had scrolled into view —
            * "download this playlist" on a 500-song list would fetch the visible 100 and look
@@ -724,11 +728,13 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
           onAddToPlaylist={() => {
             void collectAllTracks().then((all) => openPlaylistPicker(all[0], all));
           }}
-          onDownload={() => {
-            void collectAllTracks().then(queueDownloads);
+          download={{
+            onStart: () => {
+              void collectAllTracks().then(queueDownloads);
+            },
+            counts: downloadCounts,
+            isBusy: isCollectingAll,
           }}
-          downloadCounts={downloadCounts}
-          downloadBusy={isCollectingAll}
         />
         <PlaylistDescription playlist={playlist} libraryController={libraryController} />
       </div>

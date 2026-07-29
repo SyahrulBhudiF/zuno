@@ -50,40 +50,56 @@ interface MediaHeaderProps {
   artworkSlot?: ReactNode;
   /** Artists read as people, so their image is circular. */
   circularArtwork?: boolean;
-  /** Called for both play and pause — the page decides which, from `isPlaying`. */
-  onPlay?: () => void;
-  /** True while a track from *this* collection is playing, so the button reads "Pause". */
-  isPlaying?: boolean;
-  /** This collection is starting playback; the button holds its width and shows a spinner. */
-  isLoading?: boolean;
+  /**
+   * The primary play/pause control. Omit to hide it.
+   *
+   * Grouped rather than three sibling props because the three are meaningless apart: an
+   * `isPlaying` with no handler renders a button that does nothing, and a `isLoading` with no
+   * handler renders a spinner that never resolves. As one optional object those states cannot
+   * be expressed at all.
+   */
+  playback?: {
+    /** Called for both play and pause — the page decides which, from `isPlaying`. */
+    onToggle: () => void;
+    /** True while a track from *this* collection is playing, so the button reads "Pause". */
+    isPlaying?: boolean;
+    /** This collection is starting playback; the button holds its width and shows a spinner. */
+    isLoading?: boolean;
+  };
   onShuffle?: () => void;
   /** Queues every track in this collection behind what is already hand-picked. */
   onAddToQueue?: () => void;
   /** Adds every track in this collection to a playlist, via the usual picker. */
   onAddToPlaylist?: () => void;
-  /** Queues every not-yet-downloaded track in this collection for offline use. */
-  onDownload?: () => void;
-  /**
-   * The collection is still being paged in before the download can start.
-   *
-   * Worth showing: on a long playlist this takes several round trips, and a button that looks
-   * idle after a click reads as broken and gets clicked again.
-   */
-  downloadBusy?: boolean;
-  /**
-   * How much of this collection is already offline, so the button can say what pressing it
-   * would actually do — "all 12 downloaded" is a different message from "download 9 songs".
-   */
-  downloadCounts?: {
-    downloaded: number;
-    total: number;
-    /** True while pages remain unfetched, so `total` is a floor rather than the real total. */
-    isPartial?: boolean;
+  /** Offline download for the whole collection. Omit to hide the control. */
+  download?: {
+    /** Queues every not-yet-downloaded track in this collection for offline use. */
+    onStart: () => void;
+    /**
+     * The collection is still being paged in before the download can start.
+     *
+     * Worth showing: on a long playlist this takes several round trips, and a button that
+     * looks idle after a click reads as broken and gets clicked again.
+     */
+    isBusy?: boolean;
+    /**
+     * How much of this collection is already offline, so the button can say what pressing it
+     * would actually do — "all 12 downloaded" is a different message from "download 9 songs".
+     */
+    counts?: {
+      downloaded: number;
+      total: number;
+      /** True while pages remain unfetched, so `total` is a floor rather than the real total. */
+      isPartial?: boolean;
+    };
   };
-  /** Plays from the top with repeat-all on, so the collection restarts instead of ending. */
-  onPlayInLoop?: () => void;
-  /** Reflects repeat-all being active for this collection. */
-  isLooping?: boolean;
+  /** Play-from-the-top-on-repeat. Omit to hide the control. */
+  loop?: {
+    /** Plays from the top with repeat-all on, so the collection restarts instead of ending. */
+    onPlay: () => void;
+    /** Reflects repeat-all being active for this collection. */
+    isActive?: boolean;
+  };
   actionsDisabled?: boolean;
   /** Extra controls beside play/shuffle, e.g. Subscribe. */
   actions?: ReactNode;
@@ -112,20 +128,22 @@ export function MediaHeader({
   artworkVariant = "playlist",
   artworkSlot,
   circularArtwork = false,
-  onPlay,
-  isPlaying = false,
-  isLoading = false,
+  playback,
   onShuffle,
   onAddToQueue,
   onAddToPlaylist,
-  onDownload,
-  downloadCounts,
-  downloadBusy = false,
-  onPlayInLoop,
-  isLooping = false,
+  download,
+  loop,
   actionsDisabled = false,
   actions,
 }: MediaHeaderProps) {
+  /* Destructured once, so the body below reads the same as it did when these were flat props
+     rather than threading `playback?.` through every branch. */
+  const isPlaying = playback?.isPlaying ?? false;
+  const isLoading = playback?.isLoading ?? false;
+  const downloadBusy = download?.isBusy ?? false;
+  const downloadCounts = download?.counts;
+  const isLooping = loop?.isActive ?? false;
   /*
    * The wash is painted by Layout, which sits above the scroll container this header lives
    * in — it has to start behind the search bar, and anything drawn here would be clipped at
@@ -163,7 +181,7 @@ export function MediaHeader({
         {meta ? <p className="text-xs text-muted-foreground">{meta}</p> : null}
 
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          {onPlay ? (
+          {playback ? (
             /*
              * Reflects this collection's own state, not the player's: it only becomes a
              * Pause control while the track being played belongs here. Playing something
@@ -172,7 +190,7 @@ export function MediaHeader({
             <button
               type="button"
               disabled={actionsDisabled}
-              onClick={onPlay}
+              onClick={playback.onToggle}
               aria-label={isPlaying ? "Pause" : "Play"}
               className="flex min-w-[7.5rem] items-center justify-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-transform hover:scale-[1.03] active:scale-95 disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
@@ -207,12 +225,12 @@ export function MediaHeader({
             </button>
           ) : null}
 
-          {onPlayInLoop ? (
+          {loop ? (
             <Tooltip content="Play from the top and start over when it ends">
               <button
                 type="button"
                 disabled={actionsDisabled}
-                onClick={onPlayInLoop}
+                onClick={loop.onPlay}
                 aria-pressed={isLooping}
                 aria-label="Play in loop"
                 className={cn(
@@ -258,7 +276,7 @@ export function MediaHeader({
             </Tooltip>
           ) : null}
 
-          {onDownload ? (() => {
+          {download ? (() => {
             /*
              * Disabled once everything here is already offline. Re-queueing downloaded tracks
              * would be a no-op the user cannot see, so the button says so instead of appearing
@@ -285,7 +303,7 @@ export function MediaHeader({
                 <button
                   type="button"
                   disabled={actionsDisabled || allDownloaded || downloadBusy}
-                  onClick={onDownload}
+                  onClick={download.onStart}
                   aria-busy={downloadBusy}
                   aria-label={allDownloaded ? "Already downloaded" : "Download for offline"}
                   className="relative flex size-11 items-center justify-center rounded-full bg-card text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

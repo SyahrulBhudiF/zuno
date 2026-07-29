@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { LyricsActiveIcon, LyricsIcon } from "@/ui/icons";
-import { usePlayerState } from "../../../player/playerStore";
+import { usePlayerSelector } from "../../../player/playerStore";
 import { usePlayerUIState } from "../../stores/playerUIStore";
 
 interface LyricsButtonProps {
@@ -8,7 +8,9 @@ interface LyricsButtonProps {
 }
 
 export function LyricsButton({ onToggle }: LyricsButtonProps) {
-  const playerState = usePlayerState();
+  // The derived boolean, not the track: this only cares whether there is one, so it should
+  // re-render when that flips and not on every change of song.
+  const hasTrack = usePlayerSelector((state) => state.currentTrack !== null);
   const uiState = usePlayerUIState();
   const Glyph = uiState.isLyricsOpen ? LyricsActiveIcon : LyricsIcon;
 
@@ -23,7 +25,7 @@ export function LyricsButton({ onToggle }: LyricsButtonProps) {
           : "text-muted-foreground hover:text-foreground",
       )}
       onClick={onToggle}
-      disabled={!playerState.currentTrack}
+      disabled={!hasTrack}
       aria-label={uiState.isLyricsOpen ? "Close lyrics" : "Open lyrics"}
       aria-pressed={uiState.isLyricsOpen}
     >

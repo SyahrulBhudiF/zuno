@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./ui/App";
+import { ErrorBoundary } from "./ui/components/ErrorBoundary";
 import "./ui/styles/global.css";
 import { logInternalError, logInternalInfo } from "./internal/logging";
 import { applyPaperPcMode, hydratePaperPcMode } from "./ui/settings/paperPcMode";
@@ -90,9 +91,16 @@ window.addEventListener("unhandledrejection", (event) => {
   logInternalError("window.unhandledrejection", event.reason);
 });
 
+/*
+ * The outermost boundary. Nothing below it can be recovered from selectively, so its only
+ * job is to make sure a render error leaves something on screen with a button on it rather
+ * than a blank window — a desktop shell has no address bar to reload from.
+ */
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary label="Zuno">
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>,
 );
 

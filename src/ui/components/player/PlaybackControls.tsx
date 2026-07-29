@@ -12,7 +12,7 @@ import {
   SkipNextIcon,
   SkipPreviousIcon,
 } from "@/ui/icons";
-import { usePlayerState } from "../../../player/playerStore";
+import { shallowEqual, usePlayerSelector } from "../../../player/playerStore";
 import { playerController } from "../../../player/playerStore";
 
 interface PlaybackControlsProps {
@@ -31,7 +31,15 @@ const GLYPH_MOTION = {
 };
 
 export function PlaybackControls({ extraControlsAlwaysVisible = true }: PlaybackControlsProps) {
-  const state = usePlayerState();
+  const state = usePlayerSelector(
+    (player) => ({
+      currentTrack: player.currentTrack,
+      status: player.status,
+      playbackOrderMode: player.playbackOrderMode,
+      shuffleEnabled: player.shuffleEnabled,
+    }),
+    shallowEqual,
+  );
   const isBusy = state.status === "loading";
   const isPlaying = state.status === "playing";
   const hasCurrentTrack = Boolean(state.currentTrack);

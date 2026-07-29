@@ -271,9 +271,11 @@ export function ArtistView({
           />
         }
         actionsDisabled={isLoading || Boolean(error) || !page?.allSongs.length}
-        isPlaying={isCurrentCollection && isPlaying}
-        isLoading={isCurrentCollection && isPlayerLoading}
-        onPlay={togglePlayCollection}
+        playback={{
+          onToggle: togglePlayCollection,
+          isPlaying: isCurrentCollection && isPlaying,
+          isLoading: isCurrentCollection && isPlayerLoading,
+        }}
         onShuffle={() => void playShuffled()}
         onAddToQueue={() => playerController.addTracksToQueue(page?.allSongs ?? [])}
         onAddToPlaylist={() => {

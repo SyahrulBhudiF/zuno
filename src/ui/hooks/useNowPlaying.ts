@@ -1,5 +1,5 @@
 import type { PlaybackOrderMode } from "../../player/PlayerController";
-import { usePlayerState } from "../../player/playerStore";
+import { shallowEqual, usePlayerSelector } from "../../player/playerStore";
 
 export interface NowPlaying {
   /** Id of the track the player is on, or null when idle. */
@@ -23,7 +23,14 @@ export interface NowPlaying {
  * 500-row playlist is not re-rendered several times a second just to move a progress bar.
  */
 export function useNowPlaying(): NowPlaying {
-  const state = usePlayerState();
+  const state = usePlayerSelector(
+    (player) => ({
+      currentTrack: player.currentTrack,
+      status: player.status,
+      playbackOrderMode: player.playbackOrderMode,
+    }),
+    shallowEqual,
+  );
   return {
     currentTrackId: state.currentTrack?.id ?? null,
     isPlaying: state.status === "playing",

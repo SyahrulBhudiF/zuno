@@ -1,10 +1,13 @@
 import {
   memo,
+  useCallback,
+  useRef,
   type ComponentPropsWithoutRef,
   type MouseEvent,
   type ReactNode,
 } from "react";
 import { cn } from "@/lib/utils";
+import { propsEqualIgnoringHandlers } from "../../internal/propsEqual";
 import { Tooltip } from "@/components/motion/tooltip";
 import { CheckActiveIcon, CheckIcon, DislikeActiveIcon, DislikeIcon, DownloadIcon, HeartActiveIcon, HeartIcon, ListIcon, PlaylistAddIcon, PlayActiveIcon } from "@/ui/icons";
 import { Loader } from "@/components/motion/loader";
@@ -266,9 +269,16 @@ function RatingActions({ track }: { track: Track }) {
  *
  * Memoised on purpose. The lists subscribe to player state so they can mark the current
  * track, which re-renders the list on every track change; without this, a 500-row playlist
- * would rebuild every row to repaint two of them. Every prop is either a primitive or a
- * stable reference (track objects come straight from the data source), so the comparison is
- * cheap and actually holds.
+ * would rebuild every row to repaint two of them.
+ *
+ * The memo only started working when the handlers stopped being compared. Every call site
+ * passes inline arrows — `onSelect={(e) => playSong(track, index, e)}` and four more — so all
+ * five differed on every render and the default comparison never once returned true. The
+ * handlers are now invoked through a ref refreshed on each render, which makes their identity
+ * irrelevant: they only ever fire from events, long after the render that supplied them.
+ *
+ * `trailing` and `children` are still compared, and a call site passing fresh JSX for either
+ * will still re-render its rows. That is honest — those are content, not callbacks.
  */
 export const TrackRow = memo(function TrackRow({
   track,
@@ -291,12 +301,51 @@ export const TrackRow = memo(function TrackRow({
   children,
   ...buttonProps
 }: TrackRowProps) {
+  /*
+   * The handlers, read at call time instead of captured at render time.
+   *
+   * This is what lets `trackRowPropsEqual` ignore their identity: the wrappers below never
+   * change, but always reach the newest closure, so a row that skipped a render still acts on
+   * current state when you click it.
+   */
+  const handlersRef = useRef({
+    onSelect,
+    onContextMenu,
+    onQuickAdd,
+    onQuickAddToQueue,
+    onToggleSelected,
+  });
+  handlersRef.current = {
+    onSelect,
+    onContextMenu,
+    onQuickAdd,
+    onQuickAddToQueue,
+    onToggleSelected,
+  };
+
+  const handleSelect = useCallback(
+    (event: MouseEvent<HTMLElement>) => handlersRef.current.onSelect(event),
+    [],
+  );
+  const handleContextMenu = useCallback(
+    (event: MouseEvent<HTMLElement>) => handlersRef.current.onContextMenu?.(event),
+    [],
+  );
+  const handleQuickAdd = useCallback(() => handlersRef.current.onQuickAdd?.(), []);
+  const handleQuickAddToQueue = useCallback(
+    () => handlersRef.current.onQuickAddToQueue?.(),
+    [],
+  );
+  const handleToggleSelected = useCallback(() => handlersRef.current.onToggleSelected?.(), []);
+
   return (
     <button
       {...buttonProps}
       type="button"
-      onClick={onSelect}
-      onContextMenu={onContextMenu}
+      onClick={handleSelect}
+      /* Kept conditional: whether the prop was supplied still decides whether a handler is
+         attached at all, only its identity is ignored. */
+      onContextMenu={onContextMenu ? handleContextMenu : undefined}
       aria-current={isCurrent ? "true" : undefined}
       className={cn(
         "group/row relative flex w-full items-center gap-3 rounded-xl px-2 py-1.5 text-left",
@@ -327,13 +376,13 @@ export const TrackRow = memo(function TrackRow({
           )}
           onClick={(event) => {
             event.stopPropagation();
-            onToggleSelected();
+            handleToggleSelected();
           }}
           onKeyDown={(event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
             event.stopPropagation();
-            onToggleSelected();
+            handleToggleSelected();
           }}
         >
           <CheckIcon size={14} aria-hidden="true" />
@@ -415,7 +464,7 @@ export const TrackRow = memo(function TrackRow({
             <QuickAction
               label={`Add ${track.title} to the queue`}
               tooltip="Add to queue"
-              onActivate={onQuickAddToQueue}
+              onActivate={handleQuickAddToQueue}
             >
               <ListIcon size={17} aria-hidden="true" />
             </QuickAction>
@@ -424,7 +473,7 @@ export const TrackRow = memo(function TrackRow({
             <QuickAction
               label={`Add ${track.title} to a playlist`}
               tooltip="Add to playlist"
-              onActivate={onQuickAdd}
+              onActivate={handleQuickAdd}
             >
               <PlaylistAddIcon size={17} aria-hidden="true" />
             </QuickAction>
@@ -440,4 +489,4 @@ export const TrackRow = memo(function TrackRow({
       ) : null}
     </button>
   );
-});
+}, propsEqualIgnoringHandlers);

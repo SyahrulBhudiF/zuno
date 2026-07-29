@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -289,8 +290,21 @@ export function PlaylistContextMenuProvider({
     }
   };
 
+  /* Same reasoning as TrackContextMenuProvider: this wraps the app, so a fresh value object
+     would re-render every consumer each time the menu's own state moved. */
+  const handlersRef = useRef({ openPlaylistMenu, openAlbumMenu });
+  handlersRef.current = { openPlaylistMenu, openAlbumMenu };
+
+  const contextValue = useMemo<PlaylistContextMenuValue>(
+    () => ({
+      openPlaylistMenu: (event, playlist) => handlersRef.current.openPlaylistMenu(event, playlist),
+      openAlbumMenu: (event, album) => handlersRef.current.openAlbumMenu(event, album),
+    }),
+    [],
+  );
+
   return (
-    <PlaylistContext.Provider value={{ openPlaylistMenu, openAlbumMenu }}>
+    <PlaylistContext.Provider value={contextValue}>
       {children}
       {position && (album || playlist) && (
         <div

@@ -1,4 +1,12 @@
-import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useReducedMotion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { CloseIcon, LyricsIcon, RefreshIcon } from "@/ui/icons";
@@ -6,11 +14,14 @@ import type { Lyrics, LyricsSourceAttempt, LyricsSourceStatus } from "../../data
 import { LYRICS_SOURCES } from "../../datasource/youtube/lyricsSources";
 import { FloatingPanel } from "../components/FloatingPanel";
 import { logInternalWarn } from "../../internal/logging";
-import { playerController, usePlayerState } from "../../player/playerStore";
+import { playerController, shallowEqual, usePlayerSelector } from "../../player/playerStore";
 import { ArtistLinks } from "../components/ArtistLinks";
 import { TrackArtwork } from "../components/TrackArtwork";
 import { setAmbientArtwork } from "../stores/ambientArtworkStore";
 import { OFFSET_STEP_SEC, setLyricsOffset, useLyricsOffset } from "../settings/lyricsOffset";
+import { useLyricsFontScale } from "../settings/lyricsFontScale";
+import { TRANSLATION_OFF, useLyricsTranslationLang } from "../settings/lyricsTranslation";
+import { translateLines } from "../../datasource/translate";
 import { findActiveLineIndex, getLineProgress, isSyncedLyrics } from "./lyricsTiming";
 
 /** How long a manual scroll keeps the auto-follow parked. */
@@ -59,11 +70,17 @@ interface LyricsViewProps {
 }
 
 export function LyricsView({ onClose }: LyricsViewProps) {
-  const playerState = usePlayerState();
+  const playerState = usePlayerSelector(
+    (player) => ({ currentTrack: player.currentTrack, status: player.status }),
+    shallowEqual,
+  );
   const track = playerState.currentTrack;
   const isPlaying = playerState.status === "playing";
   const reduce = useReducedMotion() ?? false;
   const offset = useLyricsOffset(track?.id);
+  const fontScale = useLyricsFontScale();
+  const translationLang = useLyricsTranslationLang();
+  const [translations, setTranslations] = useState<string[] | null>(null);
 
   const [lyrics, setLyrics] = useState<Lyrics | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -254,6 +271,33 @@ export function LyricsView({ onClose }: LyricsViewProps) {
     return () => cancelAnimationFrame(frame);
   }, [isSynced, isPlaying, lyrics, offset, reduce]);
 
+  /*
+   * Translation is best-effort and entirely optional: a failure leaves `translations` null
+   * and the screen shows the original words, which is what it would have shown anyway. The
+   * stale guard matters more than usual here — the request is slow enough that skipping two
+   * tracks while it is in flight is easy, and a late reply would caption the wrong song.
+   */
+  useEffect(() => {
+    setTranslations(null);
+    if (translationLang === TRANSLATION_OFF || !hasLines || !track) return;
+
+    let cancelled = false;
+    void translateLines(lines.map((line) => line.text), translationLang, track.id)
+      .then((result) => {
+        if (!cancelled) setTranslations(result);
+      })
+      .catch((error) => {
+        logInternalWarn("LyricsView translation failed", {
+          trackId: track.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [lyrics, translationLang, track?.id]);
+
   // A fresh song starts at the top, whether or not it turned out to be synced.
   useEffect(() => {
     scrollerRef.current?.scrollTo({ top: 0 });
@@ -303,6 +347,19 @@ export function LyricsView({ onClose }: LyricsViewProps) {
     // far back. Seeking to the raw start time would land a whole offset away from the words.
     void playerController.seekTo(Math.max(0, start - offset));
   };
+
+  /*
+   * Handed to every memoised line, so they have to be referentially stable for the lifetime
+   * of the view. Reading through a ref keeps the identity fixed while the behaviour still
+   * tracks the latest render — a `useCallback` with real dependencies would change identity
+   * whenever the offset or the line list did, re-rendering the whole column.
+   */
+  const lineClickRef = useRef(handleLineClick);
+  lineClickRef.current = handleLineClick;
+  const seekLine = useCallback((index: number) => lineClickRef.current(index), []);
+  const registerLine = useCallback((index: number, element: HTMLElement | null) => {
+    lineRefs.current[index] = element;
+  }, []);
 
   /*
    * Roving tabindex.
@@ -464,97 +521,50 @@ export function LyricsView({ onClose }: LyricsViewProps) {
                 <div
                   className="flex flex-col pl-5"
                   style={{
-                    fontSize: isSynced ? LINE_FONT_SIZE : READING_FONT_SIZE,
-                    gap: isSynced ? LINE_GAP : undefined,
+                    /* Multiplied rather than replaced: the clamp still does the adapting, the
+                       preference just moves the whole scale up or down with it. */
+                    fontSize: `calc(${isSynced ? LINE_FONT_SIZE : READING_FONT_SIZE} * ${fontScale})`,
+                    gap: isSynced ? `calc(${LINE_GAP} * ${fontScale})` : undefined,
                   }}
                   onKeyDown={isSynced ? handleLineKeyDown : undefined}
                 >
-                  {lines.map((line, index) => {
-                    const distance = activeIndex < 0 ? 1 : Math.abs(index - activeIndex);
-                    const depth = DEPTH[Math.min(distance, DEPTH.length - 1)];
-                    const isActive = isSynced && index === activeIndex;
-                    const attach = (element: HTMLElement | null) => {
-                      lineRefs.current[index] = element;
-                    };
-
-                    // An empty LRC line is a real instrumental beat, not junk. It keeps its
-                    // slot so the timing stays honest, and announces itself when it comes up.
-                    if (!line.text.trim()) {
-                      return (
-                        <div
-                          key={`${index}:blank`}
-                          ref={attach}
-                          aria-hidden="true"
-                          className="flex items-center gap-1.5 py-1"
-                          style={{ opacity: depth.opacity }}
-                        >
-                          {[0, 1, 2].map((dot) => (
-                            <span
-                              key={dot}
-                              className={cn(
-                                "size-2 rounded-full bg-foreground/60",
-                                isActive && !reduce && "animate-pulse",
-                              )}
-                              style={isActive ? { animationDelay: `${dot * 180}ms` } : undefined}
-                            />
-                          ))}
-                        </div>
-                      );
-                    }
-
-                    if (!isSynced) {
-                      return (
-                        <p
-                          key={`${index}:${line.text}`}
-                          ref={attach}
-                          className="text-pretty py-1 text-xl leading-relaxed text-foreground/85"
-                        >
-                          {line.text}
-                        </p>
-                      );
-                    }
-
-                    return (
-                      <button
+                  {lines.map((line, index) =>
+                    isSynced ? (
+                      <SyncedLine
                         key={`${index}:${line.text}`}
-                        ref={attach}
-                        type="button"
-                        tabIndex={index === tabbableIndex ? 0 : -1}
-                        aria-current={isActive ? "true" : undefined}
-                        onFocus={() => setFocusIndex(index)}
-                        className={cn(
-                          "group relative origin-left text-pretty text-left text-3xl font-bold leading-[1.16] tracking-[-0.035em]",
-                          "transition-[opacity,filter,color] duration-500 ease-out",
-                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                          /*
-                           * The sweep paints its own colour through background-clip, so the
-                           * active line must not also carry a text colour — and it is only
-                           * safe while the sampling loop is running. Under reduced motion
-                           * nothing writes `--sweep`, so the line would stick at the
-                           * gradient's 0% end and render dimmer than its neighbours.
-                           */
-                          isActive && !reduce ? "lyric-sweep" : "text-foreground",
-                          !isActive && "hover:opacity-100",
-                        )}
-                        style={{
-                          opacity: depth.opacity,
-                          filter: depth.blur ? `blur(${depth.blur}px)` : undefined,
-                        }}
-                        onClick={() => handleLineClick(index)}
+                        index={index}
+                        text={line.text}
+                        /* Clamped to the table length so every line past the ramp shares one
+                           prop value — otherwise line 300 of a long song would re-render on
+                           every flip just because its distance went from 287 to 286. */
+                        distance={
+                          activeIndex < 0
+                            ? 1
+                            : Math.min(DEPTH.length - 1, Math.abs(index - activeIndex))
+                        }
+                        isActive={index === activeIndex}
+                        isTabbable={index === tabbableIndex}
+                        reduce={reduce}
+                        translation={translations?.[index] || undefined}
+                        onSeek={seekLine}
+                        onFocusLine={setFocusIndex}
+                        register={registerLine}
+                      />
+                    ) : (
+                      <p
+                        key={`${index}:${line.text}`}
+                        ref={(element) => registerLine(index, element)}
+                        className="text-pretty py-1 leading-relaxed text-foreground/85"
                       >
-                        {/* The one piece of brand colour on the screen, and the only thing
-                            marking which line is playing when the sweep is at either end. */}
-                        <span
-                          aria-hidden="true"
-                          className={cn(
-                            "absolute -left-5 top-[0.28em] h-[0.72em] w-[3px] rounded-full bg-primary transition-opacity duration-300",
-                            isActive ? "opacity-100" : "opacity-0 group-hover:opacity-40",
-                          )}
-                        />
                         {line.text}
-                      </button>
-                    );
-                  })}
+                        {translations?.[index] && (
+                          <span className="mt-0.5 block text-[0.72em] text-muted-foreground">
+                            {translations[index]}
+                          </span>
+                        )}
+                      </p>
+                    ),
+                  )}
                 </div>
               )}
             </div>
@@ -603,6 +613,122 @@ export function LyricsView({ onClose }: LyricsViewProps) {
     </section>
   );
 }
+
+interface SyncedLineProps {
+  index: number;
+  text: string;
+  distance: number;
+  isActive: boolean;
+  isTabbable: boolean;
+  reduce: boolean;
+  /** Absent when translation is off, still loading, or could not be aligned to this line. */
+  translation?: string;
+  onSeek: (index: number) => void;
+  onFocusLine: (index: number) => void;
+  register: (index: number, element: HTMLElement | null) => void;
+}
+
+/**
+ * One lyric line, memoised.
+ *
+ * Windowing was the obvious answer to long sheets and the wrong one: this column's whole
+ * design is centring maths against real `offsetTop` values, and a virtualiser that guesses
+ * heights for unmounted lines breaks exactly that. The actual cost was never the DOM — it
+ * was re-rendering all three hundred lines each time the active one advanced. With the
+ * distance clamped to the depth ramp only the dozen lines whose appearance genuinely
+ * changed re-render, so line count stops mattering and the scrolling stays honest.
+ *
+ * Every callback prop is stable by construction; one inline arrow here would defeat the memo
+ * and quietly restore the original cost.
+ */
+const SyncedLine = memo(function SyncedLine({
+  index,
+  text,
+  distance,
+  isActive,
+  isTabbable,
+  reduce,
+  translation,
+  onSeek,
+  onFocusLine,
+  register,
+}: SyncedLineProps) {
+  const depth = DEPTH[Math.min(distance, DEPTH.length - 1)];
+  const attach = useCallback(
+    (element: HTMLElement | null) => register(index, element),
+    [index, register],
+  );
+
+  // An empty LRC line is a real instrumental beat, not junk. It keeps its slot so the timing
+  // stays honest, and announces itself when it comes up.
+  if (!text.trim()) {
+    return (
+      <div
+        ref={attach}
+        aria-hidden="true"
+        className="flex items-center gap-1.5 py-1"
+        style={{ opacity: depth.opacity }}
+      >
+        {[0, 1, 2].map((dot) => (
+          <span
+            key={dot}
+            className={cn(
+              "size-2 rounded-full bg-foreground/60",
+              isActive && !reduce && "animate-pulse",
+            )}
+            style={isActive ? { animationDelay: `${dot * 180}ms` } : undefined}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      ref={attach}
+      type="button"
+      tabIndex={isTabbable ? 0 : -1}
+      aria-current={isActive ? "true" : undefined}
+      onFocus={() => onFocusLine(index)}
+      className={cn(
+        "group relative origin-left text-pretty text-left font-bold leading-[1.16] tracking-[-0.035em]",
+        "transition-[opacity,filter,color] duration-500 ease-out",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        /*
+         * The sweep paints its own colour through background-clip, so the active line must
+         * not also carry a text colour — and it is only safe while the sampling loop is
+         * running. Under reduced motion nothing writes `--sweep`, so the line would stick at
+         * the gradient's 0% end and render dimmer than its neighbours.
+         */
+        isActive && !reduce ? "lyric-sweep" : "text-foreground",
+        !isActive && "hover:opacity-100",
+      )}
+      style={{
+        opacity: depth.opacity,
+        filter: depth.blur ? `blur(${depth.blur}px)` : undefined,
+      }}
+      onClick={() => onSeek(index)}
+    >
+      {/* The one piece of brand colour on the screen, and the only thing marking which line
+          is playing when the sweep is at either end. */}
+      <span
+        aria-hidden="true"
+        className={cn(
+          "absolute -left-5 top-[0.28em] h-[0.72em] w-[3px] rounded-full bg-primary transition-opacity duration-300",
+          isActive ? "opacity-100" : "opacity-0 group-hover:opacity-40",
+        )}
+      />
+      {text}
+      {/* Sized in `em` so it tracks the line it belongs to, and deliberately quieter: it is
+          a gloss on the lyric, not a second lyric competing with it. */}
+      {translation && (
+        <span className="mt-1 block text-[0.62em] font-medium leading-snug text-muted-foreground">
+          {translation}
+        </span>
+      )}
+    </button>
+  );
+});
 
 /**
  * Which sources were tried, in priority order, and what each one did.

@@ -25,6 +25,7 @@ const {
   rankOfSource,
   skippedAttempt,
   sortAttempts,
+  unmetPrecondition,
 } = await import("./lyricsSources");
 
 const byId = (id: string) => {
@@ -171,6 +172,32 @@ equal(
   )[0].id,
   "youtube-music",
   "the status list leads with the source the listener chose",
+);
+
+/* Preconditions: an unanswerable source must say so, not report a miss it never looked for. */
+
+equal(
+  unmetPrecondition(byId("lrclib-exact"), { durationSec: 210 }),
+  null,
+  "a track with a duration can be matched",
+);
+equal(
+  unmetPrecondition(byId("betterlyrics"), {}),
+  null,
+  "sources that do not match on length are unaffected",
+);
+check(
+  unmetPrecondition(byId("lrclib-exact"), {}) !== null,
+  "LRCLIB cannot be asked about a track with no duration",
+);
+check(
+  unmetPrecondition(byId("lrclib-search"), { durationSec: 0 }) !== null,
+  "a zero duration is no duration, not a zero-length song",
+);
+equal(
+  skippedAttempt(byId("lrclib-exact"), unmetPrecondition(byId("lrclib-exact"), {}) ?? "").detail,
+  "Needs a track duration to match on",
+  "and the reason reaches the status list instead of a bare 'No match'",
 );
 
 console.log("lyricsSources self-check passed");

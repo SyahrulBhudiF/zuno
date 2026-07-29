@@ -10,6 +10,15 @@ export interface LyricsSource {
    * a synced hit makes them pointless.
    */
   wave: 1 | 2;
+  /**
+   * The source matches on recording length and cannot be asked anything useful without one.
+   *
+   * Declared here rather than left as an early `return null` inside the fetcher, because a
+   * fetcher that quietly returns nothing is indistinguishable from one that searched and
+   * found nothing — which is how two of five sources went missing on every track without a
+   * duration while the UI cheerfully reported "No match".
+   */
+  requiresDuration?: boolean;
   /** Why it sits where it does. Shown in the UI, so it has to read as a sentence. */
   note: string;
 }
@@ -28,6 +37,7 @@ export const LYRICS_SOURCES: LyricsSource[] = [
     label: "LRCLIB",
     timeoutMs: 2_500,
     wave: 1,
+    requiresDuration: true,
     note: "Line-synced, matched on title, artist and exact duration — the same recording.",
   },
   {
@@ -42,6 +52,7 @@ export const LYRICS_SOURCES: LyricsSource[] = [
     label: "LRCLIB search",
     timeoutMs: 4_500,
     wave: 1,
+    requiresDuration: true,
     note: "Same corpus, matched by text within two seconds of duration — can land on a different master.",
   },
   {
@@ -108,14 +119,30 @@ export function planLyricsWaves(preferredId?: string): LyricsSource[][] {
 }
 
 /** A source that was never reached, so the UI can show the order instead of implying a failure. */
-export function skippedAttempt(source: LyricsSource): LyricsSourceAttempt {
+export function skippedAttempt(source: LyricsSource, reason = "Not needed"): LyricsSourceAttempt {
   return {
     id: source.id,
     label: source.label,
     status: "skipped",
     durationMs: 0,
-    detail: "Not needed",
+    detail: reason,
   };
+}
+
+/**
+ * Why this source cannot be asked about this track, or null if it can.
+ *
+ * Checked before the request rather than inside it, so an unanswerable source reports the
+ * actual reason instead of a miss it never went looking for.
+ */
+export function unmetPrecondition(
+  source: LyricsSource,
+  track: { durationSec?: number },
+): string | null {
+  if (source.requiresDuration && !(track.durationSec && track.durationSec > 0)) {
+    return "Needs a track duration to match on";
+  }
+  return null;
 }
 
 /** Attempts in table order, so the list always reads as the priority it actually is. */

@@ -7,6 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "check": "node scripts/run-checks.mjs",
+    "verify": "npm run typecheck && npm run check",
     "tauri": "tauri"
   },
   "dependencies": {

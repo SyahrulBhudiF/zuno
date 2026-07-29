@@ -191,16 +191,19 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
         artworkUrl={album.artworkUrl}
         artworkVariant="album"
         actionsDisabled={isLoading || Boolean(error) || tracks.length === 0}
-        isPlaying={isCurrentCollection && isPlaying}
-        isLoading={isCurrentCollection && isPlayerLoading}
-        onPlay={togglePlayCollection}
+        playback={{
+          onToggle: togglePlayCollection,
+          isPlaying: isCurrentCollection && isPlaying,
+          isLoading: isCurrentCollection && isPlayerLoading,
+        }}
         onShuffle={() => void playShuffled()}
-        onPlayInLoop={playInLoop}
-        isLooping={isCurrentCollection && playbackOrderMode === "repeat-all"}
+        loop={{
+          onPlay: playInLoop,
+          isActive: isCurrentCollection && playbackOrderMode === "repeat-all",
+        }}
         onAddToQueue={() => playerController.addTracksToQueue(tracks)}
         onAddToPlaylist={() => openPlaylistPicker(tracks[0], tracks)}
-        onDownload={() => queueDownloads(tracks)}
-        downloadCounts={downloadCounts}
+        download={{ onStart: () => queueDownloads(tracks), counts: downloadCounts }}
       />
       {isLoading && <AlbumLoadingSpinner label="Loading songs" />}
       {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}

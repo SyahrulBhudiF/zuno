@@ -4,6 +4,8 @@ import {
   type MouseEvent,
   type ReactNode,
   useContext,
+  useMemo,
+  useRef,
 } from "react";
 import type { Artist, ArtistReference } from "../../datasource/types";
 import { cn } from "@/lib/utils";
@@ -28,8 +30,21 @@ export function ArtistNavigationProvider({
   children: ReactNode;
   onNavigate: NavigateArtist;
 }) {
+  /*
+   * Stabilised here rather than asking every caller to `useCallback` it. The navigate handler
+   * closes over most of App's state, so a correct dependency list would be long and would
+   * change constantly anyway — and this provider wraps the whole app, so a new value means
+   * every artist link in every list re-renders.
+   */
+  const navigateRef = useRef(onNavigate);
+  navigateRef.current = onNavigate;
+  const navigate = useMemo<NavigateArtist>(
+    () => (artist, openInNewTab) => navigateRef.current(artist, openInNewTab),
+    [],
+  );
+
   return (
-    <ArtistNavigationContext.Provider value={onNavigate}>
+    <ArtistNavigationContext.Provider value={navigate}>
       {children}
     </ArtistNavigationContext.Provider>
   );

@@ -37,6 +37,8 @@ const SettingsPage = lazy(() =>
 const LyricsView = lazy(() => import("./pages/LyricsView").then((m) => ({ default: m.LyricsView })));
 import { SearchOverlay } from "./components/SearchOverlay";
 import { TrackContextMenuProvider } from "./components/TrackContextMenu";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { VolumeSyncBridge } from "./components/player/VolumeSyncBridge";
 import { PlaylistContextMenuProvider } from "./components/PlaylistContextMenu";
 import { ArtistNavigationProvider } from "./components/ArtistLinks";
 import { TitleBar } from "./components/TitleBar";
@@ -55,7 +57,8 @@ import {
   tabManager,
   useLibraryState,
   usePlayerSession,
-  usePlayerState,
+  usePlayerSelector,
+  shallowEqual,
 } from "../player/playerStore";
 import { clearAppSession, loadAppSession, saveAppSession } from "../player/appSession";
 import { useMediaSession } from "../player/useMediaSession";
@@ -275,7 +278,20 @@ async function hasStoredYoutubeSession(): Promise<boolean> {
 export default function App() {
   useDisableContextMenu();
   const libraryState = useLibraryState();
-  const playerState = usePlayerState();
+  /*
+   * Only the three fields the root actually reads. Selecting the whole state here made the
+   * application's largest component a subscriber to every field of it, including volume —
+   * which commits on every pointer move of the slider. Narrowing it is also self-enforcing:
+   * reading a field that is not selected is a type error rather than stale data.
+   */
+  const playerState = usePlayerSelector(
+    (state) => ({
+      currentTrack: state.currentTrack,
+      status: state.status,
+      error: state.error,
+    }),
+    shallowEqual,
+  );
   const playerSession = usePlayerSession();
   const playerUIState = usePlayerUIState();
   const miniPlayerEnabled = useMiniPlayerEnabled();
@@ -1852,12 +1868,6 @@ useEffect(() => {
   return () => { cleanup.then(fn => fn()); };
 }, []);
 
-useEffect(() => {
-  void emit("player-volume-sync", {
-    muted: playerState.muted,
-    volume: playerState.volume,
-  });
-}, [playerState.muted, playerState.volume]);
   return (
     <MotionConfig reducedMotion={paperPcMode ? "always" : "user"}>
     <ArtistNavigationProvider onNavigate={handleNavigateArtist}>
@@ -1932,6 +1942,16 @@ useEffect(() => {
 
           {/* Chunks resolve off local disk in single-digit ms, so an empty fallback reads as
               an instant transition rather than a flash of spinner. */}
+          {/*
+            Keyed on the view so navigating away clears a caught error: a page that failed on
+            one album's malformed response must not stay broken for the next one. The player
+            bar and sidebar sit outside, so a dead page still leaves playback controllable.
+          */}
+          <ErrorBoundary
+            key={`boundary:${activeViewKey}`}
+            label="This page"
+            onDismiss={canNavigateBack ? handleNavigateBack : undefined}
+          >
           <Suspense fallback={<div className="min-h-0 flex-1" />}>
           {playerUIState.isLyricsOpen && activeTab?.view !== "settings" ? (
             <LyricsView onClose={() => playerUIStore.setLyricsOpen(false)} />
@@ -2037,16 +2057,23 @@ useEffect(() => {
           </div>
           )}
           </Suspense>
+          </ErrorBoundary>
         </Layout>
       </div>
       
-      <PlayerBar
-        onToggleLyrics={handleToggleLyrics}
-        onToggleQueue={handleToggleQueue}
-        isQueueOpen={isQueuePanelOpen}
-        onConnectionRestored={handleConnectionRestored}
-        handlePlayerBarClick={handlePlayerBarClick}
-      />
+      <VolumeSyncBridge />
+
+      {/* Its own boundary: the player bar is the one region whose loss ends the session —
+          audio keeps playing but nothing can pause or skip it. */}
+      <ErrorBoundary label="Playback controls">
+        <PlayerBar
+          onToggleLyrics={handleToggleLyrics}
+          onToggleQueue={handleToggleQueue}
+          isQueueOpen={isQueuePanelOpen}
+          onConnectionRestored={handleConnectionRestored}
+          handlePlayerBarClick={handlePlayerBarClick}
+        />
+      </ErrorBoundary>
       <SearchOverlay
         isOpen={isSearchOpen && activeTab?.view !== "settings"}
         activeTabId={activeTabId}

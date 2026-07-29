@@ -89,6 +89,18 @@ import {
 } from "../../internal/lyricsSourcePreference";
 import { LYRICS_SOURCES } from "../../datasource/youtube/lyricsSources";
 import {
+  LYRICS_FONT_SCALES,
+  setLyricsFontScale,
+  useLyricsFontScale,
+} from "../settings/lyricsFontScale";
+import {
+  TRANSLATION_LANGUAGES,
+  TRANSLATION_OFF,
+  getLanguageLabel,
+  setLyricsTranslationLang,
+  useLyricsTranslationLang,
+} from "../settings/lyricsTranslation";
+import {
   setToolbarItemVisible,
   TOOLBAR_ITEMS,
   useToolbarItemVisible,
@@ -413,6 +425,8 @@ export function SettingsPage({
   const miniPlayerHoverAction = useMiniPlayerHoverAction();
   const sidebarMode = useSidebarMode();
   const preferredLyricsSource = usePreferredLyricsSourceId();
+  const lyricsFontScale = useLyricsFontScale();
+  const lyricsTranslationLang = useLyricsTranslationLang();
   const crossfadeSec = useCrossfadeSec();
   const gaplessEnabled = useGaplessEnabled();
   const sessionRestoreEnabled = useSessionRestoreEnabled();
@@ -1145,6 +1159,55 @@ export function SettingsPage({
                       {(Object.keys(AUDIO_QUALITY_LABELS) as AudioQuality[]).map((quality) => (
                         <SelectItem key={quality} value={quality}>
                           {AUDIO_QUALITY_LABELS[quality]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </SettingRow>
+
+              <SettingRow
+                title="Translate lyrics"
+                description="Shows a translation under each line. Sends the lyrics to Google Translate."
+              >
+                {(labelId) => (
+                  <Select
+                    className="w-52"
+                    value={lyricsTranslationLang}
+                    onValueChange={setLyricsTranslationLang}
+                  >
+                    <SelectTrigger aria-labelledby={labelId}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={TRANSLATION_OFF}>Off</SelectItem>
+                      {TRANSLATION_LANGUAGES.map((code) => (
+                        <SelectItem key={code} value={code}>
+                          {getLanguageLabel(code)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </SettingRow>
+
+              <SettingRow
+                title="Lyrics text size"
+                description="Scales the lyrics screen. The size still adapts to the window on top of this."
+              >
+                {(labelId) => (
+                  <Select
+                    className="w-52"
+                    value={String(lyricsFontScale)}
+                    onValueChange={(value) => setLyricsFontScale(Number(value))}
+                  >
+                    <SelectTrigger aria-labelledby={labelId}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {LYRICS_FONT_SCALES.map((option) => (
+                        <SelectItem key={option.value} value={String(option.value)}>
+                          {option.label}
                         </SelectItem>
                       ))}
                     </SelectContent>

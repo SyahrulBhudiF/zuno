@@ -23,8 +23,9 @@ import {
 } from "../../player/offlineStore";
 import {
   playerController,
+  shallowEqual,
   useLibraryState,
-  usePlayerState,
+  usePlayerSelector,
 } from "../../player/playerStore";
 import { TrackArtwork } from "./TrackArtwork";
 import { cn } from "@/lib/utils";
@@ -96,7 +97,7 @@ export function TrackContextMenuProvider({
   onOpenRelated,
 }: TrackContextMenuProviderProps) {
   const libraryState = useLibraryState();
-  const playerState = usePlayerState();
+  const playerState = usePlayerSelector((player) => ({ currentTrack: player.currentTrack }), shallowEqual);
   const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const playlistRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -520,8 +521,36 @@ export function TrackContextMenuProvider({
       && !isLocalPlaylist(menuContext.playlist),
   );
 
+  /*
+   * A context value whose identity never changes.
+   *
+   * This provider wraps the entire application and re-renders on all of its own state — a
+   * menu opening, the playlist picker filtering, any library update. A fresh object literal
+   * here pushed a new context value on every one of those, and every consumer re-rendered:
+   * that includes TrackRow, so a 500-row playlist re-rendered in full each time, and the
+   * `memo` on it could never help because the value it depends on was always new.
+   *
+   * The handlers are read through a ref rather than wrapped in `useCallback`, because they
+   * close over a dozen pieces of state. Dependency lists that long are wrong eventually, and
+   * being wrong here means a menu acting on the previous track. The ref is always current.
+   */
+  const handlersRef = useRef({ openTrackMenu, openPlaylistPicker, toggleTrackLike, rateTrack });
+  handlersRef.current = { openTrackMenu, openPlaylistPicker, toggleTrackLike, rateTrack };
+
+  const contextValue = useMemo<TrackContextMenuValue>(
+    () => ({
+      openTrackMenu: (event, selectedTrack, context) =>
+        handlersRef.current.openTrackMenu(event, selectedTrack, context),
+      openPlaylistPicker: (selectedTrack, batch) =>
+        handlersRef.current.openPlaylistPicker(selectedTrack, batch),
+      toggleTrackLike: (selectedTrack) => handlersRef.current.toggleTrackLike(selectedTrack),
+      rateTrack: (selectedTrack, rating) => handlersRef.current.rateTrack(selectedTrack, rating),
+    }),
+    [],
+  );
+
   return (
-    <TrackContextMenuContext.Provider value={{ openTrackMenu, openPlaylistPicker, toggleTrackLike, rateTrack }}>
+    <TrackContextMenuContext.Provider value={contextValue}>
       {children}
 
       {menuPosition && track && (

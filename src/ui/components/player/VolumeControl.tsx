@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { RangeSlider } from "@/components/motion/range-slider";
 import { VolumeLoudIcon, VolumeMutedIcon, VolumeSmallIcon } from "@/ui/icons";
-import { playerController, usePlayerState } from "../../../player/playerStore";
+import { playerController, shallowEqual, usePlayerSelector } from "../../../player/playerStore";
 import { FloatingPanel } from "../FloatingPanel";
 
 /** Scroll step over the icon, matching the old inline slider's wheel behaviour. */
@@ -18,7 +18,12 @@ const WHEEL_STEP_PERCENT = 5;
  * `overflow-hidden` root, so a panel positioned within the bar would be clipped by it.
  */
 export function VolumeControl() {
-  const playerState = usePlayerState();
+  /* This component writes volume on every pointer move of the slider, so it is the last one
+     that should be subscribed to fields it does not read. */
+  const playerState = usePlayerSelector(
+    (state) => ({ volume: state.volume, muted: state.muted }),
+    shallowEqual,
+  );
   const [isOpen, setIsOpen] = useState(false);
   const [volume, setVolume] = useState(() => playerController.getVolume());
   const [isMuted, setIsMuted] = useState(() => playerController.isMuted());
