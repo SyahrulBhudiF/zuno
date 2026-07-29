@@ -1,0 +1,79 @@
+# Builds the Flatpak and generates the offline source manifests.
+#
+# Flatpak builds have no network, so every crate and npm package must be listed in
+# cargo-sources.json / node-sources.json. Those are generated, not written — this job
+# regenerates them, builds against them, and uploads both plus the .flatpak so a submission
+# can be assembled without a Linux machine.
+#
+# Not wired to releases: Flathub builds from its own repo once the app is accepted. This is
+# for validating the manifest before and after submission.
+name: Flatpak
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "packaging/flatpak/**"
+      - ".github/workflows/flatpak.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: bilelmoussaoui/flatpak-github-actions:gnome-46
+      options: --privileged
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install generators
+        run: |
+          dnf install -y python3-pip python3-aiohttp python3-toml git nodejs npm
+          pip3 install --break-system-packages requirements-parser PyYAML || true
+          curl -sSLo /usr/local/bin/flatpak-cargo-generator.py \
+            https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
+          chmod +x /usr/local/bin/flatpak-cargo-generator.py
+          npm install -g flatpak-node-generator || npm install -g @flatpak/node-generator || true
+
+      - name: Generate cargo sources
+        run: |
+          python3 /usr/local/bin/flatpak-cargo-generator.py \
+            src-tauri/Cargo.lock -o packaging/flatpak/cargo-sources.json
+          echo "cargo sources: $(wc -l < packaging/flatpak/cargo-sources.json) lines"
+
+      - name: Generate node sources
+        run: |
+          # The generator name has moved between releases of flatpak-builder-tools; try the
+          # packaged entry point and fall back to running it from source.
+          if command -v flatpak-node-generator >/dev/null; then
+            flatpak-node-generator npm package-lock.json -o packaging/flatpak/node-sources.json
+          else
+            git clone --depth 1 https://github.com/flatpak/flatpak-builder-tools /tmp/fbt
+            pip3 install --break-system-packages /tmp/fbt/node || true
+            python3 -m flatpak_node_generator npm package-lock.json \
+              -o packaging/flatpak/node-sources.json
+          fi
+          echo "node sources: $(wc -l < packaging/flatpak/node-sources.json) lines"
+
+      - name: Validate metadata
+        run: |
+          # Both are hard gates at Flathub review, and both are cheap to check here.
+          appstreamcli validate --no-net packaging/flatpak/io.github.nofayz.Zuno.metainfo.xml
+          desktop-file-validate packaging/flatpak/io.github.nofayz.Zuno.desktop
+
+      - name: Build
+        run: |
+          flatpak-builder --user --disable-rofiles-fuse --force-clean \
+            --install-deps-from=flathub \
+            --repo=repo build-dir packaging/flatpak/io.github.nofayz.Zuno.yml
+          flatpak build-bundle repo zuno.flatpak io.github.nofayz.Zuno
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: flatpak
+          path: |
+            zuno.flatpak
+            packaging/flatpak/cargo-sources.json
+            packaging/flatpak/node-sources.json
+          if-no-files-found: warn
