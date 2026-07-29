@@ -19,6 +19,8 @@ export interface Track {
   playlistItemId?: string;
   viewCount?: number;
   viewCountText?: string;
+  /** Carries an explicit-content badge. Absent means unknown, not "clean". */
+  isExplicit?: boolean;
   localPath?: string;
 }
 
@@ -141,6 +143,14 @@ export type SearchCategory = "song" | "video" | "album" | "artist" | "playlist";
 export interface BrowseLink {
   title: string;
   browseId: string;
+  /**
+   * Opaque selector the feed needs alongside the id.
+   *
+   * Load-bearing for moods and genres: every chip on that page carries the *same*
+   * `browseId` and is told apart only by this. Dropping it asks YouTube for a category page
+   * without saying which category, and makes every chip look like the same destination.
+   */
+  params?: string;
 }
 
 /** One titled row on a browse page. Contents are whatever that row actually holds. */
@@ -160,7 +170,9 @@ export interface BrowsePage {
 }
 
 /** Either a named surface or an explicit feed reached by following a chip. */
-export type BrowseTarget = BrowseSurface | { browseId: string; title: string };
+export type BrowseTarget =
+  | BrowseSurface
+  | { browseId: string; title: string; params?: string };
 
 /** The browse destinations Zuno knows how to open. */
 export type BrowseSurface = "explore" | "charts" | "moods" | "podcasts";

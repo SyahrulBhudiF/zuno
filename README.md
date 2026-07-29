@@ -18,9 +18,9 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/zuno-d.PNG" />
-    <source media="(prefers-color-scheme: light)" srcset="docs/zuno-l.PNG" />
-    <img src="docs/zuno-d.PNG" alt="Zuno home view" width="900" />
+    <source media="(prefers-color-scheme: dark)" srcset="assets/img/zuno-d1-1.2.PNG" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/img/zuno-l4-1.2.PNG" />
+    <img src="assets/img/zuno-d1-1.2.PNG" alt="Zuno home view" width="900" />
   </picture>
 </p>
 
@@ -44,19 +44,70 @@ If you find it useful, **starring the repo** genuinely helps.
 
 <table>
   <tr>
-    <td width="50%"><b>Dark</b></td>
-    <td width="50%"><b>Light</b></td>
+    <td width="50%"><b>Home — dark</b></td>
+    <td width="50%"><b>Home — light</b></td>
   </tr>
   <tr>
-    <td><img src="docs/zuno-d.PNG" alt="Zuno in dark theme" /></td>
-    <td><img src="docs/zuno-l.PNG" alt="Zuno in light theme" /></td>
+    <td><img src="assets/img/zuno-d1-1.2.PNG" alt="Zuno home view in dark theme" /></td>
+    <td><img src="assets/img/zuno-l4-1.2.PNG" alt="Zuno home view in light theme" /></td>
+  </tr>
+  <tr>
+    <td colspan="2"><sub>The "Made for you" carousel, quick destinations and recently played. The carousel can be hidden from Settings.</sub></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%"><b>Lyrics — dark</b></td>
+    <td width="50%"><b>Lyrics — light</b></td>
+  </tr>
+  <tr>
+    <td><img src="assets/img/zuno-d-1.2.PNG" alt="Synced lyrics in dark theme, following the current line" /></td>
+    <td><img src="assets/img/zuno-l2-1.2.PNG" alt="Synced lyrics in light theme, in the two-column layout" /></td>
+  </tr>
+  <tr>
+    <td colspan="2"><sub>Lines fade with distance from the one playing. Click any line to seek, nudge the timing if a match is a little off, and see which source the words came from.</sub></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%"><b>Artist — dark</b></td>
+    <td width="50%"><b>Artist — light</b></td>
+  </tr>
+  <tr>
+    <td><img src="assets/img/zuno-d4-1.2.PNG" alt="An artist page in dark theme, showing popular songs and releases" /></td>
+    <td><img src="assets/img/zuno-l3-1.2.PNG" alt="An artist page in light theme, with the queue panel open" /></td>
+  </tr>
+  <tr>
+    <td colspan="2"><sub>Popular tracks and every release, filtered by albums, singles or EPs — with subscribe and shuffle in reach.</sub></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%"><b>Queue — dark</b></td>
+    <td width="50%"><b>Library — light</b></td>
+  </tr>
+  <tr>
+    <td><img src="assets/img/zuno-d3-1.2.PNG" alt="The queue panel open beside the home view in dark theme" /></td>
+    <td><img src="assets/img/zuno-l5-1.2.PNG" alt="The library songs list, with explicit badges and the now-playing meter" /></td>
+  </tr>
+  <tr>
+    <td colspan="2"><sub>The queue separates what you added by hand from what came next on its own. The library marks what is liked, downloaded and explicit at a glance.</sub></td>
   </tr>
 </table>
 
 <p align="center">
-  <img src="docs/zuno.JPG" alt="Zuno with the sidebar collapsed" width="760" />
+  <img src="assets/img/zuno-l-1.2.PNG" alt="Search open over an artist page" width="860" />
   <br />
-  <sub>Collapsed sidebar — the library rail stays reachable while the content column takes the width.</sub>
+  <sub>Search is one keystroke away — Ctrl+Space from anywhere, across artists, songs, playlists and albums.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/img/zuno-set-1.2.PNG" alt="Zuno settings, showing the library and lyrics options" width="860" />
+  <br />
+  <sub>Settings — quality, lyrics source, translation and text size, downloads and the disk cap.</sub>
 </p>
 
 <br />
@@ -68,14 +119,17 @@ If you find it useful, **starring the repo** genuinely helps.
 | **Multiple tabs** | Each tab keeps its own queue, volume and player state — start an album in one, browse in another, and the first keeps playing |
 | **Offline downloads** | Save a song, a selection, or a whole album or playlist, with its own quality setting and a size cap you control |
 | **Mini player** | A morphing capsule that appears when you tab away; drag it anywhere, hover to expand |
-| **Synced lyrics** | Real-time synced lyrics, not available on the official web client |
+| **Synced lyrics** | Line-by-line lyrics that follow the song — not available on the official web client. Click a line to jump to it, nudge the timing when a match is slightly off, and pick which source is tried first |
+| **Lyrics translation** | Show a translation under each line, in any of twenty languages, with an adjustable text size |
 | **Like & dislike** | Rate from the row, the player or the right-click menu; ratings sync to your YouTube Music account |
 | **Batch actions** | Shift/ctrl-select rows, then queue, download, add to a playlist or remove them together |
 | **Queue control** | Collapses to an artwork rail — end the queue here, build a queue from here, shuffle, clear |
-| **Recommendations** | Personalised suggestions plus a "surprise me" shuffle |
+| **Recommendations** | Personalised suggestions plus a "surprise me" shuffle — hide the carousel if you would rather open on your library |
+| **Browse** | Explore, charts, moods and genres, and podcasts, with mood chips you can drill into |
 | **Local files** | Folders from your own machine sit alongside your library, with a tag editor for fixing metadata |
 | **Discord & Last.fm** | Rich Presence and scrobbling, each toggleable straight from the toolbar |
-| **Account support** | Sign in for your library and playlists, and switch between channels on the same account |
+| **Account support** | Sign in with Google for your library and playlists, and switch between channels on the same account |
+| **Playlist import/export** | Save a playlist to a file and bring it back, on this machine or another |
 | **Desktop integration** | Media keys, minimise to tray, launch at login, remembered window position, rebindable shortcuts |
 | **Light & dark themes** | Follows the OS by default, or pin either one — plus a reduced-motion mode |
 | **Caching** | Playlists, lyrics and artwork are cached, so revisits are instant |

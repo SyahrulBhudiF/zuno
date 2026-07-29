@@ -1,8 +1,6 @@
 import {
-  createContext,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
-  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -12,6 +10,10 @@ import {
 } from "react";
 import { CheckIcon, CloseIcon, CompassIcon, DownloadIcon, HeartActiveIcon, HeartIcon, LinkIcon, ListIcon, PencilIcon, PlaylistAddIcon, PlaylistIcon, SearchIcon, SkipNextIcon, TrashIcon } from "@/ui/icons";
 import type { Playlist, Track, TrackRating } from "../../datasource/types";
+import {
+  TrackContextMenuContext,
+  type TrackContextMenuValue,
+} from "./trackContextMenuContext";
 import type { LibraryController } from "../../player/LibraryController";
 import { logInternalError } from "../../internal/logging";
 import {
@@ -58,22 +60,6 @@ interface MenuPosition {
   y: number;
 }
 
-interface TrackContextMenuValue {
-  openTrackMenu: (
-    event: ReactMouseEvent,
-    track: Track,
-    context?: {
-      playlist?: Playlist;
-      onRemove?: (track: Track) => void;
-    },
-  ) => void;
-  /** Pass `batch` to add several tracks at once; `track` is what the header shows. */
-  openPlaylistPicker: (track: Track, batch?: Track[]) => void;
-  toggleTrackLike: (track: Track) => Promise<void>;
-  /** Three-valued rating. toggleTrackLike is the like-only shorthand over the same path. */
-  rateTrack: (track: Track, rating: TrackRating) => Promise<void>;
-}
-
 interface TrackContextMenuProviderProps {
   children: ReactNode;
   libraryController: LibraryController;
@@ -81,15 +67,9 @@ interface TrackContextMenuProviderProps {
   onOpenRelated?: (track: Track) => void;
 }
 
-const TrackContextMenuContext = createContext<TrackContextMenuValue | null>(null);
-
-export function useTrackContextMenu(): TrackContextMenuValue {
-  const value = useContext(TrackContextMenuContext);
-  if (!value) {
-    throw new Error("useTrackContextMenu must be used within TrackContextMenuProvider.");
-  }
-  return value;
-}
+/* Re-exported so the dozen existing `from "./TrackContextMenu"` imports keep working — the
+   context itself has to live outside this file, see trackContextMenuContext.ts. */
+export { useTrackContextMenu } from "./trackContextMenuContext";
 
 export function TrackContextMenuProvider({
   children,

@@ -20,6 +20,7 @@ export type LoaderVariant =
   | "ascii-bounce"
   | "morph"
   | "comet"
+  | "music"
   | "scramble"
   | "metaballs"
   | "newton"
@@ -57,7 +58,7 @@ export interface LoaderProps {
 // Reduced motion keeps a calm opacity pulse and drops every transform.
 const REDUCED = {
   animate: { opacity: [1, 0.4, 1] },
-  transition: { duration: 1.4, ease: EASE_IN_OUT, repeat: Infinity },
+  transition: { duration: 1.2, ease: EASE_IN_OUT, repeat: Infinity },
 };
 
 export function Loader({
@@ -99,9 +100,13 @@ export function Loader({
       )}
       {variant === "newton" && <Newton size={size} speed={speed} reduce={reduce} />}
       {variant === "helix" && <Helix size={size} speed={speed} reduce={reduce} />}
+      {variant === "ascii" && <Ascii frames={ASCII_SETS['ascii-blocks']} size={size} speed={speed} reduce={reduce} />}
       {variant === "percent" && (
         <Percent size={size} speed={speed} reduce={reduce} value={value} />
       )}
+      {variant === "music" && (
+  <Music size={size} speed={speed} reduce={reduce} />
+)}
       <span className="sr-only">{label}</span>
     </span>
   );
@@ -189,6 +194,216 @@ const OPACITY = [
   0.2,
   0.1,
 ];
+
+export function Music({ size, speed, reduce }: PartProps) {
+  const bars = 23;
+
+  const gap = size * 0.03;
+  const width = (size - gap * (bars - 1)) / bars;
+
+  const [levels, setLevels] = useState<number[]>(
+    () => Array(bars).fill(0.35),
+  );
+
+  useEffect(() => {
+    if (reduce) return;
+
+    let raf = 0;
+    let time = 0;
+
+    const animate = () => {
+      time += 0.018 * speed;
+
+      setLevels((prev) =>
+        prev.map((old, i) => {
+          const x = i / (bars - 1);
+
+          // Louder in the middle, softer on the edges.
+          const envelope =
+            0.35 +
+            Math.exp(-Math.pow((x - 0.5) / 0.28, 2)) * 0.65;
+
+          // Organic moving waves.
+          const low =
+            Math.sin(time * 0.85 + x * Math.PI * 2.2) * 0.28;
+
+          const mid =
+            Math.sin(time * 1.9 - x * Math.PI * 7.4) * 0.16;
+
+          const high =
+            Math.cos(time * 3.8 + x * Math.PI * 15.0) * 0.06;
+
+          // Traveling energy pulse.
+          const pulsePos =
+            (Math.sin(time * 0.45) + 1) / 2;
+
+          const pulse =
+            Math.exp(
+              -Math.pow(
+                (x - pulsePos) / 0.11,
+                2,
+              ),
+            ) * 0.42;
+
+          let target =
+            (0.46 + low + mid + high + pulse) *
+            envelope;
+
+          target = Math.max(0.08, Math.min(1, target));
+
+          // Smooth movement.
+          return old * 0.78 + target * 0.22;
+        }),
+      );
+
+      raf = requestAnimationFrame(animate);
+    };
+
+    raf = requestAnimationFrame(animate);
+
+    return () => cancelAnimationFrame(raf);
+  }, [reduce, speed]);
+
+  if (reduce) {
+    return (
+      <span
+        className="flex items-end justify-center"
+        style={{
+          gap,
+          height: size,
+        }}
+      >
+        {Array.from({ length: bars }).map((_, i) => {
+          const center =
+            1 -
+            Math.abs(i - (bars - 1) / 2) /
+              ((bars - 1) / 2);
+
+          return (
+            <motion.span
+              key={i}
+              className="rounded-full bg-current"
+              style={{
+                width: width * (0.82 + center * 0.22),
+                height: size,
+                originY: 1,
+              }}
+              animate={{
+                opacity: [0.45, 1, 0.45],
+              }}
+              transition={{
+                duration: 1.8,
+                repeat: Infinity,
+                delay: i * 0.03,
+              }}
+            />
+          );
+        })}
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className="flex items-end justify-center"
+      style={{
+        gap,
+        height: size,
+      }}
+    >
+      {levels.map((level, i) => {
+        const center =
+          Math.exp(
+            -Math.pow(
+              (i - (bars - 1) / 2) /
+                (bars / 4),
+              2,
+            ),
+          );
+
+        return (
+          <motion.span
+            key={i}
+            className="bg-current rounded-full"
+            animate={{
+              scaleY: level,
+              opacity: 0.35 + level * 0.65,
+            }}
+            transition={{
+              type: "spring",
+              stiffness: 340,
+              damping: 24,
+              mass: 0.22,
+            }}
+            style={{
+              width:
+                width *
+                (0.82 + center * 0.25),
+
+              height: size,
+
+              originY: 1,
+
+              borderRadius: 9999,
+
+              filter:
+                "drop-shadow(0 0 4px currentColor)",
+
+              willChange:
+                "transform, opacity",
+            }}
+          />
+        );
+      })}
+    </span>
+  );
+}
+
+interface MusicVisualizerProps {
+  /** Odd counts keep a single bar exactly on the centre, which is what the ramp is built on. */
+  bars?: number;
+  className?: string;
+}
+
+/**
+ * Equaliser bars in the brand accent.
+ *
+ * Colour and timing are both a function of one thing — how far a bar sits from the middle —
+ * so both are computed here rather than written out as `:nth-child` rules. Fifteen hand-kept
+ * pairs in the stylesheet could only ever restate this ramp, and would silently stop covering
+ * the bars the moment the count changed.
+ *
+ * The shades are `color-mix` against `--color-primary` rather than fixed hex, so the whole
+ * thing follows the brand accent and works on any surface: mixing toward transparent means
+ * the faded edges pick up whatever is behind them instead of a guessed background.
+ */
+export function MusicVisualizer({ bars = 15, className }: MusicVisualizerProps) {
+  const centre = (bars - 1) / 2;
+
+  return (
+    <div className={cn("music", className)} aria-hidden="true">
+      {Array.from({ length: bars }, (_, index) => {
+        // 0 in the middle, 1 at either edge.
+        const distance = centre === 0 ? 0 : Math.abs(index - centre) / centre;
+
+        return (
+          <div
+            key={index}
+            className="music-bar"
+            style={{
+              background: `color-mix(in oklab, var(--color-primary) ${Math.round(
+                100 - distance * 45,
+              )}%, transparent)`,
+              // The centre leads and the edges trail, so the motion reads as coming from
+              // the middle out rather than as fifteen bars bouncing independently.
+              animationDelay: `${(0.1 + distance * 0.4).toFixed(0)}s`,
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
 
 export function SpinnerSteps({
   size = 24,

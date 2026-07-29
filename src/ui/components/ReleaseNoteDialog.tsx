@@ -5,6 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { cn } from "@/lib/utils";
 import { GitHubIcon, ListIcon } from "@/ui/icons";
 import { parseReleaseNote, RELEASE_NOTE_BODY } from "../../internal/releaseNote";
+import { ExternalLinkButton } from "./ExternalLinkButton";
 import { GITHUB_NEW_ISSUE_URL, GITHUB_RELEASES_URL } from "../links";
 
 interface ReleaseNoteDialogProps {
@@ -91,12 +92,12 @@ export function ReleaseNoteDialog({ version, onDismiss }: ReleaseNoteDialogProps
             </p>
 
             <div className="mt-5 flex flex-wrap items-center gap-2">
-              <LinkButton
+              <ExternalLinkButton
                 icon={<ListIcon size={15} aria-hidden="true" />}
                 label="Release notes"
                 url={GITHUB_RELEASES_URL}
               />
-              <LinkButton
+              <ExternalLinkButton
                 icon={<GitHubIcon size={15} aria-hidden="true" />}
                 label="Report an issue"
                 url={GITHUB_NEW_ISSUE_URL}
@@ -123,23 +124,3 @@ export function ReleaseNoteDialog({ version, onDismiss }: ReleaseNoteDialogProps
   );
 }
 
-function LinkButton({
-  icon,
-  label,
-  url,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  url: string;
-}) {
-  return (
-    <button
-      type="button"
-      className="flex items-center gap-2 rounded-full bg-card px-3.5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      onClick={() => void openUrl(url)}
-    >
-      {icon}
-      {label}
-    </button>
-  );
-}

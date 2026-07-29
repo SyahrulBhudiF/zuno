@@ -198,20 +198,6 @@ time,
   }
 }
 
-/*
- * Now-playing level meter in track rows. Tailwind only emits keyframes for its own named
- * animations, so an arbitrary `animate-[rowEq_...]` has to declare them here.
- */
-@keyframes rowEq {
-  0%,
-  100% {
-    transform: scaleY(0.3);
-  }
-  50% {
-    transform: scaleY(1);
-  }
-}
-
 /* Selection picks up the brand accent instead of the browser's default blue. */
 ::selection {
   background: color-mix(in oklab, var(--color-primary) 30%, transparent);
@@ -426,3 +412,57 @@ html[data-platform-linux] *::after {
   animation: lyrics-drift 44s ease-in-out infinite alternate;
   will-change: transform;
 }
+
+
+/*
+ * Music visualiser bars.
+ *
+ * `@keyframes` lives here, at the top level, and not inside `.music` where it was: CSS
+ * nesting accepts nested style rules and conditional at-rules, but not `@keyframes`, so the
+ * compiler dropped it without a word. The bars kept their `animation: play-music` reference
+ * to an animation that no longer existed, which left them with no height at all — the only
+ * height they ever had came from those keyframes — so every bar rendered 0px tall.
+ *
+ * Animating `transform` rather than `height`: fifteen bars resizing on every frame is
+ * fifteen layout passes, where a scale is composited.
+ */
+@keyframes play-music {
+  0%,
+  100% {
+    transform: scaleY(0.18);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.music {
+  /* Overridable per usage — this sits in a settings header, not on a hero. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--music-gap, 3px);
+  width: var(--music-width, 132px);
+  height: var(--music-height, 34px);
+}
+
+/*
+ * Shape and timing only. Each bar's colour and animation-delay are set inline by
+ * MusicVisualizer, because both are derived from the bar's distance from the centre — a
+ * calculation the component already does, and one that fifteen hand-written `:nth-child`
+ * rules could only restate by hand and get out of step with the bar count.
+ */
+.music-bar {
+  flex: 1 1 0;
+  height: 100%;
+  border-radius: 9999px;
+  /*
+   * The resting scale is set here as well as in the keyframes. Paper-PC mode kills every
+   * animation with `animation: none !important`, and a bar whose height depends entirely on
+   * its animation collapses to nothing under it — the same failure this block already had.
+   */
+  transform: scaleY(0.18);
+  animation: play-music 2s ease-in-out infinite;
+}
+
+.mySong { border-radius: 10px; }

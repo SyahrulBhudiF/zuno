@@ -9,7 +9,6 @@ import {
   type PlatformId,
 } from "../releases";
 import { Header } from "@/App";
-
 const PLATFORM_LABEL: Record<PlatformId, string> = {
   windows: "Windows",
   "macos-arm": "macOS",
@@ -95,6 +94,7 @@ export function Hero({
 
           <div className="max-w-4xl">
            <div className="flex items-center text-4xl font-bold gap-2 p-2 bg-black w-fit rounded-full pr-6 "><Character/>zuno_</div> 
+
             <h1 className="max-w-[12ch] text-balance text-[clamp(42px,8vw,80px)] font-semibold leading-[0.9] tracking-[-0.065em] text-foreground">
               <span className="block">The desktop app</span>
 

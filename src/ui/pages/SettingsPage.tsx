@@ -52,7 +52,6 @@ import {
 } from "../settings/theme";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
   checkForUpdates,
@@ -83,6 +82,7 @@ import {
 import { setPaperPcMode, usePaperPcMode } from "../settings/paperPcMode";
 import { setMadeForYouVisible, useMadeForYouVisible } from "../settings/homeSections";
 import { GoogleSignInButton } from "../components/GoogleSignInButton";
+import { ExternalLinkButton } from "../components/ExternalLinkButton";
 import {
   AUTO_LYRICS_SOURCE,
   setPreferredLyricsSourceId,
@@ -173,6 +173,9 @@ import {
   setOfflineMaxBytes,
   useOfflineState,
 } from "../../player/offlineStore";
+
+
+
 
 /*
  * Label + description pair used by every settings row.
@@ -334,9 +337,6 @@ function SettingsCardHeader({
 }
 
 /** Quiet outbound links in the page header. */
-const SETTINGS_LINK =
-  "flex items-center gap-2 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-md";
-
 type SettingsTab = "about" | "appearance" | "playback" | "system" | "shortcuts" | "window";
 
 const SETTINGS_TABS: Array<{
@@ -788,26 +788,21 @@ export function SettingsPage({
         </div>
 
         {/*
-          Quiet text links, not filled buttons: they are destinations you leave the app for,
-          and at that weight they can sit up here without competing with the categories.
+          Card pills rather than the bare text links these were: at text weight they read as
+          part of the description above and were routinely missed. They stay unfilled so they
+          still sit below the category nav in the hierarchy.
         */}
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-          <button
-            className={SETTINGS_LINK}
-            type="button"
-            onClick={() => void openUrl(GITHUB_REPOSITORY_URL)}
-          >
-            <StarIcon size={16} aria-hidden="true" />
-            Star on GitHub
-          </button>
-          <button
-            className={SETTINGS_LINK}
-            type="button"
-            onClick={() => void openUrl(GITHUB_NEW_ISSUE_URL)}
-          >
-            <BugIcon size={16} aria-hidden="true" />
-            Report an issue
-          </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <ExternalLinkButton
+            icon={<StarIcon size={16} aria-hidden="true" />}
+            label="Star on GitHub"
+            url={GITHUB_REPOSITORY_URL}
+          />
+          <ExternalLinkButton
+            icon={<BugIcon size={16} aria-hidden="true" />}
+            label="Report an issue"
+            url={GITHUB_NEW_ISSUE_URL}
+          />
         </div>
       </header>
 
@@ -1062,13 +1057,13 @@ export function SettingsPage({
                       {updateStatus === "installing" ? "Installing..." : "Install"}
                     </button>
                   )}
-                  <button
-                    className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-card disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                    type="button"
-                    onClick={() => void openUrl(updateResult.releaseUrl)}
-                  >
-                    {updateResult.canInstall ? "View changes" : "Download"}
-                  </button>
+                  {/* The one link where a silent failure strands the user: if this cannot
+                      open, they have no other route to the download. */}
+                  <ExternalLinkButton
+                    label={updateResult.canInstall ? "View changes" : "Download"}
+                    url={updateResult.releaseUrl}
+                    className="px-4 py-2"
+                  />
                 </div>
               )}
               {updateStatus === "current" && (

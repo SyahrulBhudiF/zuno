@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { propsEqualIgnoringHandlers } from "../../internal/propsEqual";
 import { Tooltip } from "@/components/motion/tooltip";
 import { CheckActiveIcon, CheckIcon, DislikeActiveIcon, DislikeIcon, DownloadIcon, HeartActiveIcon, HeartIcon, ListIcon, PlaylistAddIcon, PlayActiveIcon } from "@/ui/icons";
-import { Loader } from "@/components/motion/loader";
+import { Loader, MusicVisualizer } from "@/components/motion/loader";
 import {
   getOfflineStatus,
   queueDownload,
@@ -280,6 +280,67 @@ function RatingActions({ track }: { track: Track }) {
  * `trailing` and `children` are still compared, and a call site passing fresh JSX for either
  * will still re-render its rows. That is honest — those are content, not callbacks.
  */
+/**
+ * The explicit-content stamp.
+ *
+ * A muted square rather than the brand accent: it is a content warning, not a feature, and
+ * in red it would read as the app drawing attention to the song rather than labelling it.
+ * The letter is decorative — the accessible name is the full word, since "E" read aloud on
+ * its own means nothing.
+ */
+function ExplicitBadge() {
+  return (
+    <span
+      title="Explicit"
+      aria-label="Explicit"
+      role="img"
+      className="grid size-[15px] shrink-0 place-items-center rounded-[3px] bg-muted-foreground/85 text-[10px] font-bold leading-none text-background"
+    >
+      <span aria-hidden="true">E</span>
+    </span>
+  );
+}
+
+/** Shared by the always-on slot and the hover affordance, so the two cannot drift apart. */
+function SelectionCheckbox({
+  title,
+  isSelected,
+  onToggle,
+}: {
+  title: string;
+  isSelected: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <span
+      role="checkbox"
+      aria-checked={isSelected}
+      tabIndex={0}
+      aria-label={`Select ${title}`}
+      className={cn(
+        "grid size-6 shrink-0 place-items-center rounded-md border transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        isSelected
+          ? "border-primary bg-primary text-primary-foreground"
+          : "border-border text-transparent hover:border-muted-foreground",
+      )}
+      onClick={(event) => {
+        // Without this the row's own click handler also fires and starts playback.
+        event.stopPropagation();
+        onToggle();
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        event.stopPropagation();
+        onToggle();
+      }}
+    >
+      <CheckIcon size={14} aria-hidden="true" />
+    </span>
+  );
+}
+
 export const TrackRow = memo(function TrackRow({
   track,
   index,
@@ -338,6 +399,10 @@ export const TrackRow = memo(function TrackRow({
   );
   const handleToggleSelected = useCallback(() => handlersRef.current.onToggleSelected?.(), []);
 
+  /* Whether this list does multi-select at all. Browse and search rows do not pass a handler,
+     and must keep their play-on-hover glyph rather than gain a checkbox that does nothing. */
+  const canSelect = Boolean(onToggleSelected);
+
   return (
     <button
       {...buttonProps}
@@ -361,32 +426,12 @@ export const TrackRow = memo(function TrackRow({
       {/* While a selection is open the index column becomes a checkbox. It replaces the
           number rather than sitting beside it so the row width never changes — a list that
           reflows the moment you select something is unusable for range-selecting. */}
-      {isSelectionActive && onToggleSelected ? (
-        <span
-          role="checkbox"
-          aria-checked={isSelected}
-          tabIndex={0}
-          aria-label={`Select ${track.title}`}
-          className={cn(
-            "grid size-6 shrink-0 place-items-center rounded-md border transition-colors",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            isSelected
-              ? "border-primary bg-primary text-primary-foreground"
-              : "border-border text-transparent hover:border-muted-foreground",
-          )}
-          onClick={(event) => {
-            event.stopPropagation();
-            handleToggleSelected();
-          }}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" && event.key !== " ") return;
-            event.preventDefault();
-            event.stopPropagation();
-            handleToggleSelected();
-          }}
-        >
-          <CheckIcon size={14} aria-hidden="true" />
-        </span>
+      {isSelectionActive && canSelect ? (
+        <SelectionCheckbox
+          title={track.title}
+          isSelected={isSelected}
+          onToggle={handleToggleSelected}
+        />
       ) : (
       /* The position number is only useful until you have decided to act on the row, so it
           gives way to a play glyph on hover — and to a level meter once this row is the one
@@ -401,7 +446,23 @@ export const TrackRow = memo(function TrackRow({
           {index + 1}
         </span>
 
-        {!isCurrent && (
+        {/*
+          On a list that supports multi-select, hover offers the checkbox instead of the play
+          glyph. Selection was previously unreachable without already having a selection: the
+          box only appeared once `isSelectionActive`, and the only way in was a ctrl-click
+          nothing advertised. The row itself still plays on click, so nothing is lost.
+        */}
+        {!isCurrent && canSelect && (
+          <span className="absolute inset-0 grid place-items-center opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100">
+            <SelectionCheckbox
+              title={track.title}
+              isSelected={isSelected}
+              onToggle={handleToggleSelected}
+            />
+          </span>
+        )}
+
+        {!isCurrent && !canSelect && (
           <PlayActiveIcon
             size={14}
             className="absolute inset-0 m-auto opacity-0 transition-opacity group-hover/row:opacity-100"
@@ -410,15 +471,12 @@ export const TrackRow = memo(function TrackRow({
         )}
 
         {isCurrent && (
-          <span className="absolute inset-0 flex items-center justify-end gap-[2px]" aria-hidden="true">
+          <span className="absolute inset-0 flex items-center justify-end" aria-hidden="true">
             {isPlaying ? (
-              [0, 1, 2].map((bar) => (
-                <span
-                  key={bar}
-                  className="h-3 w-[2px] origin-bottom rounded-full bg-primary motion-safe:animate-[rowEq_900ms_ease-in-out_infinite]"
-                  style={{ animationDelay: `${bar * 140}ms` }}
-                />
-              ))
+              <MusicVisualizer
+                bars={4}
+                className="[--music-gap:2px] [--music-height:13px] [--music-width:17px]"
+              />
             ) : (
               <PlayActiveIcon size={14} className="text-primary" />
             )}
@@ -437,13 +495,21 @@ export const TrackRow = memo(function TrackRow({
       ) : null}
 
       <span className="flex min-w-0 flex-1 flex-col">
-        <span
-          className={cn(
-            "truncate text-sm font-medium",
-            isCurrent ? "text-primary" : "text-foreground",
-          )}
-        >
-          {track.title}
+        {/*
+          The badge sits beside the title rather than inside it: as a sibling it keeps its
+          own width while `truncate` eats the title, so a long name shortens instead of
+          pushing the stamp out of the row.
+        */}
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span
+            className={cn(
+              "truncate text-sm font-medium",
+              isCurrent ? "text-primary" : "text-foreground",
+            )}
+          >
+            {track.title}
+          </span>
+          {track.isExplicit && <ExplicitBadge />}
         </span>
         <ArtistLinks
           className="truncate text-xs text-muted-foreground"

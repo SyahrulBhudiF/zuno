@@ -708,6 +708,39 @@ export class YouTubeMusicDataSource extends DataSource {
     return visit(root);
   }
 
+  /**
+   * The `params` blob that rides alongside a browse id.
+   *
+   * Read from the same endpoint object as the id and kept with it: for moods and genres the
+   * id is a constant and this is the only thing that says which mood.
+   */
+  private findBrowseParams(root: unknown): string | undefined {
+    const seen = new WeakSet<object>();
+
+    const visit = (value: unknown): string | undefined => {
+      if (!value || typeof value !== "object") return undefined;
+      if (seen.has(value)) return undefined;
+      seen.add(value);
+
+      const candidate = value as { browseId?: unknown; params?: unknown; payload?: unknown };
+      // Only the params sitting on the same node as a browseId: an endpoint can carry other
+      // params (search, continuations) that mean something entirely different.
+      if (typeof candidate.browseId === "string" && typeof candidate.params === "string") {
+        return candidate.params;
+      }
+      const fromPayload = visit(candidate.payload);
+      if (fromPayload) return fromPayload;
+
+      for (const child of Object.values(value)) {
+        const result = visit(child);
+        if (result) return result;
+      }
+      return undefined;
+    };
+
+    return visit(root);
+  }
+
   private findAlbumPlaylistId(root: unknown): string | undefined {
     const seen = new WeakSet<object>();
 
@@ -955,7 +988,21 @@ export class YouTubeMusicDataSource extends DataSource {
       playlistItemId: this.getPlaylistItemId(item),
       viewCount: this.parseViewCount(viewCountText),
       viewCountText,
+      isExplicit: this.isExplicitItem(item),
     };
+  }
+
+  /**
+   * Whether YouTube tagged this item explicit.
+   *
+   * Read from the inline badges by icon type rather than by the badge's label, which is
+   * localised — matching on "Explicit" would quietly stop working for anyone not using the
+   * app in English.
+   */
+  private isExplicitItem(item: MusicItem): boolean | undefined {
+    const badges = (item as { badges?: Array<{ icon_type?: string }> }).badges;
+    if (!Array.isArray(badges)) return undefined;
+    return badges.some((badge) => badge?.icon_type === "MUSIC_EXPLICIT_BADGE");
   }
 
   private toAlbumTrack(item: MusicItem, album: Album): Track | null {
@@ -5301,9 +5348,11 @@ export class YouTubeMusicDataSource extends DataSource {
    */
   async getBrowsePage(target: BrowseTarget): Promise<BrowsePage> {
     const surface = target;
+    /* `params` is part of the key: mood categories all share one browseId, so keying on the
+       id alone would serve the first mood opened for every mood thereafter. */
     const cacheKey = typeof surface === "string"
       ? `youtube-music:browse:v2:${surface}`
-      : `youtube-music:browse:v2:id:${surface.browseId}`;
+      : `youtube-music:browse:v2:id:${surface.browseId}:${surface.params ?? ""}`;
     const cached = await getCachedJson<BrowsePage>(cacheKey);
     if (cached?.shelves.length) {
       void this.refreshBrowsePage(surface, cacheKey).catch(() => {});
@@ -5317,8 +5366,8 @@ export class YouTubeMusicDataSource extends DataSource {
     cacheKey: string,
   ): Promise<BrowsePage> {
     const target = typeof surface === "string"
-      ? YouTubeMusicDataSource.BROWSE_IDS[surface]
-      : { ids: [surface.browseId], title: surface.title };
+      ? { ...YouTubeMusicDataSource.BROWSE_IDS[surface], params: undefined as string | undefined }
+      : { ids: [surface.browseId], title: surface.title, params: surface.params };
     const client = await this.getMusicClient();
     let response: unknown = null;
     let usedBrowseId: string | null = null;
@@ -5326,7 +5375,12 @@ export class YouTubeMusicDataSource extends DataSource {
 
     for (const browseId of target.ids) {
       try {
-        response = await this.executeMusicBrowse(client, { browseId });
+        /* `params` is only sent when the chip carried one. A browse that does not expect it
+           rejects the request rather than ignoring it. */
+        response = await this.executeMusicBrowse(client, {
+          browseId,
+          ...(target.params ? { params: target.params } : {}),
+        });
         usedBrowseId = browseId;
         break;
       } catch (error) {
@@ -5423,6 +5477,29 @@ export class YouTubeMusicDataSource extends DataSource {
       }
     }
 
+    /*
+     * Still nothing, on a page whose whole content is navigation chips. Moods & genres is
+     * exactly this, so the flat fallback above — which only knows how to collect songs,
+     * albums, playlists and artists — cannot rescue it.
+     */
+    if (shelves.length === 0) {
+      const links = this.collectBrowseLinksFromMemo(response);
+      if (links.length > 0) {
+        shelves.push({
+          title: target.title,
+          tracks: [],
+          albums: [],
+          playlists: [],
+          artists: [],
+          links,
+        });
+        logInternalWarn("YouTubeMusicDataSource.refreshBrowsePage using link fallback", {
+          surface,
+          linkCount: links.length,
+        });
+      }
+    }
+
     const page: BrowsePage = { title: target.title, shelves };
     if (shelves.length > 0) await setCachedJson(cacheKey, page);
 
@@ -5453,7 +5530,9 @@ export class YouTubeMusicDataSource extends DataSource {
 
       const title = String(candidate.button_text ?? "").trim();
       const browseId = this.findBrowseId(candidate.endpoint);
-      if (title && browseId) links.push({ title, browseId });
+      if (title && browseId) {
+        links.push({ title, browseId, params: this.findBrowseParams(candidate.endpoint) });
+      }
     }
 
     return links;
@@ -5498,9 +5577,64 @@ export class YouTubeMusicDataSource extends DataSource {
       for (const shelf of memo.getType(requireYouTubeI().YTNodes.MusicShelf) as unknown as ShelfNode[]) {
         sections.push({ title: readTitle(shelf.title), node: shelf.contents });
       }
+      /*
+       * Grids are the third shelf shape, and the only one Moods & genres and Podcasts use —
+       * their pages are grids of navigation chips, not carousels of music. Reading only the
+       * two music shelf types found no sections on those surfaces at all, and the flat
+       * fallback below could not save them either because it collects songs and albums, and
+       * a mood chip is neither. Both surfaces rendered completely empty.
+       *
+       * `contents` is Grid's own alias for `items`, so it needs no special handling here.
+       */
+      for (const grid of memo.getType(requireYouTubeI().YTNodes.Grid) as unknown as ShelfNode[]) {
+        sections.push({ title: readTitle(grid.header?.title), node: grid.contents });
+      }
+      // Drilling into a mood returns its playlists in this shelf rather than a carousel.
+      for (const shelf of memo.getType(requireYouTubeI().YTNodes.MusicPlaylistShelf) as unknown as ShelfNode[]) {
+        sections.push({ title: readTitle(shelf.title), node: shelf.contents });
+      }
     }
 
     return sections;
+  }
+
+  /**
+   * Every navigation chip in a response, straight from the parser memo.
+   *
+   * The last line of defence for a chip-only surface. `collectBrowseLinks` reads the chips
+   * out of a section it was handed, so it can only find what section detection already
+   * found — and section detection is the part that breaks when YouTube reshapes a feed. This
+   * goes at the memo directly, which is a flat index of every parsed node and does not care
+   * how the page is nested.
+   */
+  private collectBrowseLinksFromMemo(root: unknown): BrowseLink[] {
+    const response = root as ParsedMusicResponse;
+    const links: BrowseLink[] = [];
+    const seen = new Set<string>();
+
+    for (const memo of [response.contents_memo, response.continuation_contents_memo]) {
+      if (!memo) continue;
+
+      const buttons = memo.getType(
+        requireYouTubeI().YTNodes.MusicNavigationButton,
+      ) as unknown as Array<{ button_text?: unknown; endpoint?: unknown }>;
+
+      for (const button of buttons) {
+        const title = String(button.button_text ?? "").trim();
+        const browseId = this.findBrowseId(button.endpoint);
+        if (!title || !browseId) continue;
+
+        const params = this.findBrowseParams(button.endpoint);
+        /* Keyed on both, because every mood chip shares one browseId — deduping on the id
+           alone would collapse the entire Moods & genres page to a single chip. */
+        const key = `${browseId}:${params ?? ""}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        links.push({ title, browseId, params });
+      }
+    }
+
+    return links;
   }
 
   async getStreamData(track: Track): Promise<StreamData> {

@@ -71,7 +71,9 @@ export function BrowsePage({
    * a mood is a filter of the feed you are already in, not a separate destination, and going
    * back should return you to the shelf you tapped from.
    */
-  const [drillDown, setDrillDown] = useState<Array<{ browseId: string; title: string }>>([]);
+  const [drillDown, setDrillDown] = useState<
+    Array<{ browseId: string; title: string; params?: string }>
+  >([]);
   const isDownloads = surface === "downloads" && drillDown.length === 0;
   const target: BrowseTarget = drillDown[drillDown.length - 1]
     ?? (surface === "downloads" ? "explore" : surface);
@@ -296,7 +298,12 @@ export function BrowsePage({
           onOpenArtist={onOpenArtist}
           onOpenPlaylist={onOpenPlaylist}
           onFollowLink={(link) =>
-            setDrillDown((stack) => [...stack, { browseId: link.browseId, title: link.title }])}
+            /* `params` travels with the id: for a mood the id is a constant and this is the
+               only thing identifying which mood was tapped. */
+            setDrillDown((stack) => [
+              ...stack,
+              { browseId: link.browseId, title: link.title, params: link.params },
+            ])}
         />
       )}
     </div>

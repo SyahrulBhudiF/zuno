@@ -10,7 +10,7 @@ import {
   ShuffleIcon,
   TrashIcon,
 } from "@/ui/icons";
-import { Loader } from "@/components/motion/loader";
+import { Loader, MusicVisualizer } from "@/components/motion/loader";
 import { libraryController } from "../../../player/playerStore";
 import { logInternalError } from "../../../internal/logging";
 import type { Track } from "../../../datasource/types";
@@ -683,18 +683,23 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
               artworkUrl={currentTrack.artworkUrl}
               iconSize={collapsed ? 20 : 18}
             />
+            {/*
+              The same meter the track rows use — one now-playing indicator across the app,
+              rather than two hand-rolled ones that drift apart.
+
+              On a scrim covering the whole cover, not floated over the bottom edge: these are
+              accent-tinted bars a few pixels tall, and against a busy album cover they were
+              effectively invisible. Same treatment as the hover position badge below.
+            */}
             {isPlaying && (
               <span
-                className="absolute inset-x-0 bottom-1 flex items-end justify-center gap-[2px]"
+                className="absolute inset-0 grid place-items-center rounded bg-background/60 backdrop-blur-[2px]"
                 aria-hidden="true"
               >
-                {[0, 1, 2].map((bar) => (
-                  <span
-                    key={bar}
-                    className="h-2 w-[2px] origin-bottom rounded-full bg-primary motion-safe:animate-[rowEq_900ms_ease-in-out_infinite]"
-                    style={{ animationDelay: `${bar * 140}ms` }}
-                  />
-                ))}
+                <MusicVisualizer
+                  bars={4}
+                  className="[--music-gap:2px] [--music-height:16px] [--music-width:20px]"
+                />
               </span>
             )}
           </span>

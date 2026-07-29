@@ -1,8 +1,6 @@
 import {
-  createContext,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
-  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -16,21 +14,14 @@ import type { Album, Playlist } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
 import { isLocalPlaylist } from "../../player/localPlaylists";
 import { exportPlaylist } from "../../player/playlistTransfer";
+import {
+  PlaylistContext,
+  type PlaylistContextMenuValue,
+} from "./playlistContextMenuContext";
 
-interface PlaylistContextMenuValue {
-  openPlaylistMenu: (event: ReactMouseEvent, playlist: Playlist) => void;
-  openAlbumMenu: (event: ReactMouseEvent, album: Album) => void;
-}
-
-const PlaylistContext = createContext<PlaylistContextMenuValue | null>(null);
-
-export function usePlaylistContextMenu(): PlaylistContextMenuValue {
-  const value = useContext(PlaylistContext);
-  if (!value) {
-    throw new Error("usePlaylistContextMenu must be used within PlaylistContextMenuProvider.");
-  }
-  return value;
-}
+/* Re-exported so existing `from "./PlaylistContextMenu"` imports keep working; the context
+   itself has to live outside this file. See playlistContextMenuContext.ts. */
+export { usePlaylistContextMenu } from "./playlistContextMenuContext";
 
 export function PlaylistContextMenuProvider({
   children,
