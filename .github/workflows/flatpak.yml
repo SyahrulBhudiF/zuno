@@ -54,6 +54,19 @@ jobs:
             -o packaging/flatpak/node-sources.json
           echo "node sources: $(wc -l < packaging/flatpak/node-sources.json) lines"
 
+      - name: Add flathub and install the runtime
+        run: |
+          flatpak remote-add --user --if-not-exists flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+          # The SDK extensions track the freedesktop base, not the GNOME version — GNOME 46
+          # sits on 23.08, so rust-stable//46 does not exist and the build would fail
+          # resolving it.
+          flatpak install --user -y --noninteractive flathub \
+            org.gnome.Platform//46 \
+            org.gnome.Sdk//46 \
+            org.freedesktop.Sdk.Extension.rust-stable//23.08 \
+            org.freedesktop.Sdk.Extension.node20//23.08
+
       - name: Validate metadata
         run: |
           # Both are hard gates at Flathub review, and both are cheap to check here.
