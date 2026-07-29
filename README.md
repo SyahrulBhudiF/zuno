@@ -14,6 +14,7 @@
   <a href="https://github.com/noFAYZ/zuno/releases/latest"><img src="https://img.shields.io/github/package-json/v/noFAYZ/zuno?style=for-the-badge&color=ff3d00&label=version" alt="Version"></a>
   <a href="https://github.com/noFAYZ/zuno/blob/main/LICENSE"><img src="https://img.shields.io/github/license/noFAYZ/zuno?style=for-the-badge&color=ff6900" alt="License"></a>
   <a href="https://github.com/noFAYZ/zuno/stargazers"><img src="https://img.shields.io/github/stars/noFAYZ/zuno?style=for-the-badge&color=ff9700&label=stars" alt="Stars"></a>
+  <a href="https://aur.archlinux.org/packages/zuno"><img src="https://img.shields.io/aur/version/zuno?style=for-the-badge&color=ffc300&label=AUR" alt="AUR"></a>
 </p>
 
 <p align="center">
@@ -142,6 +143,12 @@ If you find it useful, **starring the repo** genuinely helps.
 Grab the newest installer from the **[latest release](https://github.com/noFAYZ/zuno/releases/latest)**
 for Windows, macOS or Linux.
 
+On Arch and derivatives, install from the AUR instead:
+
+```bash
+yay -S zuno     # or: paru -S zuno
+```
+
 <br />
 
 ## Platform support
@@ -152,7 +159,7 @@ for Windows, macOS or Linux.
 
 ### Linux notes
 
-Install the `.deb` or `.rpm`, or `zuno-bin` from the AUR on Arch. These use your system's
+Install the `.deb` or `.rpm`, or `zuno` from the AUR on Arch. These use your system's
 WebKitGTK and GStreamer, which is what playback runs through.
 
 **No sound, or "YouTube player error 5".** Playback decodes through GStreamer, and most
@@ -165,7 +172,7 @@ sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-base gstreamer1.0-plugi
 # Fedora (gstreamer1-libav needs RPM Fusion enabled)
 sudo dnf install gstreamer1-libav gstreamer1-plugins-base gstreamer1-plugins-good
 
-# Arch — pulled in automatically by zuno-bin
+# Arch — installed automatically with the AUR package
 sudo pacman -S gst-libav gst-plugins-base gst-plugins-good
 ```
 
