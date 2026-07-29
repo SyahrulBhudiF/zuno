@@ -161,13 +161,15 @@ export function Hero({
         */}
         <div className="relative max-lg:mx-auto max-lg:max-w-2xl lg:-mr-14 xl:-mr-40">
           <div className="overflow-hidden rounded-2xl bg-[#141414] shadow-2xl ring-1 ring-white/10">
-        
+            {/* Intrinsic size, not the old 1920x1209 the previous shot never had: a wrong
+                ratio reserves the wrong box and the hero jumps once the image decodes. */}
             <img
               className="w-full"
-              src="./zuno-da.PNG"
+              src="./zuno-d1-1.2.PNG"
               alt="Zuno's home view, with a playlist rail on the left and the player bar along the bottom"
-              width={1920}
-              height={1209}
+              width={1405}
+              height={1014}
+              fetchPriority="high"
             />
           </div>
         </div>

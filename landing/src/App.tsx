@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useLatestRelease } from "@/useLatestRelease";
 import { Downloads } from "@/components/Downloads";
 import { Hero } from "@/components/Hero";
+import { Screenshots } from "@/components/Screenshots";
 import { LinkButton, Mono, Section, cn } from "./components/ui";
 import { GITHUB_REPO, RELEASES_URL } from "./releases";
 
@@ -152,9 +153,17 @@ export function App() {
         </Section> */}
 
         <Section
+          id="screenshots"
+          index="01"
+          title="What it actually looks like"
+          lede="Real captures from the current release, not mock-ups."
+        >
+          <Screenshots />
+        </Section>
+
+        <Section
           id="download"
-           
-     
+          index="02"
           lede="Free and open source. Pick your system — the format choice inside each tile is the only decision to make."
         >
           <Downloads release={latest.release} platform={latest.platform} />
