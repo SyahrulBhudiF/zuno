@@ -9,10 +9,12 @@
 # must be committed alongside this file; they are not written by hand.
 app-id: io.github.nofayz.Zuno
 
-# GNOME 47 carries webkitgtk-6.0; Tauri v2 links against webkit2gtk-4.1, which is what the
-# 46 runtime ships. Moving to 47 means moving the app to the 6.0 API first.
+# 47, not 46, because of Rust rather than WebKit: the SDK extensions track the freedesktop
+# base, 46 sits on 23.08, and that carries Cargo 1.81 — too old for the `edition2024` several
+# transitive crates now require. 47 sits on 24.08. The 47 runtime still provides
+# webkit2gtk-4.1 alongside webkitgtk-6.0, so Tauri links as before.
 runtime: org.gnome.Platform
-runtime-version: "46"
+runtime-version: "47"
 sdk: org.gnome.Sdk
 
 sdk-extensions:
