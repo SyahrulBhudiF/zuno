@@ -106,6 +106,35 @@ html {
 }
 
 /*
+ * The wordmark's cursor.
+ *
+ * `zuno_` ends in an underscore, so it is already a prompt — this just admits it. The one
+ * piece of motion in the hero, and it belongs to the logo rather than being applied to it.
+ * Steady rather than absent under reduced motion, since the block is part of the mark.
+ */
+.caret {
+  animation: caret-blink 1.2s steps(1) infinite;
+}
+
+@keyframes caret-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caret {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/*
  * The playing indicator, shared by the tab demo and the bento cells.
  *
  * Three bars on staggered delays. Paused rather than removed under reduced motion, so the mark
