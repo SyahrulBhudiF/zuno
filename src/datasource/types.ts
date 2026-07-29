@@ -28,10 +28,27 @@ export interface LyricLine {
   endTimeSec?: number;
 }
 
+export type LyricsSourceStatus = "hit" | "miss" | "timeout" | "error" | "skipped";
+
+/** What one source in the lyric table did on a single lookup. */
+export interface LyricsSourceAttempt {
+  id: string;
+  label: string;
+  status: LyricsSourceStatus;
+  /** Wall time spent on this source; zero when it was never run. */
+  durationMs: number;
+  /** Line count on a hit, the reason otherwise. */
+  detail?: string;
+}
+
 export interface Lyrics {
   lines: LyricLine[];
   timing: "synced" | "estimated" | "none";
   sourceLabel?: string;
+  /** Which entry of the source table produced these lines. */
+  sourceId?: string;
+  /** What every source did on this lookup, in preference order. */
+  attempts?: LyricsSourceAttempt[];
 }
 
 export interface Album {

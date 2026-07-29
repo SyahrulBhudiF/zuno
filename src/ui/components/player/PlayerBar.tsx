@@ -7,7 +7,7 @@ import { tauriFetch } from "../../../datasource/youtube/tauriFetch";
 import { TrackInfo } from "./TrackInfo";
 import { PlaybackControls } from "./PlaybackControls";
 import { SeekBar } from "./SeekBar";
-import { DownloadIndicator } from "./DownloadIndicator";
+import { DownloadButton } from "./DownloadButton";
 import { PlaybackOptions } from "./PlaybackOptions";
 import { VolumeControl } from "./VolumeControl";
 import { LyricsButton } from "./LyricsButton";
@@ -221,7 +221,7 @@ export function PlayerBar({ onToggleLyrics, onToggleQueue, isQueueOpen, onConnec
               </button>
             </div>
 
-            <DownloadIndicator />
+            <DownloadButton />
             <PlaybackOptions />
             <VolumeControl />
           </div>

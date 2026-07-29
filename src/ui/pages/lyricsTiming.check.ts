@@ -19,7 +19,7 @@ function equal(actual: unknown, expected: unknown, message: string): void {
   check(actual === expected, `${message}: expected ${String(expected)}, got ${String(actual)}`);
 }
 
-const { findActiveLineIndex, isSyncedLyrics } = await import("./lyricsTiming");
+const { findActiveLineIndex, getLineProgress, isSyncedLyrics } = await import("./lyricsTiming");
 
 const LINES = [
   { text: "first", startTimeSec: 10 },
@@ -58,5 +58,28 @@ check(
   !isSyncedLyrics({ lines: [{ text: "a", startTimeSec: 1 }, { text: "b" }], timing: "synced" }),
   "one untimed line disqualifies the whole set, whatever the provider claims",
 );
+
+equal(getLineProgress(LINES, 0, 10), 0, "a line starts empty");
+equal(getLineProgress(LINES, 0, 15), 0.5, "halfway to the next start is halfway through");
+equal(getLineProgress(LINES, 0, 20), 1, "the next line's start fills the previous one");
+equal(getLineProgress(LINES, 0, 5), 0, "before the start the sweep stays parked at zero");
+equal(getLineProgress(LINES, 0, 99), 1, "and never runs past full");
+
+// The last line has no successor: the track duration is what stops it finishing in four
+// seconds and then sitting dead through a long outro.
+equal(getLineProgress(LINES, 2, 60, 90), 0.5, "the final line spans to the end of the track");
+equal(getLineProgress(LINES, 2, 32, undefined), 0.5, "without a duration it falls back to 4s");
+
+equal(
+  getLineProgress([{ text: "a", startTimeSec: 4, endTimeSec: 8 }], 0, 6),
+  0.5,
+  "an explicit end time wins over every fallback",
+);
+equal(
+  getLineProgress([{ text: "a", startTimeSec: 5, endTimeSec: 5 }], 0, 5),
+  1,
+  "a zero-length line is already finished, not a divide by zero",
+);
+equal(getLineProgress([{ text: "a" }], 0, 5), 0, "an untimed line never sweeps");
 
 console.log("lyricsTiming self-check passed");

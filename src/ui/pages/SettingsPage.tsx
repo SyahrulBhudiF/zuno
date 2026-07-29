@@ -83,6 +83,12 @@ import {
 } from "../settings/playerControls";
 import { setPaperPcMode, usePaperPcMode } from "../settings/paperPcMode";
 import {
+  AUTO_LYRICS_SOURCE,
+  setPreferredLyricsSourceId,
+  usePreferredLyricsSourceId,
+} from "../../internal/lyricsSourcePreference";
+import { LYRICS_SOURCES } from "../../datasource/youtube/lyricsSources";
+import {
   setToolbarItemVisible,
   TOOLBAR_ITEMS,
   useToolbarItemVisible,
@@ -406,6 +412,7 @@ export function SettingsPage({
   const miniPlayerEnabled = useMiniPlayerEnabled();
   const miniPlayerHoverAction = useMiniPlayerHoverAction();
   const sidebarMode = useSidebarMode();
+  const preferredLyricsSource = usePreferredLyricsSourceId();
   const crossfadeSec = useCrossfadeSec();
   const gaplessEnabled = useGaplessEnabled();
   const sessionRestoreEnabled = useSessionRestoreEnabled();
@@ -1138,6 +1145,31 @@ export function SettingsPage({
                       {(Object.keys(AUDIO_QUALITY_LABELS) as AudioQuality[]).map((quality) => (
                         <SelectItem key={quality} value={quality}>
                           {AUDIO_QUALITY_LABELS[quality]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </SettingRow>
+
+              <SettingRow
+                title="Preferred lyrics source"
+                description="Tried first when a song opens. If it has nothing for that song, the others still run."
+              >
+                {(labelId) => (
+                  <Select
+                    className="w-52"
+                    value={preferredLyricsSource}
+                    onValueChange={setPreferredLyricsSourceId}
+                  >
+                    <SelectTrigger aria-labelledby={labelId}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={AUTO_LYRICS_SOURCE}>Automatic</SelectItem>
+                      {LYRICS_SOURCES.map((source) => (
+                        <SelectItem key={source.id} value={source.id}>
+                          {source.label}
                         </SelectItem>
                       ))}
                     </SelectContent>

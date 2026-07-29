@@ -21,6 +21,7 @@ import type {
   FeedNotification,
   LibrarySnapshot,
   Lyrics,
+  LyricsSourceAttempt,
   Playlist,
   ResolvedLink,
   SearchCategory,
@@ -31,6 +32,15 @@ import type {
   TrackRating,
 } from "../types";
 import { collectArtworkCandidates, getVideoArtworkFallback, selectArtworkUrl } from "./artwork";
+import {
+  LYRICS_SOURCES,
+  type LyricsSource,
+  pickBestLyrics,
+  planLyricsWaves,
+  skippedAttempt,
+  sortAttempts,
+} from "./lyricsSources";
+import { getPreferredLyricsSourceId } from "../../internal/lyricsSourcePreference";
 import { looksLikeYouTubeLink, parseYouTubeLink } from "./links";
 import { isTrackDownloaded } from "../../player/offlineStore";
 import {
@@ -170,9 +180,9 @@ type BetterLyricsResponse = {
   ttml?: string | null;
 };
 
-type LyricsProviderResult = Lyrics & {
-  priority: number;
-};
+/* Rank used to live on the result as a `priority` number that nothing ever read — the winner
+   was really decided by the order of an array literal. It is now the LYRICS_SOURCES table. */
+type LyricsProviderResult = Lyrics;
 
 type RawLikeEndpoint = {
   status?: string;
@@ -338,7 +348,7 @@ export class YouTubeMusicDataSource extends DataSource {
   private readonly artistRefreshPromises = new Map<string, Promise<ArtistPage>>();
   private readonly suggestionRefreshPromises = new Map<string, Promise<string[]>>();
   private readonly recommendationRefreshPromises = new Map<string, Promise<Track[]>>();
-  private readonly lyricsRefreshPromises = new Map<string, Promise<Lyrics | null>>();
+  private readonly lyricsRefreshPromises = new Map<string, Promise<Lyrics>>();
   private readonly artistSubscriptionOverrides = new Map<string, { subscribed: boolean; expiresAt: number }>();
 
   constructor() {
@@ -4168,8 +4178,15 @@ export class YouTubeMusicDataSource extends DataSource {
     }
   }
 
-  async getLyrics(track: Track): Promise<Lyrics | null> {
-    const cacheKey = `lyrics:synced:v2:${track.id}`;
+  async getLyrics(track: Track): Promise<Lyrics> {
+    /*
+     * v3: the cached shape now carries the per-source attempt log, and a v2 entry would
+     * leave the lyrics screen unable to say where its words came from.
+     *
+     * The preferred source is part of the key because it changes which source wins. Sharing
+     * one key would mean changing the setting appears to do nothing until the cache expires.
+     */
+    const cacheKey = `lyrics:synced:v3:${getPreferredLyricsSourceId()}:${track.id}`;
     const cached = await getCachedJson<Lyrics>(cacheKey);
     if (cached?.timing === "synced" && cached.lines.length > 0) return cached;
 
@@ -4182,91 +4199,170 @@ export class YouTubeMusicDataSource extends DataSource {
     }
 
     const lyrics = await refresh;
-    if (lyrics) await setCachedJson(cacheKey, lyrics);
+    /*
+     * Only a synced hit is worth keeping. Caching an unsynced fallback — or a total miss —
+     * would freeze this song on its worst available source forever, when the usual reason a
+     * track has no synced lyrics today is that nobody has contributed them *yet*.
+     */
+    if (lyrics.timing === "synced" && lyrics.lines.length > 0) {
+      await setCachedJson(cacheKey, lyrics);
+    }
     return lyrics;
   }
 
-  private async fetchSyncedLyrics(track: Track): Promise<Lyrics | null> {
+  /**
+   * Runs the source table and reports what every source did.
+   *
+   * Always resolves to a Lyrics object, empty when nothing was found, so the caller can show
+   * the attempt log rather than a bare "not available" that explains nothing.
+   */
+  private async fetchSyncedLyrics(track: Track): Promise<Lyrics> {
     logInternalInfo("YouTubeMusicDataSource.getLyrics start", { trackId: track.id });
-    const providerLyrics = await this.fetchProviderLyrics(track);
-    if (providerLyrics) return providerLyrics;
 
-    try {
-      const webClient = await this.getWebClient();
-      const info = await webClient.getInfo(track.id);
-      const transcript = await info.getTranscript();
-      const segments = transcript.transcript.content?.body?.initial_segments ?? [];
-      const timedLines = segments.flatMap((segment) => {
-        const item = segment as unknown as {
-          start_ms?: string;
-          end_ms?: string;
-          snippet?: { toString(): string };
-        };
-        const text = item.snippet?.toString().trim();
-        const startTimeMs = Number(item.start_ms);
-        const endTimeMs = Number(item.end_ms);
-        if (!text || !Number.isFinite(startTimeMs)) return [];
+    const runners: Record<string, () => Promise<Lyrics | null>> = {
+      "lrclib-exact": () => this.fetchLrcLibExactLyrics(track),
+      betterlyrics: () => this.fetchBetterLyrics(track),
+      "lrclib-search": () => this.fetchLrcLibSearchLyrics(track),
+      "youtube-transcript": () => this.fetchYouTubeTranscriptLyrics(track),
+      "youtube-music": () => this.fetchYouTubeMusicLyrics(track),
+    };
 
-        return [{
-          text,
-          startTimeSec: startTimeMs / 1000,
-          endTimeSec: Number.isFinite(endTimeMs) ? endTimeMs / 1000 : undefined,
-        }];
-      });
+    const preferredId = getPreferredLyricsSourceId();
+    const attempts: LyricsSourceAttempt[] = [];
+    let winner: { source: LyricsSource; lyrics: Lyrics | null } | undefined;
 
-      if (timedLines.length > 0) {
-        logInternalInfo("YouTubeMusicDataSource.getLyrics timed transcript success", {
-          trackId: track.id,
-          lineCount: timedLines.length,
-        });
-        return {
-          lines: timedLines,
-          timing: "synced",
-          sourceLabel: "YouTube",
-        };
-      }
-    } catch (error) {
-      logInternalWarn("YouTubeMusicDataSource.getLyrics timed transcript unavailable", {
-        trackId: track.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
+    for (const sources of planLyricsWaves(preferredId)) {
+      const results = await Promise.all(
+        sources.map((source) => this.runLyricsSource(source, track.id, runners[source.id])),
+      );
+      for (const result of results) attempts.push(result.attempt);
+
+      winner = pickBestLyrics(results, preferredId);
+      if (winner) break;
     }
 
-    // Last resort, and the only source keyed by video id rather than by title and artist.
-    return this.fetchYouTubeMusicLyrics(track);
+    // Wave 2 never ran when wave 1 hit. Listing it as skipped shows the priority as a fact
+    // rather than leaving a gap that reads like a failure.
+    for (const source of LYRICS_SOURCES) {
+      if (!attempts.some((attempt) => attempt.id === source.id)) {
+        attempts.push(skippedAttempt(source));
+      }
+    }
+    const orderedAttempts = sortAttempts(attempts, preferredId);
+
+    if (!winner?.lyrics) {
+      logInternalWarn("YouTubeMusicDataSource.getLyrics exhausted every source", {
+        trackId: track.id,
+        attempts: orderedAttempts.map((attempt) => `${attempt.id}:${attempt.status}`).join(","),
+      });
+      return { lines: [], timing: "none", attempts: orderedAttempts };
+    }
+
+    return {
+      ...winner.lyrics,
+      sourceId: winner.source.id,
+      sourceLabel: winner.lyrics.sourceLabel || winner.source.label,
+      attempts: orderedAttempts,
+    };
   }
 
-  private async fetchProviderLyrics(track: Track): Promise<Lyrics | null> {
-    const attempts: Array<Promise<LyricsProviderResult | null>> = [
-      this.withTimeout(
-        this.fetchLrcLibExactLyrics(track),
-        2_500,
-        "LRCLIB exact",
-        track.id,
-      ),
-      this.withTimeout(
-        this.fetchBetterLyrics(track),
-        3_500,
-        "BetterLyrics",
-        track.id,
-      ),
-      this.withTimeout(
-        this.fetchLrcLibSearchLyrics(track),
-        4_500,
-        "LRCLIB search",
-        track.id,
-      ),
-    ];
-
-    for (const attempt of attempts) {
-      const result = await attempt;
-      if (result) {
-        const { priority: _priority, ...lyrics } = result;
-        return lyrics;
-      }
+  /** One source, bounded by its own timeout, reduced to a result plus a status line. */
+  private async runLyricsSource(
+    source: LyricsSource,
+    trackId: string,
+    run: (() => Promise<Lyrics | null>) | undefined,
+  ): Promise<{ source: LyricsSource; lyrics: Lyrics | null; attempt: LyricsSourceAttempt }> {
+    const base = { id: source.id, label: source.label, durationMs: 0 };
+    if (!run) {
+      return { source, lyrics: null, attempt: { ...base, status: "skipped", detail: "Unavailable" } };
     }
 
-    return null;
+    const startedAt = Date.now();
+    let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined;
+    const timeout = new Promise<"timeout">((resolve) => {
+      timeoutId = globalThis.setTimeout(() => resolve("timeout"), source.timeoutMs);
+    });
+
+    try {
+      const outcome = await Promise.race([run(), timeout]);
+      const durationMs = Date.now() - startedAt;
+
+      if (outcome === "timeout") {
+        logInternalWarn("YouTubeMusicDataSource.getLyrics source timed out", {
+          trackId,
+          source: source.id,
+          timeoutMs: source.timeoutMs,
+        });
+        return {
+          source,
+          lyrics: null,
+          attempt: {
+            ...base,
+            status: "timeout",
+            durationMs,
+            detail: `No answer in ${(source.timeoutMs / 1000).toFixed(1)}s`,
+          },
+        };
+      }
+
+      const lineCount = outcome?.lines.length ?? 0;
+      return {
+        source,
+        lyrics: lineCount > 0 ? outcome : null,
+        attempt: {
+          ...base,
+          status: lineCount > 0 ? "hit" : "miss",
+          durationMs,
+          detail: lineCount > 0 ? `${lineCount} lines` : "No match",
+        },
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logInternalWarn("YouTubeMusicDataSource.getLyrics source failed", {
+        trackId,
+        source: source.id,
+        error: message,
+      });
+      return {
+        source,
+        lyrics: null,
+        attempt: {
+          ...base,
+          status: "error",
+          durationMs: Date.now() - startedAt,
+          detail: message.slice(0, 120),
+        },
+      };
+    } finally {
+      if (timeoutId) globalThis.clearTimeout(timeoutId);
+    }
+  }
+
+  private async fetchYouTubeTranscriptLyrics(track: Track): Promise<Lyrics | null> {
+    const webClient = await this.getWebClient();
+    const info = await webClient.getInfo(track.id);
+    const transcript = await info.getTranscript();
+    const segments = transcript.transcript.content?.body?.initial_segments ?? [];
+    const timedLines = segments.flatMap((segment) => {
+      const item = segment as unknown as {
+        start_ms?: string;
+        end_ms?: string;
+        snippet?: { toString(): string };
+      };
+      const text = item.snippet?.toString().trim();
+      const startTimeMs = Number(item.start_ms);
+      const endTimeMs = Number(item.end_ms);
+      if (!text || !Number.isFinite(startTimeMs)) return [];
+
+      return [{
+        text,
+        startTimeSec: startTimeMs / 1000,
+        endTimeSec: Number.isFinite(endTimeMs) ? endTimeMs / 1000 : undefined,
+      }];
+    });
+
+    if (timedLines.length === 0) return null;
+    return { lines: timedLines, timing: "synced", sourceLabel: "YouTube" };
   }
 
   private async fetchLrcLibExactLyrics(track: Track): Promise<LyricsProviderResult | null> {
@@ -4289,7 +4385,7 @@ export class YouTubeMusicDataSource extends DataSource {
         if (!response.ok) continue;
 
         const match = await response.json() as LrcLibTrack;
-        const result = this.toLrcLibLyrics(track, match, "LRCLIB", 0);
+        const result = this.toLrcLibLyrics(track, match, "LRCLIB");
         if (result) return result;
       } catch (error) {
         logInternalWarn("YouTubeMusicDataSource.getLyrics LRCLIB exact unavailable", {
@@ -4330,7 +4426,7 @@ export class YouTubeMusicDataSource extends DataSource {
           .sort((left, right) => left.durationDelta - right.durationDelta);
 
         for (const candidate of candidates) {
-          const result = this.toLrcLibLyrics(track, candidate.match, "LRCLIB", 2);
+          const result = this.toLrcLibLyrics(track, candidate.match, "LRCLIB search");
           if (result) return result;
         }
       } catch (error) {
@@ -4376,7 +4472,6 @@ export class YouTubeMusicDataSource extends DataSource {
           lines,
           timing: "synced",
           sourceLabel: "BetterLyrics",
-          priority: 1,
         };
       } catch (error) {
         logInternalWarn("YouTubeMusicDataSource.getLyrics BetterLyrics unavailable", {
@@ -4393,7 +4488,6 @@ export class YouTubeMusicDataSource extends DataSource {
     track: Track,
     match: LrcLibTrack,
     sourceLabel: string,
-    priority: number,
   ): LyricsProviderResult | null {
     if (!match.syncedLyrics) return null;
     const durationDelta = this.getLyricsDurationDelta(track, match.duration);
@@ -4412,7 +4506,6 @@ export class YouTubeMusicDataSource extends DataSource {
       lines,
       timing: "synced",
       sourceLabel,
-      priority,
     };
   }
 
@@ -4479,31 +4572,6 @@ export class YouTubeMusicDataSource extends DataSource {
       .replace(/\s+-\s+(?:official\s*)?(?:music\s*)?(?:video|visualizer|audio|lyrics?|lyric\s*video).*$/i, "")
       .replace(/\s{2,}/g, " ")
       .trim();
-  }
-
-  private async withTimeout(
-    promise: Promise<LyricsProviderResult | null>,
-    timeoutMs: number,
-    provider: string,
-    trackId: string,
-  ): Promise<LyricsProviderResult | null> {
-    let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined;
-    const timeout = new Promise<null>((resolve) => {
-      timeoutId = globalThis.setTimeout(() => {
-        logInternalWarn("YouTubeMusicDataSource.getLyrics provider timed out", {
-          trackId,
-          provider,
-          timeoutMs,
-        });
-        resolve(null);
-      }, timeoutMs);
-    });
-
-    try {
-      return await Promise.race([promise, timeout]);
-    } finally {
-      if (timeoutId) globalThis.clearTimeout(timeoutId);
-    }
   }
 
   private parseSyncedLyrics(lrc: string): Lyrics["lines"] {

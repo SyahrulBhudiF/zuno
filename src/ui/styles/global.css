@@ -386,3 +386,43 @@ html[data-platform-linux] *::after {
   transform-origin: center;
   will-change: transform;
 }
+
+/*
+ * Lyrics: the sung portion of the active line, wiped left to right.
+ *
+ * `--sweep` is written straight onto the element by the animation frame that tracks
+ * playback — a percentage in React state would re-render the whole column sixty times a
+ * second to move one gradient stop. The two stops are offset so the edge is a soft ramp
+ * rather than a hard cut, which at display sizes reads as light moving across the words
+ * instead of a progress bar clipped to text.
+ */
+.lyric-sweep {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-foreground) calc(var(--sweep, 0%) - 4%),
+    color-mix(in oklab, var(--color-foreground) 28%, transparent) calc(var(--sweep, 0%) + 7%)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+/*
+ * Slow parallax on the blurred cover behind the lyrics. Long and asymmetric on purpose: at
+ * 44s nothing ever appears to move while you read, but the backdrop is never twice the same,
+ * which is what keeps a static page from feeling like a screenshot.
+ */
+@keyframes lyrics-drift {
+  0% {
+    transform: scale(1.25) translate3d(-2%, -1%, 0);
+  }
+  100% {
+    transform: scale(1.4) translate3d(2%, 2%, 0);
+  }
+}
+
+.lyrics-drift {
+  animation: lyrics-drift 44s ease-in-out infinite alternate;
+  will-change: transform;
+}
