@@ -56,9 +56,9 @@ modules:
     build-options:
       append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node20/bin
       env:
-        # Keep cargo and npm inside the build dir; the sandbox has no writable $HOME.
+        # Matches where flatpak-cargo-generator writes its config; the sandbox has no
+        # writable $HOME for cargo's default location.
         CARGO_HOME: /run/build/zuno/cargo
-        npm_config_cache: /run/build/zuno/npm-cache
         # Vendored sources only — a network fetch here fails the build rather than silently
         # pulling something that is not in the manifest.
         CARGO_NET_OFFLINE: "true"
@@ -80,7 +80,10 @@ modules:
         path: io.github.nofayz.Zuno.metainfo.xml
 
     build-commands:
-      - npm ci --offline
+      # The cache path is not optional: flatpak-node-generator unpacks every tarball into
+      # flatpak-node/npm-cache, and npm looks in its own default unless told otherwise —
+      # which fails as ENOTCACHED with the packages sitting right there.
+      - npm ci --offline --no-audit --no-fund --cache=flatpak-node/npm-cache
       - npm run build
       - cargo build --release --offline --manifest-path src-tauri/Cargo.toml
 
