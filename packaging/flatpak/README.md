@@ -29,16 +29,44 @@ dependency bump.
 
 ## Submitting to Flathub
 
-1. Get a green run of the Flatpak workflow. A build that fails locally will fail there.
-2. Fork [flathub/flathub](https://github.com/flathub/flathub) and branch from `new-pr`
-   (**not** `master` — submissions are only accepted against that branch).
-3. Add `io.github.nofayz.Zuno.yml`, the metainfo, the desktop file and both generated source
-   files.
-4. Open the PR. A bot builds it; reviewers then check the manifest, the ID, the permissions
-   in `finish-args` and the AppStream data.
+Checked against
+[docs.flathub.org](https://docs.flathub.org/docs/for-app-authors/requirements).
 
-Expect review comments on `finish-args` — every permission has to be justified, and the
-usual request is to narrow or drop the broadest ones.
+1. Get a green run of the Flatpak workflow, and take the generated source files from the
+   artifact.
+2. Fork [flathub/flathub](https://github.com/flathub/flathub), then branch **from `new-pr`**:
+
+   ```bash
+   git checkout -b zuno-submission new-pr
+   ```
+
+3. Copy these to the **repository root** — the manifest "must be at the top level", and
+   `flathub.json` must sit next to it:
+
+   ```
+   io.github.nofayz.Zuno.yml            manifest, filename must equal the app ID
+   io.github.nofayz.Zuno.metainfo.xml   mandatory for the Flathub listing
+   io.github.nofayz.Zuno.desktop
+   flathub.json                         architecture limit
+   cargo-sources.json                   generated; dependency manifests must be included
+   node-sources.json                    generated
+   ```
+
+4. Open the PR against the **`new-pr`** base branch, titled `Add io.github.nofayz.Zuno`.
+
+Never close the PR to address review comments or to change the app ID — the same PR is
+amended throughout.
+
+Expect comments on `finish-args`: every permission has to be justified, and the usual request
+is to narrow or drop the broadest. `--filesystem=xdg-run/app/com.discordapp.Discord` is the
+likeliest to be questioned.
+
+### Why the ID is what it is
+
+Flathub requires GitHub-hosted projects to use `io.github.`, with at least four components and
+the domain portion lowercased. `io.github.nofayz.Zuno` satisfies all three. It also cannot end
+in `.desktop`, `.app` or `.linux` — which the app's own `com.zuno.desktop` identifier does,
+and is a second reason the two differ.
 
 ## Pinning
 

@@ -103,3 +103,7 @@ modules:
         /app/share/icons/hicolor/32x32/apps/io.github.nofayz.Zuno.png
       - install -Dm644 "src-tauri/icons/128x128@2x.png"
         /app/share/icons/hicolor/256x256/apps/io.github.nofayz.Zuno.png
+      # 256 is Flathub's stated minimum; 512 is what makes it look right in the store listing
+      # and on HiDPI. There is no SVG in the project, so this is the best available.
+      - install -Dm644 src-tauri/icons/icon.png
+        /app/share/icons/hicolor/512x512/apps/io.github.nofayz.Zuno.png
