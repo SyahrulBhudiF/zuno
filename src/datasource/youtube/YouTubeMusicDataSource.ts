@@ -1,11 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 /*
- * Types only. The runtime module arrives through `loadYouTubeI`, so that ~800 kB of InnerTube
- * client is no longer parsed before the first frame — see youtubeiLoader.ts.
+ * Statically imported, deliberately.
+ *
+ * 1.2.0 loaded this lazily to keep ~650 kB of InnerTube client out of the startup parse. It
+ * shipped, and sign-in failed on every updated install with "cannot access 'X' before
+ * initialization" — a temporal-dead-zone error out of the split chunk. Reverted in 1.2.1:
+ * the startup win is real but it is not worth a client nobody can sign in to, and the split
+ * needs to be reproduced and tested against a live session before it goes back.
  */
-import type { Innertube, Types } from "youtubei.js";
-import { loadYouTubeI, requireYouTubeI } from "./youtubeiLoader";
+import { ClientType, Innertube, Platform, Types, YTNodes } from "youtubei.js";
 import { clearCache, getCachedJson, setCachedJson } from "../../internal/cache";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../../internal/logging";
 import { mintPoToken } from "./poToken";
@@ -357,26 +361,13 @@ export class YouTubeMusicDataSource extends DataSource {
   private readonly lyricsRefreshPromises = new Map<string, Promise<Lyrics>>();
   private readonly artistSubscriptionOverrides = new Map<string, { subscribed: boolean; expiresAt: number }>();
 
-  private isEvaluatorInstalled = false;
-
-  /**
-   * The module, plus the one-time shim install that must precede any `Innertube.create`.
-   *
-   * The evaluator used to be installed in the constructor, which is what forced the whole
-   * library into the startup path. Every caller that creates a client goes through here, so
-   * the shim is still guaranteed to be in place before it can matter.
-   */
-  private async getYouTubeI() {
-    const module = await loadYouTubeI();
-    if (!this.isEvaluatorInstalled) {
-      this.setupJavaScriptEvaluator(module.Platform);
-      this.isEvaluatorInstalled = true;
-    }
-    return module;
+  constructor() {
+    super();
+    this.setupJavaScriptEvaluator();
   }
 
-  private setupJavaScriptEvaluator(platform: typeof import("youtubei.js").Platform) {
-    platform.shim.eval = async (data: Types.BuildScriptResult, env: Record<string, Types.VMPrimative>) => {
+  private setupJavaScriptEvaluator() {
+    Platform.shim.eval = async (data: Types.BuildScriptResult, env: Record<string, Types.VMPrimative>) => {
       logInternalDebug("YouTubeMusicDataSource.javascriptEvaluator", {
         envKeys: Object.keys(env),
         outputLength: data.output?.length ?? 0,
@@ -434,7 +425,6 @@ export class YouTubeMusicDataSource extends DataSource {
   }
 
   private async createMusicClient(retrievePlayer = true): Promise<Innertube> {
-    const { Innertube, ClientType } = await this.getYouTubeI();
     const client = await Innertube.create({
       ...this.getSessionOptions(retrievePlayer),
       client_type: ClientType.MUSIC,
@@ -458,13 +448,10 @@ export class YouTubeMusicDataSource extends DataSource {
       logInternalInfo("YouTubeMusicDataSource.getWebClient creating client");
       // No player needed: this client only enumerates accounts and resolves like endpoints,
       // neither of which touches stream URLs, and retrieving it downloads the player script.
-      this.webClientPromise = (async () => {
-        const { Innertube, ClientType } = await this.getYouTubeI();
-        return Innertube.create({
-          ...this.getSessionOptions(false),
-          client_type: ClientType.WEB,
-        });
-      })();
+      this.webClientPromise = Innertube.create({
+        ...this.getSessionOptions(false),
+        client_type: ClientType.WEB,
+      });
     }
 
     return this.webClientPromise;
@@ -494,7 +481,6 @@ export class YouTubeMusicDataSource extends DataSource {
     if (!this.downloadClientPromise) {
       logInternalInfo("YouTubeMusicDataSource.getDownloadClient creating client");
       this.downloadClientPromise = (async () => {
-        const { Innertube, ClientType } = await this.getYouTubeI();
         const bootstrap = await Innertube.create({
           fetch: tauriFetch,
           retrieve_player: false,
@@ -1128,7 +1114,7 @@ export class YouTubeMusicDataSource extends DataSource {
     const results: MusicItem[] = [];
     const seen = new WeakSet<object>();
     const response = root as ParsedMusicResponse;
-    const nodeTypes = [requireYouTubeI().YTNodes.MusicResponsiveListItem, requireYouTubeI().YTNodes.MusicTwoRowItem];
+    const nodeTypes = [YTNodes.MusicResponsiveListItem, YTNodes.MusicTwoRowItem];
 
     for (const memo of [response.contents_memo, response.continuation_contents_memo]) {
       if (!memo) continue;
@@ -1170,7 +1156,7 @@ export class YouTubeMusicDataSource extends DataSource {
   private findEditablePlaylistId(root: unknown): string | undefined {
     const response = root as ParsedMusicResponse;
     const editableHeader = response.contents_memo
-      ?.getType(requireYouTubeI().YTNodes.MusicEditablePlaylistDetailHeader)?.[0] as {
+      ?.getType(YTNodes.MusicEditablePlaylistDetailHeader)?.[0] as {
         playlist_id?: string;
       } | undefined;
     if (editableHeader?.playlist_id) return editableHeader.playlist_id;
@@ -1660,7 +1646,7 @@ export class YouTubeMusicDataSource extends DataSource {
      * puts the next token on `continuation_contents` instead. Reading all of them explicitly
      * beats the tree walk below, which finds whichever shelf DFS reaches first.
      */
-    const shelfTypes = [requireYouTubeI().YTNodes.MusicPlaylistShelf, requireYouTubeI().YTNodes.MusicShelf, requireYouTubeI().YTNodes.Grid] as const;
+    const shelfTypes = [YTNodes.MusicPlaylistShelf, YTNodes.MusicShelf, YTNodes.Grid] as const;
     const shelves: Array<{ continuation?: unknown }> = [];
     for (const memo of [parsed.contents_memo, parsed.continuation_contents_memo]) {
       shelves.push(...(memo?.getType(...shelfTypes) ?? []) as Array<{ continuation?: unknown }>);
@@ -1694,7 +1680,7 @@ export class YouTubeMusicDataSource extends DataSource {
       if (seen.has(value)) return;
       seen.add(value);
 
-      if (value instanceof requireYouTubeI().YTNodes.ContinuationItem) {
+      if (value instanceof YTNodes.ContinuationItem) {
         found.endpoint = value.endpoint as {
           payload?: { continuation?: string };
           call(actions: Innertube["actions"], args: { parse: true }): Promise<unknown>;
@@ -1994,13 +1980,13 @@ export class YouTubeMusicDataSource extends DataSource {
 
   private getAlbumHeaderArtwork(response: unknown): string | undefined {
     const parsed = response as ParsedMusicResponse;
-    const detailHeader = parsed.contents_memo?.getType(requireYouTubeI().YTNodes.MusicDetailHeader)?.[0] as {
+    const detailHeader = parsed.contents_memo?.getType(YTNodes.MusicDetailHeader)?.[0] as {
       thumbnails?: Array<{ url?: string; width?: number; height?: number }>;
       thumbnail?: {
         contents?: Array<{ url?: string; width?: number; height?: number }>;
       };
     } | undefined;
-    const responsiveHeader = parsed.contents_memo?.getType(requireYouTubeI().YTNodes.MusicResponsiveHeader)?.[0] as {
+    const responsiveHeader = parsed.contents_memo?.getType(YTNodes.MusicResponsiveHeader)?.[0] as {
       thumbnails?: Array<{ url?: string; width?: number; height?: number }>;
       thumbnail?: {
         contents?: Array<{ url?: string; width?: number; height?: number }>;
@@ -2242,7 +2228,7 @@ export class YouTubeMusicDataSource extends DataSource {
     filterName: string,
   ): Promise<unknown> {
     const parsed = response as ParsedMusicResponse;
-    const chipCloud = parsed.contents_memo?.getType(requireYouTubeI().YTNodes.ChipCloud)?.[0] as {
+    const chipCloud = parsed.contents_memo?.getType(YTNodes.ChipCloud)?.[0] as {
       chips?: Array<{
         text?: string;
         endpoint?: {
@@ -2279,7 +2265,7 @@ export class YouTubeMusicDataSource extends DataSource {
     const messages: string[] = [];
     for (const memo of [parsed.contents_memo, parsed.continuation_contents_memo]) {
       if (!memo) continue;
-      for (const message of memo.getType(requireYouTubeI().YTNodes.Message) as Array<{ text?: { toString(): string } }>) {
+      for (const message of memo.getType(YTNodes.Message) as Array<{ text?: { toString(): string } }>) {
         const text = message.text?.toString();
         if (text) messages.push(text);
       }
@@ -5571,10 +5557,10 @@ export class YouTubeMusicDataSource extends DataSource {
         contents?: unknown;
       };
 
-      for (const shelf of memo.getType(requireYouTubeI().YTNodes.MusicCarouselShelf) as unknown as ShelfNode[]) {
+      for (const shelf of memo.getType(YTNodes.MusicCarouselShelf) as unknown as ShelfNode[]) {
         sections.push({ title: readTitle(shelf.header?.title), node: shelf.contents });
       }
-      for (const shelf of memo.getType(requireYouTubeI().YTNodes.MusicShelf) as unknown as ShelfNode[]) {
+      for (const shelf of memo.getType(YTNodes.MusicShelf) as unknown as ShelfNode[]) {
         sections.push({ title: readTitle(shelf.title), node: shelf.contents });
       }
       /*
@@ -5586,11 +5572,11 @@ export class YouTubeMusicDataSource extends DataSource {
        *
        * `contents` is Grid's own alias for `items`, so it needs no special handling here.
        */
-      for (const grid of memo.getType(requireYouTubeI().YTNodes.Grid) as unknown as ShelfNode[]) {
+      for (const grid of memo.getType(YTNodes.Grid) as unknown as ShelfNode[]) {
         sections.push({ title: readTitle(grid.header?.title), node: grid.contents });
       }
       // Drilling into a mood returns its playlists in this shelf rather than a carousel.
-      for (const shelf of memo.getType(requireYouTubeI().YTNodes.MusicPlaylistShelf) as unknown as ShelfNode[]) {
+      for (const shelf of memo.getType(YTNodes.MusicPlaylistShelf) as unknown as ShelfNode[]) {
         sections.push({ title: readTitle(shelf.title), node: shelf.contents });
       }
     }
@@ -5616,7 +5602,7 @@ export class YouTubeMusicDataSource extends DataSource {
       if (!memo) continue;
 
       const buttons = memo.getType(
-        requireYouTubeI().YTNodes.MusicNavigationButton,
+        YTNodes.MusicNavigationButton,
       ) as unknown as Array<{ button_text?: unknown; endpoint?: unknown }>;
 
       for (const button of buttons) {

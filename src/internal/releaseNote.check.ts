@@ -21,8 +21,18 @@ function equal(actual: unknown, expected: unknown, message: string): void {
 }
 
 check(
-  !shouldShowReleaseNote("1.2.0", null),
+  !shouldShowReleaseNote("1.2.0", null, false),
   "a fresh install is not an update — nothing has changed for someone who has never run it",
+);
+
+/*
+ * The case 1.2.0 got wrong. On the first release that ships this feature nobody has a stored
+ * version, because nothing was writing one — so "no version" cannot mean "new user", and
+ * treating it that way showed the note to zero of the people it was written for.
+ */
+check(
+  shouldShowReleaseNote("1.2.0", null, true),
+  "no stored version but evidence of prior use is an update, not a fresh install",
 );
 check(
   !shouldShowReleaseNote("1.2.0", "1.2.0"),

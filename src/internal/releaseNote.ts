@@ -61,21 +61,55 @@ export function parseReleaseNote(body: string): ReleaseNoteSegment[] {
 /**
  * Whether this launch is the first one after an update.
  *
- * A fresh install is deliberately not an update: `lastSeen` is null there, and greeting a
- * first-time user with "here is what changed" is noise about software they have never run.
- * That case records the version silently instead, so their *next* update does show one.
+ * A fresh install is deliberately not an update — greeting a first-time user with "here is
+ * what changed" is noise about software they have never run. But "no version recorded" does
+ * not mean "fresh install": on the very release that introduces this feature, *nobody* has a
+ * recorded version, because nothing was ever writing one. 1.2.0 shipped exactly that bug and
+ * showed the note to no one.
  *
- * Any difference counts, not just an increase — a downgrade or a sideways build is still a
- * version whose notes the user has not read, and comparing version strings numerically is a
- * parser nobody needs here.
+ * So a missing version falls back to `hasPriorUse` — whether this profile shows any trace of
+ * the app having been run before. That distinguishes the two cases the stored version alone
+ * cannot.
+ *
+ * Any difference counts, not just an increase: a downgrade or a sideways build is still a
+ * version whose notes were never read, and comparing version strings numerically is a parser
+ * nobody needs here.
  */
 export function shouldShowReleaseNote(
   installedVersion: string,
   lastSeenVersion: string | null,
+  hasPriorUse = false,
 ): boolean {
   if (!installedVersion) return false;
-  if (lastSeenVersion === null) return false;
+  if (lastSeenVersion === null) return hasPriorUse;
   return lastSeenVersion !== installedVersion;
+}
+
+/**
+ * Traces of the app having actually been *used* before this launch.
+ *
+ * Every key here is written by using the app — playing something, restoring a session,
+ * downloading, making a local playlist. Settings keys deliberately are not: boot hydration
+ * writes those before this ever runs, so on a genuinely fresh install they would already be
+ * present and every new user would be shown release notes for software they just installed.
+ *
+ * All predate the release-note feature. A key introduced alongside it would be present in
+ * both cases and settle nothing.
+ */
+const PRIOR_USE_KEYS = [
+  "zuno.play-history.v1",
+  "yt-music-dock.app-session.v1",
+  "zuno.offline-manifest.v1",
+  "ytc-local-playlists-v1",
+  "yt-music-dock:recent-playlists",
+];
+
+export function hasPriorUse(): boolean {
+  try {
+    return PRIOR_USE_KEYS.some((key) => localStorage.getItem(key) !== null);
+  } catch {
+    return false;
+  }
 }
 
 function readSeenVersion(): string | null {
@@ -115,7 +149,9 @@ export async function resolveReleaseNoteVersion(): Promise<string | null> {
   const durable = await getAppSetting<string>(SEEN_VERSION_KEY).catch(() => null);
   const lastSeenVersion = typeof durable === "string" ? durable : readSeenVersion();
 
-  if (shouldShowReleaseNote(installedVersion, lastSeenVersion)) return installedVersion;
+  if (shouldShowReleaseNote(installedVersion, lastSeenVersion, hasPriorUse())) {
+    return installedVersion;
+  }
 
   if (lastSeenVersion !== installedVersion) writeSeenVersion(installedVersion);
   return null;
