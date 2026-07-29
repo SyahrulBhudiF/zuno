@@ -1,0 +1,98 @@
+# Publishes zuno-bin to the AUR whenever a release is published.
+#
+# Runs from CI because the AUR needs an Arch environment and an SSH key, and the maintainer
+# develops on Windows — doing this by hand meant either a VM or the package going stale.
+#
+# Requires one repository secret:
+#   AUR_SSH_PRIVATE_KEY — the private half of the SSH key registered on the AUR account
+name: AUR
+
+on:
+  release:
+    types: [published]
+  # Lets a botched package be re-pushed without cutting another release.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, without the leading v (e.g. 1.2.1)"
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            version="${{ github.event.inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install packaging tools
+        run: pacman -Syu --noconfirm --needed git openssh pacman-contrib
+
+      - name: Update version and checksum
+        working-directory: packaging/aur/zuno-bin
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          sed -i "s/^pkgver=.*/pkgver=${version}/" PKGBUILD
+          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+          # Downloads the released .deb and rewrites sha256sums from what actually shipped,
+          # rather than trusting a hash edited by hand alongside the version.
+          updpkgsums
+          # The AUR reads .SRCINFO, not the PKGBUILD — a stale one silently serves the old
+          # version even after a successful push.
+          makepkg --printsrcinfo > .SRCINFO
+
+      - name: Build it before anyone else has to
+        working-directory: packaging/aur/zuno-bin
+        run: |
+          # makepkg refuses to run as root, so the build happens as an unprivileged user.
+          useradd -m builder
+          chown -R builder .
+          su builder -c "makepkg -sf --noconfirm"
+
+      - name: Publish
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          version="${{ steps.version.outputs.version }}"
+
+          mkdir -p ~/.ssh
+          echo "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur"
+
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+
+          # A package that does not exist yet clones as an empty repo rather than failing, so
+          # the first run creates it and every run after updates it. That matters because the
+          # maintainer is on Windows: without this, publishing would need a Linux box once,
+          # purely to make the initial commit.
+          git clone ssh://aur@aur.archlinux.org/zuno-bin.git /tmp/aur || {
+            echo "No AUR repo yet — initialising one."
+            mkdir -p /tmp/aur
+            git -C /tmp/aur init -b master
+            git -C /tmp/aur remote add origin ssh://aur@aur.archlinux.org/zuno-bin.git
+          }
+
+          # Only these two files belong in an AUR repo — no sources, no built packages.
+          cp packaging/aur/zuno-bin/PKGBUILD packaging/aur/zuno-bin/.SRCINFO /tmp/aur/
+
+          cd /tmp/aur
+          # `--quiet` alone reports nothing on a fresh repo where the files are untracked.
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "AUR already at ${version}, nothing to push."
+            exit 0
+          fi
+          git commit -m "zuno-bin ${version}"
+          git push -u origin master

@@ -152,16 +152,41 @@ for Windows, macOS or Linux.
 
 ### Linux notes
 
-On some Wayland desktops the AppImage can open a blank grey window with an EGL error. If that
-happens, try:
+Install the `.deb` or `.rpm`, or `zuno-bin` from the AUR on Arch. These use your system's
+WebKitGTK and GStreamer, which is what playback runs through.
+
+**No sound, or "YouTube player error 5".** Playback decodes through GStreamer, and most
+distros do not install the codecs YouTube needs by default:
 
 ```bash
-LD_PRELOAD=/usr/lib/libwayland-client.so ./Zuno_<version>_amd64.AppImage
+# Debian, Ubuntu, Mint
+sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+
+# Fedora (gstreamer1-libav needs RPM Fusion enabled)
+sudo dnf install gstreamer1-libav gstreamer1-plugins-base gstreamer1-plugins-good
+
+# Arch — pulled in automatically by zuno-bin
+sudo pacman -S gst-libav gst-plugins-base gst-plugins-good
 ```
 
-If playback or window controls still fail, open the app log from **Settings → Library →
-Application log** and attach it to an issue. The desktop environment, display server and
-distro all help a lot for Linux bugs.
+Confirm they registered:
+
+```bash
+gst-inspect-1.0 | grep -E 'avdec_aac|avdec_h264'
+```
+
+**A blank grey window.** A WebKitGTK rendering problem under Wayland, most often on Nvidia.
+Launch with one of:
+
+```bash
+WEBKIT_DISABLE_DMABUF_RENDERER=1 zuno
+WEBKIT_DISABLE_COMPOSITING_MODE=1 zuno
+GDK_BACKEND=x11 zuno
+```
+
+Open the app log from **Settings → Library → Application log** for anything else, and attach
+it to an issue. The desktop environment, display server and distro all help a lot for Linux
+bugs. The log also lives at `~/.local/share/com.zuno.desktop/logs/current.log`.
 
 ### macOS notes
 
