@@ -128,6 +128,43 @@ __artworkCacheForTest.reset();
   equal(fetches, 1, "one attempt");
 }
 
+// --- the byte budget, not just the entry count ------------------------------------------------
+
+/*
+ * The failure this catches is invisible: covers still appear, the entry count still looks
+ * healthy, and memory climbs anyway because nothing was counting what the entries weighed.
+ */
+__artworkCacheForTest.reset();
+revoked.length = 0;
+{
+  const oneMb = 1024 * 1024;
+  const overBudget = Math.ceil(__artworkCacheForTest.maxBlobBytes / oneMb) + 4;
+  for (let index = 0; index < overBudget; index += 1) {
+    rememberResolvedArtworkUrl(`big-${index}`, `blob:big-${index}`, {
+      ownsObjectUrl: true,
+      byteLength: oneMb,
+    });
+  }
+
+  check(
+    __artworkCacheForTest.blobBytes() <= __artworkCacheForTest.maxBlobBytes,
+    "blob bytes stay within the budget even though the entry count never reached its cap",
+  );
+  check(__artworkCacheForTest.resolvedSize() < overBudget, "over-budget entries were evicted");
+  check(revoked.length > 0, "evicted blobs are revoked rather than merely forgotten");
+  equal(
+    getResolvedArtworkUrl(`big-${overBudget - 1}`),
+    `blob:big-${overBudget - 1}`,
+    "the entry just inserted is never the one evicted to make room for itself",
+  );
+  equal(getResolvedArtworkUrl("big-0"), undefined, "the coldest entry goes first");
+}
+
+// A plain URL costs no bytes, so it must not be counted against the budget.
+__artworkCacheForTest.reset();
+rememberResolvedArtworkUrl("plain", "https://cdn/plain.jpg");
+equal(__artworkCacheForTest.blobBytes(), 0, "plain URLs weigh nothing");
+
 // --- resolving clears a previous failure ----------------------------------------------------
 
 __artworkCacheForTest.reset();

@@ -14,6 +14,7 @@ import type {
   ResolvedLink,
   SearchCategory,
   SearchResults,
+  AuthStage,
   TrackPage,
   Track,
   TrackRating,
@@ -60,7 +61,12 @@ export abstract class DataSource {
   onAuthExpired?(handler: () => void): void;
   /** Registers a listener for the source being answered *as* the signed-in user. */
   onAuthConfirmed?(handler: (at: number) => void): void;
-  signIn?(onPrompt: (prompt: AuthPrompt) => void): Promise<void>;
+  signIn?(
+    onPrompt: (prompt: AuthPrompt) => void,
+    onStage?: (stage: AuthStage) => void,
+  ): Promise<void>;
+  /** Abandons a sign-in still waiting on the user. No-op once it has moved past that. */
+  cancelSignIn?(): Promise<void>;
   signOut?(): Promise<void>;
   /** Channels available on the signed-in account. Absent when the source has no such notion. */
   listAccounts?(): Promise<AccountOption[]>;

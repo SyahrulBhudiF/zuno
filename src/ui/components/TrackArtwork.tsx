@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { AlbumIcon, MusicNoteIcon, PlaylistIcon, UserIcon } from "@/ui/icons";
-import { getArtworkUrlCandidates } from "../../datasource/youtube/artwork";
+import { getArtworkSizeBucket, getArtworkUrlCandidates } from "../../datasource/youtube/artwork";
 import {
   forgetResolvedArtworkUrl,
   getResolvedArtworkUrl,
@@ -29,6 +29,14 @@ interface TrackArtworkProps {
   iconSize?: number;
   loading?: "eager" | "lazy";
   retryOnError?: boolean;
+  /**
+   * Rendered width in CSS pixels, matching the `size-*` class on `className`.
+   *
+   * Sets which size variant is requested. Without it the original, full-size image is loaded:
+   * correct for hero art, but a 40px row decoding a 544px cover costs ~1.2 MB of texture
+   * instead of ~0.06 MB, and a list holds fifty of them.
+   */
+  size?: number;
   variant?: "track" | "album" | "artist" | "playlist";
 }
 
@@ -38,8 +46,18 @@ export function TrackArtwork({
   iconSize = 24,
   loading = "lazy",
   retryOnError = false,
+  size,
   variant = "track",
 }: TrackArtworkProps) {
+  const sizeBucket = size == null ? null : getArtworkSizeBucket(size);
+  /*
+   * Resolutions are cached per source *and* per requested size.
+   *
+   * Keying on the source alone would let whichever component mounted first decide the size for
+   * every other one — a queue row resolving at 120px would then be handed to the page header,
+   * which paints it at 300px and looks visibly soft.
+   */
+  const cacheKey = artworkUrl && sizeBucket !== null ? `${artworkUrl}@${sizeBucket}` : artworkUrl;
   /*
    * A previously resolved URL short-circuits the whole candidate walk: it is the only
    * candidate, so a remount paints from cache instead of re-requesting the ones that failed
@@ -47,9 +65,9 @@ export function TrackArtwork({
    */
   const artworkCandidates = useMemo(() => {
     if (!artworkUrl?.trim()) return [];
-    const cached = getResolvedArtworkUrl(artworkUrl);
-    return cached ? [cached] : getArtworkUrlCandidates(artworkUrl);
-  }, [artworkUrl]);
+    const cached = cacheKey ? getResolvedArtworkUrl(cacheKey) : undefined;
+    return cached ? [cached] : getArtworkUrlCandidates(artworkUrl, sizeBucket);
+  }, [artworkUrl, cacheKey, sizeBucket]);
   const [artworkIndex, setArtworkIndex] = useState(0);
   const [retryCount, setRetryCount] = useState(0);
   const [proxiedArtworkUrl, setProxiedArtworkUrl] = useState<string | null>(null);
@@ -65,7 +83,7 @@ export function TrackArtwork({
    * and the ladder continues from there.
    */
   const [loadedArtworkUrl, setLoadedArtworkUrl] = useState<string | null>(
-    () => (artworkUrl ? getResolvedArtworkUrl(artworkUrl) ?? null : null),
+    () => (cacheKey ? getResolvedArtworkUrl(cacheKey) ?? null : null),
   );
   const retryTimerRef = useRef<number | null>(null);
   const baseArtworkUrl = artworkCandidates[artworkIndex] ?? proxiedArtworkUrl;
@@ -87,8 +105,8 @@ export function TrackArtwork({
     setRetryCount(0);
     setProxiedArtworkUrl(null);
     // Same reasoning as the initial state: a cached resolution is already loaded, not unknown.
-    setLoadedArtworkUrl(artworkUrl ? getResolvedArtworkUrl(artworkUrl) ?? null : null);
-  }, [artworkUrl]);
+    setLoadedArtworkUrl(cacheKey ? getResolvedArtworkUrl(cacheKey) ?? null : null);
+  }, [artworkUrl, cacheKey]);
 
   useEffect(() => () => {
     if (retryTimerRef.current !== null) {
@@ -111,19 +129,25 @@ export function TrackArtwork({
   }, [baseArtworkUrl]);
 
   useEffect(() => {
-    if (!artworkUrl || artworkIndex < artworkCandidates.length || proxiedArtworkUrl) return;
+    if (!artworkUrl || !cacheKey || artworkIndex < artworkCandidates.length || proxiedArtworkUrl) {
+      return;
+    }
     // Every candidate already failed for this source once; re-walking earns the same 404s.
-    if (hasArtworkFailed(artworkUrl)) return;
+    if (hasArtworkFailed(cacheKey)) return;
 
     let active = true;
 
     /*
-     * Shared per source URL by the cache, so a screen of rows on the same album issues one
-     * proxy request between them rather than one each. The blob is owned by the cache and
+     * Shared per source URL and size by the cache, so a screen of rows on the same album issues
+     * one proxy request between them rather than one each. The blob is owned by the cache and
      * deliberately survives this unmount — that is what makes a re-scroll free.
+     *
+     * Fetches the head of the ladder, which is the sized variant when one was requested: the
+     * proxy path should not be the one place that quietly downloads the full-size original.
      */
-    void resolveArtworkThroughProxy(artworkUrl, async (url) => {
-      const response = await tauriFetch(url, {
+    const proxyUrl = getArtworkUrlCandidates(artworkUrl, sizeBucket)[0] ?? artworkUrl;
+    void resolveArtworkThroughProxy(cacheKey, async () => {
+      const response = await tauriFetch(proxyUrl, {
         headers: {
           Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
         },
@@ -137,7 +161,7 @@ export function TrackArtwork({
     return () => {
       active = false;
     };
-  }, [artworkCandidates.length, artworkIndex, artworkUrl, proxiedArtworkUrl]);
+  }, [artworkCandidates.length, artworkIndex, artworkUrl, cacheKey, sizeBucket, proxiedArtworkUrl]);
 
   return (
     <span
@@ -172,12 +196,12 @@ export function TrackArtwork({
           onLoad={() => {
             setLoadedArtworkUrl(currentArtworkUrl);
             /*
-             * Record the candidate that actually rendered, keyed by the source URL. The
+             * Record the candidate that actually rendered, keyed by source URL and size. The
              * retry suffix is stripped: it exists only to bust a failed request, and caching
              * it would make every future mount replay that cache-buster.
              */
-            if (artworkUrl && baseArtworkUrl && !baseArtworkUrl.startsWith("blob:")) {
-              rememberResolvedArtworkUrl(artworkUrl, baseArtworkUrl);
+            if (cacheKey && baseArtworkUrl && !baseArtworkUrl.startsWith("blob:")) {
+              rememberResolvedArtworkUrl(cacheKey, baseArtworkUrl);
             }
           }}
           onError={() => {
@@ -187,8 +211,8 @@ export function TrackArtwork({
              * Dropping it rebuilds the full candidate ladder next time instead of retrying the
              * same dead URL on every mount from here on.
              */
-            if (artworkUrl && baseArtworkUrl === getResolvedArtworkUrl(artworkUrl)) {
-              forgetResolvedArtworkUrl(artworkUrl);
+            if (cacheKey && baseArtworkUrl === getResolvedArtworkUrl(cacheKey)) {
+              forgetResolvedArtworkUrl(cacheKey);
             }
             if (retryOnError && retryCount < ARTWORK_RETRY_DELAYS_MS.length) {
               if (retryTimerRef.current !== null) {

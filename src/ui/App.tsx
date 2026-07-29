@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { MotionConfig } from "motion/react";
+import { AnimatePresence, MotionConfig } from "motion/react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Album, Artist, Playlist, SearchResults, Track } from "../datasource/types";
 import { looksLikeYouTubeLink } from "../datasource/youtube/links";
@@ -62,6 +62,7 @@ import { useMediaSession } from "../player/useMediaSession";
 import { LastFmService } from "../player/LastFm";
 import { playerUIStore, usePlayerUIState } from "./stores/playerUIStore";
 import { AppLoadingScreen } from "./components/AppLoadingScreen";
+import { AuthOverlay } from "./components/AuthOverlay";
 import { UpdateToast } from "./components/UpdateToast";
 import {
   checkForUpdates,
@@ -98,6 +99,8 @@ import {
 import { logInternalWarn } from "../internal/logging";
 import { PhysicalPosition } from "@tauri-apps/api/dpi";
 import {
+  destroyMiniPlayerWindow,
+  ensureMiniPlayerWindow,
   getSavedMiniPlayerPosition,
   saveMiniPlayerPosition,
   useMiniPlayerEnabled,
@@ -138,6 +141,22 @@ const TAB_SHORTCUT_ACTIONS: KeyboardShortcutAction[] = [
   "tab8",
   "tab9",
 ];
+
+/**
+ * How many pages back a tab remembers.
+ *
+ * Each entry is a whole view — a playlist's entire track list, a page of search results — so an
+ * uncapped stack grows by a hundred-odd KB per page navigated, per tab, for as long as the app
+ * stays open. Nothing reads deeper than the user can click, and fifty is well past that.
+ */
+const MAX_NAVIGATION_HISTORY = 50;
+
+function pushNavigationState(
+  entries: readonly TabViewState[],
+  state: TabViewState,
+): TabViewState[] {
+  return [...entries, state].slice(-MAX_NAVIGATION_HISTORY);
+}
 
 function getNavigationState(tab: Tab): TabViewState | null {
   if (tab.view === "settings") return null;
@@ -470,7 +489,7 @@ export default function App() {
         return {
           ...nextTab,
           navigationHistory: {
-            back: [...(tab.navigationHistory?.back ?? []), currentState],
+            back: pushNavigationState(tab.navigationHistory?.back ?? [], currentState),
             forward: [],
           },
         };
@@ -547,7 +566,7 @@ export default function App() {
         return {
           ...nextTab,
           navigationHistory: {
-            back: [...(tab.navigationHistory?.back ?? []), currentState],
+            back: pushNavigationState(tab.navigationHistory?.back ?? [], currentState),
             forward: forward.slice(1),
           },
         };
@@ -1581,13 +1600,23 @@ export default function App() {
 
 
 
+/*
+ * The window follows the setting, rather than existing always and merely being hidden.
+ *
+ * Enabled: created up front, so the first time it is needed — backgrounding the app — it appears
+ * immediately rather than after a webview cold start. Disabled: destroyed, which is the only
+ * thing that actually returns its ~32 MB; hiding leaves the process resident.
+ */
 useEffect(() => {
-  if (miniPlayerEnabled) return;
+  if (miniPlayerEnabled) {
+    void ensureMiniPlayerWindow();
+    return;
+  }
 
-  void (async () => {
-    const miniWin = await WebviewWindow.getByLabel("mini-player");
-    if (miniWin) await miniWin.hide();
-  })();
+  // The ref describes a window that is about to stop existing. Left set, the replacement made
+  // on re-enable would be treated as already placed and open wherever the OS put it.
+  miniPlayerPositionedRef.current = false;
+  void destroyMiniPlayerWindow();
 }, [miniPlayerEnabled]);
 
 
@@ -1603,7 +1632,20 @@ useEffect(() => {
      *   minimise, where the user's intent to background the app is unambiguous.
      */
     const showMiniPlayerIfAllowed = async (_event?: unknown, force = false) => {
-      const miniWin = await WebviewWindow.getByLabel("mini-player");
+      /*
+       * Checked before the window is asked for, not after.
+       *
+       * Asking is now what creates it, so testing `enabled` afterwards would spawn the window
+       * for the very users who turned it off, only to hide it again.
+       */
+      if (!miniPlayerEnabledRef.current) {
+        await hideMiniPlayer();
+        return;
+      }
+
+      // Covers the cold-start race: backgrounding the app in the first moments after launch
+      // can arrive before the creation kicked off on mount has finished.
+      const miniWin = await ensureMiniPlayerWindow();
       if (!miniWin) return;
 
       if (!force && Date.now() < mainWindowDragSuppressUntilRef.current) {
@@ -1612,11 +1654,6 @@ useEffect(() => {
       }
 
       if (!force && Date.now() < miniPlayerRestoreSuppressUntilRef.current) {
-        await miniWin.hide();
-        return;
-      }
-
-      if (!miniPlayerEnabledRef.current) {
         await miniWin.hide();
         return;
       }
@@ -1773,9 +1810,22 @@ useEffect(() => {
   syncTime();
   const timeSyncIntervalId = window.setInterval(syncTime, 1000);
 
+  /*
+   * A window that just appeared has missed every state emit so far, and the dedupe above means
+   * the next one may be minutes away. Clearing the memo makes the following call unconditional.
+   */
+  const resync = listen("mini-player:request-sync", () => {
+    lastTrackId = null;
+    lastStatus = null;
+    lastArtworkUrl = null;
+    syncPlayerState();
+    syncTime();
+  });
+
   return () => {
     unsubscribe();
     window.clearInterval(timeSyncIntervalId);
+    void resync.then((unlisten) => unlisten());
   };
 }, []);
 
@@ -2039,6 +2089,18 @@ useEffect(() => {
           onDismiss={dismissAvailableUpdate}
         />
       )}
+      {/*
+        Mounted only while a sign-in is running: `signInProgress` is null at every other moment,
+        so the overlay and its animation cost nothing for the whole rest of the session.
+      */}
+      <AnimatePresence>
+        {libraryState.authProgress && (
+          <AuthOverlay
+            progress={libraryState.authProgress}
+            onCancel={() => void libraryController.cancelSignIn()}
+          />
+        )}
+      </AnimatePresence>
     </div>
     </PlaylistContextMenuProvider>
     </TrackContextMenuProvider>

@@ -187,7 +187,16 @@ export function Layout({
               aria-hidden="true"
             >
               <span className="absolute -inset-x-1/4 -top-1/2 bottom-0 scale-125 opacity-40 blur-[64px] saturate-[2]">
-                <TrackArtwork className="size-full" artworkUrl={ambientArtwork} iconSize={0} />
+                {/*
+                  Deliberately the smallest variant: this is blurred by 64px and dropped to 40%
+                  opacity, so nothing above 120px survives to be seen — it only costs texture.
+                */}
+                <TrackArtwork
+                  className="size-full"
+                  size={120}
+                  artworkUrl={ambientArtwork}
+                  iconSize={0}
+                />
               </span>
             </span>
           ) : null}

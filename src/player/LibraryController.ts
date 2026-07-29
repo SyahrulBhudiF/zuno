@@ -9,6 +9,9 @@ import type {
   Artist,
   ArtistPage,
   AuthPrompt,
+  AuthFlow,
+  AuthProgress,
+  AuthStage,
   FeedNotification,
   LibrarySnapshot,
   Playlist,
@@ -43,6 +46,14 @@ export type LibraryStatus = "restoring" | "signed-out" | "authorizing" | "loadin
 export interface LibraryState {
   status: LibraryStatus;
   authPrompt: AuthPrompt | null;
+  /**
+   * What signing in or switching channel is doing right now, null when neither is running.
+   *
+   * Separate from `status`, which only says "authorizing" — the same value for the minutes
+   * spent waiting on a browser window and the seconds spent fetching a library. The overlay
+   * needs to tell those apart to say anything true.
+   */
+  authProgress: AuthProgress | null;
   library: LibrarySnapshot | null;
   pendingLikeTrackIds: ReadonlySet<string>;
   error: string | null;
@@ -87,6 +98,17 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+/**
+ * Whether a sign-in error is the user having backed out.
+ *
+ * Matched on the message because the backend reports cancellation as an ordinary command error
+ * — there is no code to switch on. Kept next to the string it matches so the two move together.
+ */
+function isSignInCancellation(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /sign-in was cancelled/i.test(message);
+}
+
 /** Local mirror of dislikes: YouTube stores the rating but exposes no list to read it back. */
 const DISLIKED_TRACKS_STORAGE_KEY = "zuno:disliked-tracks-v1";
 
@@ -106,12 +128,15 @@ export class LibraryController {
   private state: LibraryState = {
     status: "restoring",
     authPrompt: null,
+    authProgress: null,
     library: null,
     pendingLikeTrackIds: new Set(),
     error: null,
     sessionConfirmedAt: null,
   };
 
+  /** Which flow `setAuthStage` is reporting for; the two share every stage but the first. */
+  private activeAuthFlow: AuthFlow = "sign-in";
   private dislikedTrackIds: Set<string> = readDislikedTrackIds();
   private sessionRecoveryPromise: Promise<void> | null = null;
   private lastSessionRecoveryAt = 0;
@@ -262,21 +287,62 @@ export class LibraryController {
   async signIn(): Promise<void> {
     if (!this.dataSource.signIn) return;
     logInternalInfo("LibraryController.signIn start");
-    this.setState({ status: "authorizing", authPrompt: null, error: null });
+    this.activeAuthFlow = "sign-in";
+    this.setState({
+      status: "authorizing",
+      authPrompt: null,
+      authProgress: { flow: "sign-in", stage: "browser", attempt: 1, attemptCount: 1 },
+      error: null,
+    });
     try {
-      await this.dataSource.signIn((authPrompt) => {
-        logInternalInfo("LibraryController.signIn prompt received", {
-          verificationUrl: authPrompt.verificationUrl,
-          expiresInSec: authPrompt.expiresInSec,
-        });
-        this.setState({ status: "authorizing", authPrompt, error: null });
-      });
+      await this.dataSource.signIn(
+        (authPrompt) => {
+          logInternalInfo("LibraryController.signIn prompt received", {
+            verificationUrl: authPrompt.verificationUrl,
+            expiresInSec: authPrompt.expiresInSec,
+          });
+          this.setState({ status: "authorizing", authPrompt, error: null });
+        },
+        (stage) => this.setAuthStage(stage),
+      );
       logInternalInfo("LibraryController.signIn authentication complete");
       await this.refreshAfterSignIn();
       logInternalInfo("LibraryController.signIn refresh complete");
     } catch (error) {
-      this.setFailure("YouTube Music sign-in failed.", error);
+      /*
+       * Cancelling is not a failure. The backend reports it the same way as any other error,
+       * so without this the user who pressed Cancel is told the sign-in "failed" and left on an
+       * error screen they have to clear themselves.
+       */
+      if (isSignInCancellation(error)) {
+        logInternalInfo("LibraryController.signIn cancelled by user");
+        this.setState({ status: "signed-out", authPrompt: null, error: null });
+      } else {
+        this.setFailure("YouTube Music sign-in failed.", error);
+      }
+    } finally {
+      // Cleared on every exit, success or failure: a stale stage would leave the overlay
+      // describing work that is no longer running.
+      this.setState({ authProgress: null });
     }
+  }
+
+  /**
+   * Backs out of a sign-in that is still waiting on the browser window.
+   *
+   * Closing that window is the whole mechanism: the backend polls for it and reports a
+   * cancellation within a second of it disappearing, which unwinds `signIn` through the normal
+   * path. Nothing here has to reach into that flow and unpick its state.
+   */
+  async cancelSignIn(): Promise<void> {
+    logInternalInfo("LibraryController.cancelSignIn");
+    await this.dataSource.cancelSignIn?.();
+  }
+
+  private setAuthStage(stage: AuthStage, attempt = 1, attemptCount = 1): void {
+    this.setState({
+      authProgress: { flow: this.activeAuthFlow, stage, attempt, attemptCount },
+    });
   }
 
   async signOut(): Promise<void> {
@@ -314,12 +380,19 @@ export class LibraryController {
    */
   async selectAccount(id: string): Promise<void> {
     if (!this.dataSource.selectAccount) return;
+    this.activeAuthFlow = "account-switch";
+    this.setAuthStage("session");
     try {
       await this.dataSource.selectAccount(id);
       this.setState({ status: "loading", library: null, authPrompt: null, error: null });
+      // One attempt, unlike sign-in: the session is already established, so a partial library
+      // here is a real failure rather than YouTube still catching up with a new login.
+      this.setAuthStage("library");
       await this.refresh();
     } catch (error) {
       this.setFailure("Unable to switch account.", error);
+    } finally {
+      this.setState({ authProgress: null });
     }
   }
 
@@ -375,6 +448,8 @@ export class LibraryController {
 
     for (let index = 0; index < SIGN_IN_REFRESH_RETRY_DELAYS_MS.length; index += 1) {
       const delayMs = SIGN_IN_REFRESH_RETRY_DELAYS_MS[index];
+      // Announced before the wait, so the overlay explains the pause rather than sitting idle.
+      this.setAuthStage("library", index + 1, SIGN_IN_REFRESH_RETRY_DELAYS_MS.length);
       if (delayMs > 0) await delay(delayMs);
 
       try {

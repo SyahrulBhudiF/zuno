@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { ClientType, Innertube, Platform, Types, YTNodes } from "youtubei.js";
 import { clearCache, getCachedJson, setCachedJson } from "../../internal/cache";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../../internal/logging";
@@ -24,6 +25,7 @@ import type {
   ResolvedLink,
   SearchCategory,
   SearchResults,
+  AuthStage,
   TrackPage,
   Track,
   TrackRating,
@@ -276,6 +278,9 @@ type LibraryResponses = {
 
 const LIKED_SONGS_PLAYLIST_ID = "LM";
 /** Everything a browse shelf can meaningfully hold. */
+/** Must match YOUTUBE_LOGIN_WINDOW in src-tauri/src/lib.rs; cancelling closes this window. */
+const YOUTUBE_LOGIN_WINDOW_LABEL = "youtube-music-login";
+
 const BROWSE_ITEM_TYPES = new Set(["song", "video", "album", "playlist", "artist"]);
 /*
  * v6: v5 snapshots were capped at the first page of each section, so they are discarded rather
@@ -2707,14 +2712,20 @@ export class YouTubeMusicDataSource extends DataSource {
     return true;
   }
 
-  async signIn(onPrompt: (prompt: AuthPrompt) => void): Promise<void> {
+  async signIn(
+    onPrompt: (prompt: AuthPrompt) => void,
+    onStage?: (stage: AuthStage) => void,
+  ): Promise<void> {
     logInternalInfo("YouTubeMusicDataSource.signIn start");
     onPrompt({
       verificationUrl: "https://music.youtube.com/",
       userCode: "Browser sign-in",
       expiresInSec: 300,
     });
+    // Unbounded: this resolves when the person finishes signing in, not on a timer.
+    onStage?.("browser");
     this.musicCookie = await invoke<string>("sign_in_youtube_music");
+    onStage?.("session");
     try {
       await clearCache();
     } catch (error) {
@@ -2728,6 +2739,24 @@ export class YouTubeMusicDataSource extends DataSource {
     this.resetMusicSessionSelection();
     await this.getMusicClient();
     logInternalInfo("YouTubeMusicDataSource.signIn success");
+  }
+
+  /**
+   * Closes the sign-in window, which is what the backend's poll loop treats as a cancellation.
+   *
+   * Silent when the window is already gone: that is the ordinary case of cancelling just as the
+   * sign-in completed, and it is not worth an error.
+   */
+  async cancelSignIn(): Promise<void> {
+    const loginWindow = await WebviewWindow.getByLabel(YOUTUBE_LOGIN_WINDOW_LABEL);
+    if (!loginWindow) return;
+    try {
+      await loginWindow.close();
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.cancelSignIn close failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async signOut(): Promise<void> {

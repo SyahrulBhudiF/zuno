@@ -417,6 +417,7 @@ const LIBRARY_VIEWS: Array<{
 ];
 
 const ARTWORK_TILE = "size-10 shrink-0 rounded object-cover";
+const ARTWORK_TILE_PX = 40;
 const ARTWORK_FALLBACK =
   "flex size-10 shrink-0 items-center justify-center rounded bg-card text-muted-foreground";
 
@@ -428,6 +429,7 @@ function SidebarAlbumArtwork({ album }: { album: Album }) {
   return (
     <TrackArtwork
       className={ARTWORK_TILE}
+      size={ARTWORK_TILE_PX}
       artworkUrl={album.artworkUrl}
       iconSize={24}
       variant="album"
@@ -452,6 +454,7 @@ function SidebarPlaylistArtwork({ playlist }: { playlist: Playlist }) {
   return (
     <TrackArtwork
       className={ARTWORK_TILE}
+      size={ARTWORK_TILE_PX}
       artworkUrl={playlist.artworkUrl}
       iconSize={24}
       retryOnError

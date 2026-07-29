@@ -134,6 +134,7 @@ const QueueRow = memo(function QueueRow({
         <span className="relative shrink-0">
           <TrackArtwork
             className={cn("rounded", collapsed ? "size-11" : "size-10")}
+            size={collapsed ? 44 : 40}
             artworkUrl={track.artworkUrl}
             iconSize={collapsed ? 20 : 18}
           />
@@ -670,6 +671,7 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
                 "rounded ring-1 ring-primary/60",
                 collapsed ? "size-11" : "size-10",
               )}
+              size={collapsed ? 44 : 40}
               artworkUrl={currentTrack.artworkUrl}
               iconSize={collapsed ? 20 : 18}
             />

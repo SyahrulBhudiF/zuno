@@ -56,6 +56,14 @@ declare global {
   }
 }
 
+/**
+ * How long playback has to stay stopped before the standby deck is freed.
+ *
+ * Long enough that pausing to answer the door does not cost the next gapless transition, short
+ * enough that an app left paused in the background is not holding a spare video pipeline.
+ */
+const STANDBY_IDLE_TEARDOWN_MS = 60_000;
+
 let iframeApiPromise: Promise<void> | null = null;
 const audioEngines = new Set<AudioEngine>();
 let playbackClaimId = 0;
@@ -136,6 +144,7 @@ export class AudioEngine {
   private standbyHost: HTMLElement | null = null;
   private standbyVideoId: string | null = null;
   private standbyPromise: Promise<void> | null = null;
+  private standbyIdleTimerId: number | null = null;
   private audio: HTMLAudioElement | null = null;
   private audioObjectUrl: string | null = null;
   private currentVideoId: string | null = null;
@@ -318,6 +327,7 @@ export class AudioEngine {
   pause(): void {
     this.audio?.pause();
     this.player?.pauseVideo();
+    this.scheduleStandbyTeardown();
   }
 
   suspend(): void {
@@ -356,10 +366,9 @@ export class AudioEngine {
     this.playerHost?.remove();
     this.player = null;
     this.playerHost = null;
-    this.standbyPlayer?.destroy();
-    this.standbyHost?.remove();
-    this.standbyPlayer = null;
-    this.standbyHost = null;
+    // `stop()` above armed the idle timer; a disposed engine must not be woken by it.
+    this.cancelStandbyTeardown();
+    this.destroyStandby();
     audioEngines.delete(this);
   }
 
@@ -545,6 +554,8 @@ export class AudioEngine {
   }
 
   private async cueStandby(videoId: string): Promise<void> {
+    // There is a next transition again, so the deck must survive to serve it.
+    this.cancelStandbyTeardown();
     if (!this.standbyPlayer) {
       const created = await this.createPlayer();
       this.standbyPlayer = created.player;
@@ -563,6 +574,47 @@ export class AudioEngine {
   private discardStandby(): void {
     this.standbyVideoId = null;
     this.standbyPlayer?.stopVideo();
+    this.scheduleStandbyTeardown();
+  }
+
+  /**
+   * Frees the standby deck after a spell of not playing.
+   *
+   * The standby is a second YouTube IFrame — a whole video pipeline — kept alive purely so the
+   * *next* transition is gapless. While paused there is no next transition to be gapless about,
+   * and stopping its video does not release the frame; only destroying it does.
+   *
+   * Deferred rather than immediate because pause/play within a track is common and rebuilding
+   * the deck costs a network round-trip. The cost of getting this wrong is one audible gap
+   * after a long pause, not a failure: `cueStandby` recreates the deck on demand.
+   */
+  private scheduleStandbyTeardown(): void {
+    if (!this.standbyPlayer || this.standbyIdleTimerId !== null) return;
+
+    this.standbyIdleTimerId = window.setTimeout(() => {
+      this.standbyIdleTimerId = null;
+      // Playback resumed while the timer was pending; the deck is in use again.
+      if (playbackOwner === this && this.player?.getPlayerState() === window.YT?.PlayerState.PLAYING) {
+        return;
+      }
+      this.destroyStandby();
+    }, STANDBY_IDLE_TEARDOWN_MS);
+  }
+
+  private cancelStandbyTeardown(): void {
+    if (this.standbyIdleTimerId === null) return;
+    window.clearTimeout(this.standbyIdleTimerId);
+    this.standbyIdleTimerId = null;
+  }
+
+  private destroyStandby(): void {
+    if (!this.standbyPlayer && !this.standbyHost) return;
+    this.standbyVideoId = null;
+    this.standbyPlayer?.destroy();
+    this.standbyHost?.remove();
+    this.standbyPlayer = null;
+    this.standbyHost = null;
+    logInternalInfo("AudioEngine.destroyStandby", {});
   }
 
   private cancelFade(): void {

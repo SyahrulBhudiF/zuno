@@ -373,6 +373,7 @@ export function SearchResultsPage({
                     >
                       <TrackArtwork
                         className="size-24 rounded-full object-cover"
+                        size={96}
                         artworkUrl={artist.artworkUrl}
                         iconSize={42}
                         variant="artist"
@@ -408,6 +409,7 @@ export function SearchResultsPage({
                       <span className="w-5 shrink-0 text-right text-xs tabular-nums text-muted-foreground">{displayIndex + 1}</span>
                       <TrackArtwork
                         className="size-11 shrink-0 rounded-md object-cover"
+                        size={44}
                         artworkUrl={track.artworkUrl}
                         iconSize={24}
                       />

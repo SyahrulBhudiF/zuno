@@ -10,7 +10,7 @@
  */
 export {};
 
-import { getArtworkUrlCandidates, selectArtworkUrl } from "./artwork";
+import { getArtworkSizeBucket, getArtworkUrlCandidates, selectArtworkUrl } from "./artwork";
 
 function check(condition: boolean, message: string): void {
   if (!condition) throw new Error(`FAILED: ${message}`);
@@ -38,17 +38,45 @@ check(
   "protocol-relative urls are normalised",
 );
 
-// Size variants: the original is always tried first, so a rewrite can never lose the image.
-const variants = getArtworkUrlCandidates("https://yt3.googleusercontent.com/abc=w2565-h1068-l90-rj");
-check(
-  variants[0] === "https://yt3.googleusercontent.com/abc=w2565-h1068-l90-rj",
-  "the original url is the first candidate",
-);
+// Size variants: with no size asked for, the original is tried first, so a rewrite can never
+// lose the image.
+const original = "https://yt3.googleusercontent.com/abc=w2565-h1068-l90-rj";
+const variants = getArtworkUrlCandidates(original);
+check(variants[0] === original, "without a size, the original url is the first candidate");
 check(variants.length > 1, "youtube urls get smaller variants to fall back on");
 check(
   getArtworkUrlCandidates("https://example.com/img.jpg").length === 1,
   "urls on other hosts have no size syntax to rewrite",
 );
 check(getArtworkUrlCandidates("").length === 0, "no url, no candidates");
+
+/*
+ * The point of the whole exercise: a small slot must not be handed the full-size image. This is
+ * the check that fails if the size ever stops reaching the URL, which is invisible on screen —
+ * the picture still appears, it just costs twenty times the memory.
+ */
+const sized = getArtworkUrlCandidates(original, 120);
+check(
+  sized[0] === "https://yt3.googleusercontent.com/abc=w120-h120-l90-rj",
+  "a requested size is the first candidate, ahead of the original",
+);
+check(sized.includes(original), "the original stays in the ladder as a fallback");
+check(
+  getArtworkUrlCandidates("https://example.com/img.jpg", 120)[0] === "https://example.com/img.jpg",
+  "a size on a host with no rewrite syntax falls back to the original rather than dropping it",
+);
+
+// Buckets, so the same cover in two components shares one cache entry and one download.
+(globalThis as Record<string, unknown>).devicePixelRatio = 1;
+check(getArtworkSizeBucket(40) === 120, "a 40px slot asks for the smallest bucket");
+check(getArtworkSizeBucket(200) === 240, "a bucket must cover the slot, not merely be near it");
+check(getArtworkSizeBucket(900) === null, "a slot larger than every bucket keeps the original");
+
+(globalThis as Record<string, unknown>).devicePixelRatio = 2;
+check(getArtworkSizeBucket(40) === 120, "a retina 40px slot needs 80px, so still 120");
+check(
+  getArtworkSizeBucket(200) === 544,
+  "density is applied before bucketing, or hi-dpi art renders soft",
+);
 
 console.log("artwork.check.ts OK");

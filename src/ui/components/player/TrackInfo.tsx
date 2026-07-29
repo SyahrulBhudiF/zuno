@@ -59,6 +59,7 @@ export function TrackInfo() {
       {uiState.showAlbumArt && (
         <TrackArtwork
           className="size-12 shrink-0 rounded object-cover"
+          size={48}
           artworkUrl={currentTrack.artworkUrl}
           iconSize={22}
         />

@@ -276,6 +276,16 @@ export default function MiniPlayer() {
         });
       });
 
+      /*
+       * Asked for only once the listener above is live.
+       *
+       * `player-state-sync` is emitted on change, not on a timer, so a window created after
+       * playback started never hears about the track already playing and sits on "Nothing
+       * playing" until the next track change. Requesting after subscribing, rather than before,
+       * is what keeps the reply from arriving before anything is listening for it.
+       */
+      void emit("mini-player:request-sync");
+
       return unlisten;
     };
 

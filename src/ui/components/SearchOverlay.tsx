@@ -368,6 +368,7 @@ export function SearchOverlay({
           >
             <TrackArtwork
               className="size-12 shrink-0 rounded-md object-cover"
+              size={48}
               artworkUrl={preview.value.artworkUrl}
               iconSize={32}
               loading="eager"

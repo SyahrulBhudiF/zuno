@@ -132,6 +132,16 @@ function getDiscordArtworkUrl(track: Track): string | undefined {
   return track.artworkUrl;
 }
 
+/**
+ * How many played tracks stay in memory, per tab.
+ *
+ * Everything past this was retained for nothing: `exportSession` persists the last 100, and the
+ * deepest read is the last 20 (recommendation filtering). Uncapped it also meant copying the
+ * whole array on every track change, so a long session got slower as well as larger. Double the
+ * persisted count, so a restored session is never truncated by this.
+ */
+const MAX_PLAYBACK_HISTORY = 200;
+
 export class PlayerController {
   private readonly audioEngine = new AudioEngine();
   private readonly queue = new Queue();
@@ -1226,7 +1236,7 @@ export class PlayerController {
     if (this.state.history[this.state.history.length - 1]?.id === track.id) {
       return this.state.history;
     }
-    return [...this.state.history, track];
+    return [...this.state.history, track].slice(-MAX_PLAYBACK_HISTORY);
   }
 
   private setError(error: unknown) {

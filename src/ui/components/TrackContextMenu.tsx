@@ -670,6 +670,7 @@ export function TrackContextMenuProvider({
             <header className="flex items-center gap-3">
               <TrackArtwork
                 className="size-11 shrink-0 rounded-lg object-cover"
+                size={44}
                 artworkUrl={track.artworkUrl}
                 iconSize={24}
                 loading="eager"

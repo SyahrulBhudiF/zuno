@@ -381,6 +381,7 @@ export const TrackRow = memo(function TrackRow({
       {showArtwork ? (
         <TrackArtwork
           className="size-10 shrink-0 rounded-md"
+          size={40}
           artworkUrl={track.artworkUrl}
           iconSize={18}
         />

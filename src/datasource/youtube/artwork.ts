@@ -74,11 +74,38 @@ function withYoutubeSize(url: string, size: number): string | null {
   return `${url}=w${size}-h${size}-l90-rj`;
 }
 
-export function getArtworkUrlCandidates(url?: string): string[] {
+/**
+ * Widths artwork is requested at.
+ *
+ * Buckets rather than exact sizes because the resolution cache is keyed by size: a distinct
+ * width per component would mean a distinct cache entry, and a distinct download, for the same
+ * cover shown in two places. Three buckets keep that sharing while still keeping a 40px row
+ * from decoding a 544px texture.
+ */
+const ARTWORK_SIZE_BUCKETS = [120, 240, 544];
+
+/**
+ * The smallest bucket that still covers `cssPx` at this display's pixel density.
+ *
+ * Null means the slot is larger than any bucket — those keep the original, full-size URL,
+ * since downscaling a hero image is the one place the extra bytes are visible.
+ */
+export function getArtworkSizeBucket(cssPx: number): number | null {
+  const needed = cssPx * (globalThis.devicePixelRatio || 1);
+  return ARTWORK_SIZE_BUCKETS.find((bucket) => bucket >= needed) ?? null;
+}
+
+/**
+ * `size` is the requested width; omitting it keeps the original URL first, which is what
+ * callers rendering at an unknown or full-bleed size want. Everything after the first entry is
+ * a fallback for the first one 404ing, so the original stays in the ladder either way.
+ */
+export function getArtworkUrlCandidates(url?: string, size?: number | null): string[] {
   if (!url?.trim()) return [];
 
   const normalized = normalizeArtworkUrl(url);
   const candidates = [
+    size == null ? null : withYoutubeSize(normalized, size),
     normalized,
     withYoutubeSize(normalized, 544),
     withYoutubeSize(normalized, 240),

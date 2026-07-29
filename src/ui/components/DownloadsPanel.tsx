@@ -32,6 +32,7 @@ function DownloadRow({
     <div className="flex items-center gap-3 rounded-xl px-2 py-2">
       <TrackArtwork
         className="size-10 shrink-0 rounded-lg"
+        size={40}
         artworkUrl={track.artworkUrl}
         iconSize={18}
       />
@@ -174,6 +175,7 @@ export function DownloadsPanel({ onOpenDownloads }: { onOpenDownloads?: () => vo
                 <div key={entry.track.id} className="flex items-center gap-3 rounded-xl px-2 py-2">
                   <TrackArtwork
                     className="size-10 shrink-0 rounded-lg"
+                    size={40}
                     artworkUrl={entry.track.artworkUrl}
                     iconSize={18}
                   />

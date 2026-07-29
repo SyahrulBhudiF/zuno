@@ -167,6 +167,30 @@ export interface AuthPrompt {
   expiresInSec: number;
 }
 
+/**
+ * Which part of connecting an account is currently running.
+ *
+ * Reported rather than inferred from elapsed time: the browser step is unbounded — it waits on
+ * a person — while the two after it take seconds. A progress bar guessing at that would spend
+ * most of a sign-in lying, and would have no way to show the library retry at all.
+ */
+export type AuthStage = "browser" | "session" | "library";
+
+/**
+ * Signing in and switching channel share the last two stages and differ in the first, so they
+ * share a progress shape and are told apart by `kind` — which decides both the wording and
+ * whether backing out is possible.
+ */
+export type AuthFlow = "sign-in" | "account-switch";
+
+export interface AuthProgress {
+  flow: AuthFlow;
+  stage: AuthStage;
+  /** 1-based. The library fetch runs more than once when YouTube answers with a partial one. */
+  attempt: number;
+  attemptCount: number;
+}
+
 export interface AccountProfile {
   name: string;
   artworkUrl?: string;

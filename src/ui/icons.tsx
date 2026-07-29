@@ -104,6 +104,7 @@ export { UserIcon } from "@solar-icons/react/linear/user";
 export { UserIcon as UserActiveIcon } from "@solar-icons/react/bold/user";
 export { UserPlusIcon } from "@solar-icons/react/linear/user-plus";
 export { Login2Icon as LoginIcon } from "@solar-icons/react/linear/login-2";
+export { GlobalIcon } from "@solar-icons/react/linear/global";
 export { Logout2Icon as LogoutIcon } from "@solar-icons/react/linear/logout-2";
 export { KeyIcon } from "@solar-icons/react/linear/key";
 export { BugIcon } from "@solar-icons/react/linear/bug";

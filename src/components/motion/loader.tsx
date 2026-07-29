@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useId, useState } from "react";
 import { EASE_IN_OUT } from "@/lib/ease";
 import { cn } from "@/lib/utils";
+import clsx from "clsx";
 
 export type LoaderVariant =
   | "spinner"
@@ -78,7 +79,7 @@ export function Loader({
         className,
       )}
     >
-      {variant === "spinner" && <Spinner size={size} speed={speed} reduce={reduce} />}
+      {variant === "spinner" && <SpinnerSteps size={size} speed={speed} reduce={reduce} />}
       {variant === "dots" && <Dots size={size} speed={speed} reduce={reduce} />}
       {variant === "bars" && <Bars size={size} speed={speed} reduce={reduce} />}
       {variant === "dot-matrix" && (
@@ -110,41 +111,6 @@ interface PartProps {
   size: number;
   speed: number;
   reduce: boolean;
-}
-
-export function Spinner({ size, speed, reduce }: PartProps) {
-  const stroke = Math.max(2, size * 0.09);
-  const r = (size - stroke) / 2;
-  return (
-    <motion.svg
-      width={size}
-      height={size}
-      viewBox={`0 0 ${size} ${size}`}
-      animate={reduce ? REDUCED.animate : { rotate: 360 }}
-      transition={
-        reduce
-          ? REDUCED.transition
-          : { duration: speed, ease: "linear", repeat: Infinity }
-      }
-    >
-      <circle
-        cx={size / 2}
-        cy={size / 2}
-        r={r}
-        fill="none"
-        stroke="currentColor"
-        strokeOpacity={0.2}
-        strokeWidth={stroke}
-      />
-      <path
-        d={`M ${size / 2} ${size / 2 - r} A ${r} ${r} 0 0 1 ${size / 2 + r} ${size / 2}`}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={stroke}
-        strokeLinecap="round"
-      />
-    </motion.svg>
-  );
 }
 
 function Dots({ size, speed, reduce }: PartProps) {
@@ -201,32 +167,68 @@ function Ascii({
   );
 }
 
-export function SpinnerSteps({
-  size = 48,
-  color = "#fff",
-}: {
+type SpinnerStepsProps = {
   size?: number;
   color?: string;
-}) {
+  speed?: number;
+  className?: string;
+  reduce?: boolean;
+};
+
+const OPACITY = [
+  1,
+  1,
+  1,
+  0.9,
+  0.8,
+  0.7,
+  0.6,
+  0.5,
+  0.4,
+  0.3,
+  0.2,
+  0.1,
+];
+
+export function SpinnerSteps({
+  size = 24,
+  color = "currentColor",
+  speed = 0.8,
+  className,
+  reduce = false,
+}: SpinnerStepsProps) {
+  const spokes = 12;
+  const width = 4;
+  const height = 16;
+
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 100 100"
-      className="animate-spinner-steps"
-      style={{ color }}
+      aria-hidden="true"
+      className={clsx("spinner-steps", className)}
+      style={
+        {
+          color,
+          // Reduced motion slows the wheel rather than stopping it: the spokes are
+          // pre-faded, so a frozen one reads as a normal static graphic and the UI
+          // looks hung. Same call as the Ascii variant below.
+          "--spinner-duration": `${reduce ? speed * 3 : speed}s`,
+        } as React.CSSProperties
+      }
     >
-      {Array.from({ length: 8 }).map((_, i) => (
+      {Array.from({ length: spokes }).map((_, i) => (
         <rect
           key={i}
-          x={47}
+          x={50 - width / 2}
           y={8}
-          width={6}
-          height={20}
-          rx={3}
+          width={width}
+          height={height}
+          rx={width / 2}
           fill="currentColor"
-          opacity={(i + 1) / 8}
-          transform={`rotate(${i * 45} 50 50)`}
+          opacity={OPACITY[i]}
+          transform={`rotate(${i * (360 / spokes)} 50 50)`}
         />
       ))}
     </svg>

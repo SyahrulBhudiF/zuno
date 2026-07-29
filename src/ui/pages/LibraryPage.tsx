@@ -324,6 +324,7 @@ export function LibraryPage({
               >
                 <TrackArtwork
                   className="size-28 rounded-full"
+                  size={112}
                   artworkUrl={artist.artworkUrl}
                   iconSize={30}
                   variant="artist"

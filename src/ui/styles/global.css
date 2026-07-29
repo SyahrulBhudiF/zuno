@@ -372,3 +372,17 @@ html[data-platform-linux] *::after {
     }
   }
 }
+
+@keyframes spinner-steps {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spinner-steps {
+  display: inline-block;
+  animation: spinner-steps var(--spinner-duration, 0.8s)
+    steps(12, end) infinite;
+  transform-origin: center;
+  will-change: transform;
+}

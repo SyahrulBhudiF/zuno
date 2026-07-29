@@ -21,12 +21,21 @@
  */
 
 const MAX_ENTRIES = 500;
+/**
+ * Ceiling on blob bytes held at once.
+ *
+ * The entry count alone does not bound memory: entries are a mix of plain URLs, which cost
+ * nothing, and blobs, which cost whatever the image weighs. Five hundred thumbnails and five
+ * hundred full-size covers are the same number and two orders of magnitude apart in bytes.
+ */
+const MAX_BLOB_BYTES = 32 * 1024 * 1024;
 const MAX_PERSISTED_ENTRIES = 300;
 const STORAGE_KEY = "zuno:artwork-resolved-v1";
 
 const resolved = new Map<string, string>();
-/** Values that own a blob and must be revoked when evicted. */
-const ownedObjectUrls = new Set<string>();
+/** Values that own a blob and must be revoked when evicted, and what each one weighs. */
+const ownedBlobBytes = new Map<string, number>();
+let totalBlobBytes = 0;
 /** Sources where every candidate and the proxy all failed. */
 const failed = new Set<string>();
 /** Proxy fetches already running, keyed by source URL, so callers share one request. */
@@ -47,7 +56,7 @@ export function getResolvedArtworkUrl(sourceUrl: string): string | undefined {
 export function rememberResolvedArtworkUrl(
   sourceUrl: string,
   workingUrl: string,
-  options: { ownsObjectUrl?: boolean } = {},
+  options: { ownsObjectUrl?: boolean; byteLength?: number } = {},
 ): void {
   const previous = resolved.get(sourceUrl);
   if (previous === workingUrl) return;
@@ -55,13 +64,18 @@ export function rememberResolvedArtworkUrl(
 
   resolved.delete(sourceUrl);
   resolved.set(sourceUrl, workingUrl);
-  if (options.ownsObjectUrl) ownedObjectUrls.add(workingUrl);
+  if (options.ownsObjectUrl) {
+    ownedBlobBytes.set(workingUrl, options.byteLength ?? 0);
+    totalBlobBytes += options.byteLength ?? 0;
+  }
   // Anything that resolves is, by definition, no longer a failure.
   failed.delete(sourceUrl);
 
-  while (resolved.size > MAX_ENTRIES) {
-    const oldestKey = resolved.keys().next().value;
-    if (oldestKey === undefined) break;
+  // Oldest first, so eviction takes the coldest entry under either limit.
+  for (const oldestKey of [...resolved.keys()]) {
+    if (resolved.size <= MAX_ENTRIES && totalBlobBytes <= MAX_BLOB_BYTES) break;
+    // Never evict the entry just inserted; under a tight budget it is the one still needed.
+    if (oldestKey === sourceUrl) continue;
     const oldestValue = resolved.get(oldestKey);
     resolved.delete(oldestKey);
     if (oldestValue !== undefined) releaseValue(oldestValue);
@@ -100,15 +114,18 @@ export function rememberArtworkFailure(sourceUrl: string): void {
 }
 
 /**
- * Fetches artwork bytes through the proxy, at most once per source URL.
+ * Fetches artwork bytes through the proxy, at most once per cache key.
  *
  * The promise is shared, so a screen full of rows showing the same cover issues one request
  * rather than one each. The result is cached before any caller sees it, so whoever loses the
  * race still reads a hit rather than starting a second fetch.
+ *
+ * `fetchBlob` takes no URL: keys carry the requested size (see TrackArtwork), so only the
+ * caller knows which of a source's size variants it actually wants fetched.
  */
 export function resolveArtworkThroughProxy(
   sourceUrl: string,
-  fetchBlob: (url: string) => Promise<Blob>,
+  fetchBlob: () => Promise<Blob>,
 ): Promise<string | null> {
   const cached = getResolvedArtworkUrl(sourceUrl);
   if (cached) return Promise.resolve(cached);
@@ -116,11 +133,15 @@ export function resolveArtworkThroughProxy(
   const existing = inFlight.get(sourceUrl);
   if (existing) return existing;
 
-  const request = fetchBlob(sourceUrl)
+  const request = fetchBlob()
     .then((blob) => {
       const objectUrl = URL.createObjectURL(blob);
-      // Handed to the cache, which owns revoking it from here on.
-      rememberResolvedArtworkUrl(sourceUrl, objectUrl, { ownsObjectUrl: true });
+      // Handed to the cache, which owns revoking it from here on. The size goes with it: it is
+      // the only moment the byte count is known, and the budget cannot be enforced without it.
+      rememberResolvedArtworkUrl(sourceUrl, objectUrl, {
+        ownsObjectUrl: true,
+        byteLength: blob.size,
+      });
       return objectUrl;
     })
     .catch(() => {
@@ -136,8 +157,10 @@ export function resolveArtworkThroughProxy(
 }
 
 function releaseValue(value: string): void {
-  if (!ownedObjectUrls.has(value)) return;
-  ownedObjectUrls.delete(value);
+  const bytes = ownedBlobBytes.get(value);
+  if (bytes === undefined) return;
+  ownedBlobBytes.delete(value);
+  totalBlobBytes -= bytes;
   URL.revokeObjectURL(value);
 }
 
@@ -195,7 +218,7 @@ function persistNow(): void {
 
 /** Used when clearing app data, so stale blobs do not outlive a cache reset. */
 export function clearArtworkCache(): void {
-  for (const value of resolved.values()) releaseValue(value);
+  for (const value of [...resolved.values()]) releaseValue(value);
   resolved.clear();
   failed.clear();
   inFlight.clear();
@@ -210,10 +233,13 @@ export function clearArtworkCache(): void {
 export const __artworkCacheForTest = {
   reset(): void {
     resolved.clear();
-    ownedObjectUrls.clear();
+    ownedBlobBytes.clear();
+    totalBlobBytes = 0;
     failed.clear();
     inFlight.clear();
   },
   resolvedSize: () => resolved.size,
   inFlightSize: () => inFlight.size,
+  blobBytes: () => totalBlobBytes,
+  maxBlobBytes: MAX_BLOB_BYTES,
 };

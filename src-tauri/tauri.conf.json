@@ -21,20 +21,6 @@
         "height": 900,
         "minWidth": 900,
         "minHeight": 600
-      },
-      {
-        "label": "mini-player",
-        "url": "/mini.html",
-        "width": 146,
-        "height": 116,
-        "resizable": false,
-        "decorations": false,
-        "alwaysOnTop": true,
-        "transparent": true,
-        "backgroundColor": "#00000000",
-        "visible": false,
-        "shadow": false,
-        "skipTaskbar": true
       }
     ],
     "security": {

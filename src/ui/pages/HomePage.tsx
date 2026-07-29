@@ -297,6 +297,7 @@ export function HomePage({
               >
                 <TrackArtwork
                   className="size-11 shrink-0 rounded-md object-cover"
+                  size={44}
                   artworkUrl={track.artworkUrl}
                   iconSize={24}
                 />

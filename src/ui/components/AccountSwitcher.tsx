@@ -59,7 +59,7 @@ export function AccountSwitcher({
   className,
 }: {
   libraryController: LibraryController;
-  /** Fired after a switch starts, so a popover can close itself. */
+  /** Fired once a switch completes, so a popover can close itself. */
   onSwitched?: () => void;
   /**
    * Render even when only one channel was found. Settings sets this so you can see which
@@ -93,9 +93,11 @@ export function AccountSwitcher({
   const handleSelect = async (account: AccountOption) => {
     if (account.isActive || switchingId) return;
     setSwitchingId(account.id);
-    onSwitched?.();
     try {
       await libraryController.selectAccount(account.id);
+      // Closing here, not before the await: an early close unmounts the row and its
+      // spinner on the same tick, so the switch looks like nothing happened.
+      onSwitched?.();
     } finally {
       setSwitchingId(null);
     }

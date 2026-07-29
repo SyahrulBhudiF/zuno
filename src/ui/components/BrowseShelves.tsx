@@ -20,6 +20,7 @@ function ArtistTile({ artist, onOpen }: { artist: Artist; onOpen: () => void }) 
     >
       <TrackArtwork
         className="size-24 rounded-full"
+        size={96}
         artworkUrl={artist.artworkUrl}
         iconSize={28}
         variant="artist"
@@ -38,6 +39,7 @@ function PlaylistTile({ playlist, onOpen }: { playlist: Playlist; onOpen: () => 
     >
       <TrackArtwork
         className="size-32 rounded-lg"
+        size={128}
         artworkUrl={playlist.artworkUrl}
         iconSize={28}
         variant="playlist"

@@ -15,6 +15,7 @@ import {
 } from "../../internal/durableLocalSetting";
 import { setAppSetting } from "../../internal/appSettings";
 
+const MINI_PLAYER_LABEL = "mini-player";
 const STORAGE_KEY = "mini-player-enabled";
 const POSITION_STORAGE_KEY = "mini-player-position";
 const HOVER_ACTION_STORAGE_KEY = "mini-player-hover-action";
@@ -127,6 +128,67 @@ export async function hydrateMiniPlayerSettings() {
   }
 
   window.dispatchEvent(new Event(HOVER_ACTION_CHANGE_EVENT));
+}
+
+/*
+ * The mini player window is created on demand rather than declared in tauri.conf.json.
+ *
+ * A declared window is spawned at launch even with `visible: false`, and an idle hidden WebView2
+ * process costs ~32 MB — paid by every user, including the ones who have the mini player switched
+ * off and never see it. Creation follows the setting instead.
+ */
+let miniPlayerCreation: Promise<WebviewWindow | null> | null = null;
+
+async function createMiniPlayerWindow(): Promise<WebviewWindow | null> {
+  const existing = await WebviewWindow.getByLabel(MINI_PLAYER_LABEL);
+  if (existing) return existing;
+
+  return new Promise<WebviewWindow | null>((resolve) => {
+    const miniWin = new WebviewWindow(MINI_PLAYER_LABEL, {
+      url: "/mini.html",
+      width: 146,
+      height: 116,
+      resizable: false,
+      decorations: false,
+      alwaysOnTop: true,
+      transparent: true,
+      visible: false,
+      shadow: false,
+      skipTaskbar: true,
+    });
+    // Resolved on the window's own events: the constructor returns before the webview exists,
+    // and showing it too early races the process that has to back it.
+    void miniWin.once("tauri://created", () => resolve(miniWin));
+    void miniWin.once("tauri://error", () => resolve(null));
+  });
+}
+
+/**
+ * The mini player window, creating it if this is the first time it has been needed.
+ *
+ * Deduplicated: enabling the setting and backgrounding the main window can both ask for it in
+ * the same tick, and creating the label twice is an error rather than a second window.
+ */
+export function ensureMiniPlayerWindow(): Promise<WebviewWindow | null> {
+  if (miniPlayerCreation) return miniPlayerCreation;
+
+  const creation = createMiniPlayerWindow();
+  miniPlayerCreation = creation;
+  void creation.catch(() => null).finally(() => {
+    if (miniPlayerCreation === creation) miniPlayerCreation = null;
+  });
+  return creation;
+}
+
+/** Frees the window's process. `hide()` keeps it resident; only destroying returns the memory. */
+export async function destroyMiniPlayerWindow() {
+  const miniWin = await WebviewWindow.getByLabel(MINI_PLAYER_LABEL);
+  if (!miniWin) return;
+  try {
+    await miniWin.destroy();
+  } catch {
+    // Already gone, or closing concurrently; either way there is nothing left to free.
+  }
 }
 
 export async function resetMiniPlayerPosition() {

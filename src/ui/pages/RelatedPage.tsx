@@ -49,6 +49,7 @@ export function RelatedPage({
       <header className="flex items-center gap-4">
         <TrackArtwork
           className="size-16 shrink-0 rounded-xl object-cover"
+          size={64}
           artworkUrl={track.artworkUrl}
         />
         <div className="flex min-w-0 flex-col gap-0.5">
