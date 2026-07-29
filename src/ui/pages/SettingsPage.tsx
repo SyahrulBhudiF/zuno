@@ -82,6 +82,7 @@ import {
   useExtraPlayerControlsAlwaysVisible,
 } from "../settings/playerControls";
 import { setPaperPcMode, usePaperPcMode } from "../settings/paperPcMode";
+import { setMadeForYouVisible, useMadeForYouVisible } from "../settings/homeSections";
 import {
   AUTO_LYRICS_SOURCE,
   setPreferredLyricsSourceId,
@@ -427,6 +428,7 @@ export function SettingsPage({
   const preferredLyricsSource = usePreferredLyricsSourceId();
   const lyricsFontScale = useLyricsFontScale();
   const lyricsTranslationLang = useLyricsTranslationLang();
+  const madeForYouVisible = useMadeForYouVisible();
   const crossfadeSec = useCrossfadeSec();
   const gaplessEnabled = useGaplessEnabled();
   const sessionRestoreEnabled = useSessionRestoreEnabled();
@@ -1858,6 +1860,22 @@ export function SettingsPage({
             {TOOLBAR_ITEMS.map((item) => (
               <ToolbarItemToggle key={item.id} item={item} />
             ))}
+          </section>
+
+          <section className={SETTINGS_CARD} aria-labelledby="home-settings-title">
+            <div className="min-w-0">
+              <h2 className="text-lg" id="home-settings-title">Home</h2>
+              <p className="text-sm text-muted-foreground">
+                Which sections the home page shows.
+              </p>
+            </div>
+
+            <SettingToggle
+              title="Made for you"
+              description="The recommendation carousel at the top. Hiding it leaves the surprise button and More recommendations working."
+              checked={madeForYouVisible}
+              onCheckedChange={setMadeForYouVisible}
+            />
           </section>
 
           <section className={SETTINGS_CARD} aria-labelledby="motion-settings-title">

@@ -13,6 +13,7 @@ import { useTrackContextMenu } from "../components/TrackContextMenu";
 import { HomeDestinations, type HomeDestinationHandlers } from "../components/HomeDestinations";
 import { ArtistLinks } from "../components/ArtistLinks";
 import { usePlayHistory } from "../../player/playHistory";
+import { useMadeForYouVisible } from "../settings/homeSections";
 
 const FALLBACK_QUERIES = [
   "new music",
@@ -84,6 +85,7 @@ export function HomePage({
   destinations,
 }: HomePageProps) {
   const { openTrackMenu } = useTrackContextMenu();
+  const showMadeForYou = useMadeForYouVisible();
   const [suggestions, setSuggestions] = useState<Track[]>(
     () => suggestionCache.get(tabId) ?? [],
   );
@@ -277,7 +279,7 @@ export function HomePage({
         </section>
       )}
 
-      {!isLoadingSuggestions && madeForYouSection}
+      {showMadeForYou && !isLoadingSuggestions && madeForYouSection}
 
       {/* Directly under the carousel: the picks are what you came for, these are where you
           go when none of them appeal. */}
@@ -312,7 +314,7 @@ export function HomePage({
         </section>
       )}
 
-      {isLoadingSuggestions && madeForYouSection}
+      {showMadeForYou && isLoadingSuggestions && madeForYouSection}
 
       {moreSuggestions.length > 0 && (
         <section className="flex flex-col gap-3">

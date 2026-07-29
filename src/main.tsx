@@ -32,6 +32,7 @@ import { hydratePlaybackSettings } from "./player/playbackSettings";
 import { hydratePlayHistory } from "./player/playHistory";
 import { hydrateSessionRestoreSetting } from "./ui/settings/sessionRestore";
 import { hydrateToolbarItemSettings } from "./ui/settings/toolbarItems";
+import { hydrateHomeSectionSettings } from "./ui/settings/homeSections";
 
 logInternalInfo("main.bootstrap start");
 // Before React mounts: a resolution restored after first paint is a resolution that already
@@ -60,6 +61,7 @@ void Promise.all([
   hydrateSidebarSettings(),
   hydrateKeyboardShortcuts(),
   hydrateToolbarItemSettings(),
+  hydrateHomeSectionSettings(),
   hydratePlaybackSettings(),
   hydratePlayHistory(),
   // Read synchronously from local storage at boot, so this only backfills a machine whose
