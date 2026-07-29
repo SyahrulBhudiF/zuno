@@ -147,13 +147,18 @@ export function Hero({
           <div className="relative w-full">
             <div className="relative border-white/10 lg:border-l lg:border-t">
               {/*
-                `aspect-video w-full` and nothing else. The previous version also set `h-full`
-                on a stretched grid item, which overrides the aspect ratio — the video was
-                forced into a tall box and `object-cover` cropped the sides away, so what
-                showed was a narrow slice of the middle rather than the frame.
+                The footage is 1234x922 — 1.338, not 16:9. `aspect-video` boxed it at 1.778
+                and the player pillarboxed to fit, losing about a quarter of the width to
+                black bars on either side.
+
+                The ratio is declared rather than left to the video's metadata so the box is
+                reserved before a byte of it arrives, and `width`/`height` say the same thing
+                again for anything that reads attributes over CSS.
               */}
               <video
-                className="aspect-video w-full"
+                className="aspect-[1234/922] w-full"
+                width={1234}
+                height={922}
                 src={DEMO_VIDEO}
                 poster="./zuno-d1-1.2.PNG"
                 /* A looping video is exactly the continuous motion the preference exists to
