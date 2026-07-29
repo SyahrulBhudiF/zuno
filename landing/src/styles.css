@@ -106,6 +106,34 @@ html {
 }
 
 /*
+ * The ticker along the foot of the hero.
+ *
+ * A scrolling strip is what a player does with a title too long for its bar, so the gesture is
+ * borrowed from the product rather than applied to it. The track is duplicated and translated
+ * by exactly half its width, which is what makes the loop seamless — any other distance and
+ * there is a visible jump at the wrap.
+ *
+ * Stopped outright under reduced motion, not merely shortened: the global rule collapses
+ * durations to 0.001ms, which on an infinite translate reads as a flicker rather than as calm.
+ */
+.ticker-track {
+  animation: ticker 42s linear infinite;
+  will-change: transform;
+}
+
+@keyframes ticker {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ticker-track {
+    animation: none !important;
+  }
+}
+
+/*
  * The wordmark's cursor.
  *
  * `zuno_` ends in an underscore, so it is already a prompt — this just admits it. The one

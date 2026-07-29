@@ -1,7 +1,6 @@
 import { useLatestRelease } from "@/useLatestRelease";
 import { Downloads } from "@/components/Downloads";
 import { Hero } from "@/components/Hero";
-import { Screenshots } from "@/components/Screenshots";
 import { Mono, Section } from "./components/ui";
 import { GITHUB_REPO, RELEASES_URL } from "./releases";
 
@@ -71,32 +70,13 @@ export function App() {
 
   return (
     <div className="flex min-h-screen flex-col">
-   
       <main className="flex-1">
-        
         <Hero release={latest.release} platform={latest.platform} />
-{/* 
-        <Section
-          id="features"
-          index="01"
-          title="A real app, not a wrapped tab"
-          lede="Pick a feature to see it. Everything here is the actual interface, not a mock-up of one."
-        >
-          <Features />
-        </Section> */}
-
-        <Section
-          id="screenshots"
-          index="01"
-          title="What it actually looks like"
-          lede="Real captures from the current release, not mock-ups."
-        >
-          <Screenshots />
-        </Section>
 
         <Section
           id="download"
-          index="02"
+          index="01"
+          title="Get it"
           lede="Free and open source. Pick your system — the format choice inside each tile is the only decision to make."
         >
           <Downloads release={latest.release} platform={latest.platform} />
