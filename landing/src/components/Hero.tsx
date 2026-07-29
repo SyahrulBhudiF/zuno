@@ -52,9 +52,15 @@ export function Hero({
     <section id="top" className="relative isolate w-full overflow-hidden bg-background">
       <Header />
 
-      <div className="mx-auto w-full max-w-[1400px] px-6">
-        <div className="grid items-end gap-x-12 gap-y-14 pb-0 pt-12 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] lg:pt-20">
-          <div className="flex flex-col items-start pb-16 lg:pb-24">
+      {/*
+        The grid is not inside a max-width container, so the right column reaches the actual
+        viewport edge. The left column carries the page's measure itself — padded to where the
+        6xl container's edge falls — which keeps its left edge in line with every section below
+        while leaving the video free to bleed.
+      */}
+      <div className="w-full">
+        <div className="grid items-center gap-x-12 gap-y-12 pt-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:pt-16">
+          <div className="flex flex-col items-start px-6 pb-4 lg:pb-16 lg:pl-[max(1.5rem,calc((100vw-72rem)/2))] lg:pr-0">
             <span className="flex items-baseline gap-px font-mono text-2xl font-medium tracking-tight text-foreground">
               zuno
               {/* The underscore, made literal. */}
@@ -138,10 +144,16 @@ export function Hero({
             floating in the middle of a page reads as a picture of an app; one cropped by the
             viewport reads as the app, continuing past what the page can show.
           */}
-          <div className="relative self-stretch max-lg:-mx-6 lg:-mr-6 xl:-mr-24">
-            <div className="relative h-full border-l border-t border-white/10 max-lg:border-x-0">
+          <div className="relative w-full">
+            <div className="relative border-white/10 lg:border-l lg:border-t">
+              {/*
+                `aspect-video w-full` and nothing else. The previous version also set `h-full`
+                on a stretched grid item, which overrides the aspect ratio — the video was
+                forced into a tall box and `object-cover` cropped the sides away, so what
+                showed was a narrow slice of the middle rather than the frame.
+              */}
               <video
-                className="aspect-video h-full w-full object-cover object-left-top"
+                className="aspect-video w-full"
                 src={DEMO_VIDEO}
                 poster="./zuno-d1-1.2.PNG"
                 /* A looping video is exactly the continuous motion the preference exists to
