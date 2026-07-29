@@ -35,7 +35,13 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Install packaging tools
-        run: pacman -Syu --noconfirm --needed git openssh pacman-contrib
+        run: |
+          pacman -Syu --noconfirm --needed git openssh pacman-contrib sudo
+          # makepkg and everything built on it — updpkgsums, --printsrcinfo — refuse to run
+          # as root, and the container is root. One unprivileged user serves all of them.
+          useradd -m builder
+          # `makepkg -s` installs the declared dependencies, which needs pacman.
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
 
       - name: Update version and checksum
         working-directory: packaging/aur/zuno-bin
@@ -43,20 +49,17 @@ jobs:
           version="${{ steps.version.outputs.version }}"
           sed -i "s/^pkgver=.*/pkgver=${version}/" PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
-          # Downloads the released .deb and rewrites sha256sums from what actually shipped,
-          # rather than trusting a hash edited by hand alongside the version.
-          updpkgsums
-          # The AUR reads .SRCINFO, not the PKGBUILD — a stale one silently serves the old
-          # version even after a successful push.
-          makepkg --printsrcinfo > .SRCINFO
+          chown -R builder .
+          # updpkgsums downloads the released .deb and rewrites sha256sums from what actually
+          # shipped, rather than trusting a hash edited by hand alongside the version.
+          #
+          # .SRCINFO is what the AUR reads — not the PKGBUILD — so a stale one silently serves
+          # the old version even after a successful push.
+          su builder -c "updpkgsums && makepkg --printsrcinfo > .SRCINFO"
 
       - name: Build it before anyone else has to
         working-directory: packaging/aur/zuno-bin
-        run: |
-          # makepkg refuses to run as root, so the build happens as an unprivileged user.
-          useradd -m builder
-          chown -R builder .
-          su builder -c "makepkg -sf --noconfirm"
+        run: su builder -c "makepkg -sf --noconfirm"
 
       - name: Publish
         env:
