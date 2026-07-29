@@ -28,12 +28,17 @@ jobs:
 
       - name: Install generators
         run: |
-          dnf install -y python3-pip python3-aiohttp python3-toml git nodejs npm
-          pip3 install --break-system-packages requirements-parser PyYAML || true
+          dnf install -y python3-pip git nodejs npm
+          # tomlkit and aiohttp are what the cargo generator imports — python3-toml is a
+          # different library and does not satisfy it.
+          pip3 install --break-system-packages tomlkit aiohttp
           curl -sSLo /usr/local/bin/flatpak-cargo-generator.py \
             https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
           chmod +x /usr/local/bin/flatpak-cargo-generator.py
-          npm install -g flatpak-node-generator || npm install -g @flatpak/node-generator || true
+          # The node generator is a Python package inside flatpak-builder-tools, not an npm
+          # module — `npm i -g flatpak-node-generator` installs something unrelated.
+          git clone --depth 1 https://github.com/flatpak/flatpak-builder-tools /tmp/fbt
+          pip3 install --break-system-packages /tmp/fbt/node
 
       - name: Generate cargo sources
         run: |
@@ -43,16 +48,8 @@ jobs:
 
       - name: Generate node sources
         run: |
-          # The generator name has moved between releases of flatpak-builder-tools; try the
-          # packaged entry point and fall back to running it from source.
-          if command -v flatpak-node-generator >/dev/null; then
-            flatpak-node-generator npm package-lock.json -o packaging/flatpak/node-sources.json
-          else
-            git clone --depth 1 https://github.com/flatpak/flatpak-builder-tools /tmp/fbt
-            pip3 install --break-system-packages /tmp/fbt/node || true
-            python3 -m flatpak_node_generator npm package-lock.json \
-              -o packaging/flatpak/node-sources.json
-          fi
+          python3 -m flatpak_node_generator npm package-lock.json \
+            -o packaging/flatpak/node-sources.json
           echo "node sources: $(wc -l < packaging/flatpak/node-sources.json) lines"
 
       - name: Validate metadata
