@@ -99,7 +99,10 @@ export function AuthOverlay({ progress, onCancel }: AuthOverlayProps) {
 
   return (
     <motion.div
-      className="fixed inset-0 z-[95] grid place-items-center bg-background/85 [backdrop-filter:blur(16px)] [-webkit-backdrop-filter:blur(16px)]"
+      /* Rounded to the window: this covers the whole app, and square corners on a rounded
+         window paint over the corner cutout — the blur shows as four hard tabs. The variable
+         is 0 when maximized or on Linux, so it follows the window rather than guessing. */
+      className="fixed inset-0 z-[95] grid place-items-center overflow-hidden rounded-[var(--window-radius)] bg-background/85 [backdrop-filter:blur(16px)] [-webkit-backdrop-filter:blur(16px)]"
       initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 1.01 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 1.01 }}

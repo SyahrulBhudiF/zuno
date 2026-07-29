@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/motion/button";
 import { libraryController, useLibraryState } from "../../player/playerStore";
 import { AccountAvatar, AccountSwitcher } from "./AccountSwitcher";
+import { GoogleSignInButton } from "./GoogleSignInButton";
 import { DownloadsPanel } from "./DownloadsPanel";
 import { FloatingPanel } from "./FloatingPanel";
 import { NotificationsPanel } from "./NotificationsPanel";
@@ -397,15 +398,15 @@ export function TitleBar({
                   ? "Restoring your YouTube Music session."
                   : "Connect YouTube Music for your library, playlists and likes."}
               </p>
-              <Button
-                className="mt-2 w-full"
+              <GoogleSignInButton
+                className="mt-2"
+                fullWidth
+                isBusy={isConnecting}
                 onClick={() => {
                   setIsAccountPanelOpen(false);
                   onOpenSettings();
                 }}
-              >
-                Sign in
-              </Button>
+              />
             </div>
           )}
         </FloatingPanel>

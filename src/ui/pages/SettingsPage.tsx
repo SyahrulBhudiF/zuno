@@ -33,7 +33,6 @@ import {
   FolderOpenIcon,
   KeyIcon,
   LastFmIcon,
-  LoginIcon,
   LogFileIcon,
   LogoutIcon,
   PaletteIcon,
@@ -83,6 +82,7 @@ import {
 } from "../settings/playerControls";
 import { setPaperPcMode, usePaperPcMode } from "../settings/paperPcMode";
 import { setMadeForYouVisible, useMadeForYouVisible } from "../settings/homeSections";
+import { GoogleSignInButton } from "../components/GoogleSignInButton";
 import {
   AUTO_LYRICS_SOURCE,
   setPreferredLyricsSourceId,
@@ -906,15 +906,10 @@ export function SettingsPage({
                   Sign out
                 </button>
               ) : (
-                <button
-                  className="flex items-center gap-2 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                  type="button"
-                  disabled={authBusy}
+                <GoogleSignInButton
+                  isBusy={authBusy}
                   onClick={() => void onSignIn()}
-                >
-                  <LoginIcon size={18} />
-                  {authBusy ? "Connecting..." : "Sign in"}
-                </button>
+                />
               )}
             </div>
 

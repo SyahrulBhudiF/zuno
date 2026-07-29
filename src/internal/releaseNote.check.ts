@@ -1,0 +1,90 @@
+/**
+ * Self-check for the post-update note. Run with the whole suite:
+ *
+ *   npm run check
+ *
+ * Two failures matter and neither is visible in testing on a machine that has already run the
+ * app: greeting a brand-new user with release notes for software they have never used, and
+ * showing the same note on every launch forever. Both are pinned here.
+ */
+export {};
+
+function check(condition: boolean, message: string): void {
+  if (!condition) throw new Error(`FAILED: ${message}`);
+}
+
+const { RELEASE_NOTE_BODY, parseReleaseNote, shouldShowReleaseNote } =
+  await import("./releaseNote");
+
+function equal(actual: unknown, expected: unknown, message: string): void {
+  check(actual === expected, `${message}: expected ${String(expected)}, got ${String(actual)}`);
+}
+
+check(
+  !shouldShowReleaseNote("1.2.0", null),
+  "a fresh install is not an update — nothing has changed for someone who has never run it",
+);
+check(
+  !shouldShowReleaseNote("1.2.0", "1.2.0"),
+  "the same version twice shows nothing, so it cannot repeat on every launch",
+);
+check(
+  shouldShowReleaseNote("1.2.0", "1.1.3"),
+  "a newer version after an older one is the case this exists for",
+);
+check(
+  shouldShowReleaseNote("1.1.3", "1.2.0"),
+  "a downgrade also shows: it is still a version whose notes were never read",
+);
+check(
+  shouldShowReleaseNote("1.2.0-beta.2", "1.2.0-beta.1"),
+  "prerelease builds differ as plain strings, with no version parser to get wrong",
+);
+check(
+  !shouldShowReleaseNote("", "1.1.3"),
+  "no installed version means no note, rather than a note with nothing to say",
+);
+check(!shouldShowReleaseNote("", null), "and neither half being known is still nothing");
+
+check(RELEASE_NOTE_BODY.trim().length > 0, "the note has content");
+check(
+  !RELEASE_NOTE_BODY.includes("TODO"),
+  "the note is not a placeholder left over from the previous release",
+);
+
+/* Linkifying: the body is plain text, so the parse is the only thing between a written
+   mention and a working link — and a silent failure just renders it as prose. */
+
+const plain = parseReleaseNote("nothing to see here");
+equal(plain.length, 1, "text with no links is one segment");
+equal(plain[0].kind, "text", "and it is text");
+
+const sub = parseReleaseNote("Come say hello at /r/myzuno, and enjoy");
+equal(sub.length, 3, "a subreddit splits the sentence in three");
+equal(sub[1].kind, "link", "the middle piece is the link");
+equal(sub[1].kind === "link" ? sub[1].url : "", "https://www.reddit.com/r/myzuno", "resolved to reddit");
+equal(sub[2].kind === "text" ? sub[2].value : "", ", and enjoy", "the comma stays outside the link");
+
+const url = parseReleaseNote("see https://example.com/x for more");
+equal(url[1].kind === "link" ? url[1].url : "", "https://example.com/x", "a bare URL links to itself");
+
+const both = parseReleaseNote("/r/one and /r/two");
+equal(both.filter((s) => s.kind === "link").length, 2, "every mention links, not just the first");
+
+equal(parseReleaseNote("")[0], undefined, "an empty body yields no segments");
+equal(
+  parseReleaseNote("/r/myzuno").length,
+  1,
+  "a body that is nothing but a link has no empty text around it",
+);
+
+// Rejoining every segment must reproduce the original exactly, or the note silently loses text.
+const roundTrip = parseReleaseNote(RELEASE_NOTE_BODY).map((s) => s.value).join("");
+equal(roundTrip, RELEASE_NOTE_BODY, "parsing never drops or duplicates a character");
+
+check(
+  parseReleaseNote(RELEASE_NOTE_BODY).some((s) => s.kind === "link"),
+  "this release's note actually contains a link",
+);
+
+console.log("releaseNote self-check passed");

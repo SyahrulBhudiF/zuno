@@ -12,6 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
 import { FloatingPanel } from "./FloatingPanel";
+import { GoogleSignInButton } from "./GoogleSignInButton";
 import { importPlaylistFile } from "../../player/playlistTransfer";
 import { isLikedSongsId, likedSongsCover } from "../likedSongsArtwork";
 import {
@@ -1402,14 +1403,11 @@ export function Sidebar({
                   </span>
                 )}
                 {libraryState.status === "signed-out" && (
-                  <button
-                    type="button"
-                    className="rounded-full bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  <GoogleSignInButton
+                    size="sm"
+                    iconOnly={shouldHideText}
                     onClick={() => void libraryController.signIn()}
-                    title="Sign in to YouTube Music"
-                  >
-                    Sign in
-                  </button>
+                  />
                 )}
                 {showPlaylistRetry && (
                   <button
