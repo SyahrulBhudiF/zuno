@@ -10,6 +10,11 @@ on:
     branches: [main]
   pull_request:
 
+# Nothing here writes to the repo. A compromised dependency in `npm ci` gets a token that
+# can only read.
+permissions:
+  contents: read
+
 # A second push to the same branch makes the first run's answer irrelevant.
 concurrency:
   group: ci-${{ github.ref }}
