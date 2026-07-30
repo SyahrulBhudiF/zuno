@@ -12,40 +12,88 @@ export function cn(...classes: Array<string | false | null | undefined>): string
 }
 
 /**
- * Two buttons, not five.
+ * Geometry, type and behaviour shared by every weight — only colour differs, so only colour
+ * lives in the variants.
  *
- * A landing page has one thing it wants you to do. Every additional button weight is another
- * claim on that attention, so there is the action and there is everything else.
+ * Nothing glows and nothing floats. A tinted shadow spilling out from under a saturated pill,
+ * a `brightness` filter on hover, an inset top highlight faking a lit edge — those are the
+ * default settings of a button that nobody decided anything about. The press is the whole
+ * interaction: colour shifts on hover, and the pill moves a single pixel *down* when it is
+ * actually clicked, because that is the direction a pressed thing goes.
+ *
+ * `group` is in the base because the buttons carry icons that react to the button's own hover,
+ * and a variant that forgot it would silently kill the nudge.
  */
-const SOLID =
-  "group inline-flex items-center justify-center gap-2 rounded-full bg-foreground px-5 py-2.5 text-base font-medium text-background transition-[transform,opacity] hover:-translate-y-px hover:opacity-90 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
+const BASE =
+  "group inline-flex shrink-0 select-none items-center justify-center gap-2 rounded-full font-semibold tracking-[-0.01em] " +
+  "transition-[background-color,border-color,color,transform] duration-150 ease-out " +
+  "active:translate-y-px " +
+  /* Offset colour set once here: Tailwind defaults it to white, which on this page draws a white
+     gap around every focused button. `background` is right for the hero and the sections both. */
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
-const QUIET =
-  "inline-flex items-center justify-center gap-2 rounded-full px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+/**
+ * Size is a prop, not a `className` override.
+ *
+ * `cn` is a plain join, so a caller passing `px-7` did not replace the variant's `px-5` — both
+ * landed on the element and Tailwind's stylesheet order picked the winner. That resolves the way
+ * you want today only because `px-7` happens to be emitted after `px-5`. Naming the three sizes
+ * that actually exist means padding is set once, by whoever knows which one they want.
+ */
+const SIZES = {
+  sm: "px-4 py-2 text-sm",
+  md: "px-5 py-2.5 text-base",
+  /* Wide rather than tall: the label is the shape, so the horizontal padding carries the weight
+     and the type stays at reading size instead of growing with the button. */
+  lg: "px-8 py-4 text-base",
+} as const;
+
+export type ButtonSize = keyof typeof SIZES;
 
 /*
- * A third weight, for actions sitting on top of the video.
+ * The primary action, matching the app's primary button — same accent fill, same hover step.
  *
- * Neither of the other two work there: the solid fill is reserved for the one primary action,
- * and the quiet variant has no surface, so its label competes with whatever frame the footage
- * happens to be on. A blurred translucent pill stays legible over anything moving underneath.
+ * The download buttons are the one place the page and the product are the same object, so they
+ * wear the product's colour rather than the page's neutral.
+ */
+const SOLID = "bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-primary";
+
+/*
+ * The secondary weight, for actions sitting on top of the video.
+ *
+ * Nothing opaque works there — a card fill punches a hole in the footage — and nothing fully
+ * transparent works either, because the label would compete with whatever frame happens to be
+ * underneath. A hairline over blur is the least that stays legible over moving colour.
  */
 const OUTLINE =
-  "inline-flex items-center justify-center gap-2 rounded-full border border-white/25 bg-white/10 px-5 py-2.5 text-base font-medium text-white backdrop-blur-md transition-colors hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-transparent";
+  "border border-white/15 bg-white/[0.06] text-white backdrop-blur-xl " +
+  "hover:border-white/25 hover:bg-white/[0.12] focus-visible:ring-white";
 
-/* Secondary weight on an opaque surface — the outline variant is tuned for video, not cards. */
+/* Same weight, on an opaque surface — the blurred variant needs something behind it to blur. */
 const MUTED =
-  "inline-flex items-center justify-center gap-2 rounded-full bg-background/70 px-5 py-2.5 text-base font-medium text-foreground ring-1 ring-border transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  "border border-border text-foreground hover:border-white/20 hover:bg-white/[0.05] " +
+  "focus-visible:ring-ring";
 
-const VARIANTS = { solid: SOLID, quiet: QUIET, outline: OUTLINE, muted: MUTED } as const;
+/*
+ * Borders, not rings, on the two bordered weights.
+ *
+ * `ring-1 ring-border` plus `focus-visible:ring-2 focus-visible:ring-ring` is two rules fighting
+ * over one property, settled by whichever variant Tailwind emitted last. Using `border` for the
+ * resting outline leaves the ring to mean exactly one thing: focus.
+ */
+const VARIANTS = { solid: SOLID, outline: OUTLINE, muted: MUTED } as const;
 export type ButtonVariant = keyof typeof VARIANTS;
 
 export function LinkButton({
   variant = "solid",
+  size = "md",
   className,
   ...props
-}: AnchorHTMLAttributes<HTMLAnchorElement> & { variant?: ButtonVariant }) {
-  return <a className={cn(VARIANTS[variant], className)} {...props} />;
+}: AnchorHTMLAttributes<HTMLAnchorElement> & {
+  variant?: ButtonVariant;
+  size?: ButtonSize;
+}) {
+  return <a className={cn(BASE, SIZES[size], VARIANTS[variant], className)} {...props} />;
 }
 
 /** Small monospace label. Used for versions, sizes, counts — anything machine-ish. */

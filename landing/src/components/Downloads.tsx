@@ -115,7 +115,7 @@ function Tile({
       )}
     >
       <div className="flex items-start justify-between gap-3">
-        <BrandIcon icon={tile.icon} width={34} height={34} className={cn(tile.id === "macos" && "text-foreground")} />
+        <BrandIcon icon={tile.icon} width={34} height={34} className="text-foreground" />
         {isYours ? (
           <span className="rounded-full bg-primary/10 px-2 py-0.5 font-mono text-[11px] uppercase tracking-wider text-primary">
             your system
@@ -160,7 +160,7 @@ function Tile({
           href={asset?.url ?? RELEASES_URL}
           rel="noopener"
           variant={isYours ? "solid" : "muted"}
-          className="w-full py-3"
+          className="w-full"
         >
           <DownloadIcon size={18} />
           Download

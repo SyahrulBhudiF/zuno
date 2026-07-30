@@ -40,6 +40,31 @@ export function DownloadIcon(props: IconProps) {
   );
 }
 
+/*
+ * Bare direction arrows, for the two hero actions.
+ *
+ * `DownloadIcon` has a tray under it, which promises a file. Both hero buttons only move you —
+ * one down the page to the tiles, one out to the repository — so both get an arrow and nothing
+ * else, and the direction is the whole message.
+ */
+export function ArrowDownIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M12 5v14" />
+      <path d="m19 12-7 7-7-7" />
+    </Icon>
+  );
+}
+
+export function ArrowRightIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M5 12h14" />
+      <path d="m12 5 7 7-7 7" />
+    </Icon>
+  );
+}
+
 /* Transport glyphs are solid — a hairline triangle reads as an arrow, not a play button. */
 export function PlayIcon(props: IconProps) {
   return (
@@ -78,6 +103,18 @@ export function SpeakerIcon({ muted, ...props }: IconProps & { muted?: boolean }
           <path d="M19 7a7 7 0 0 1 0 10" />
         </>
       )}
+    </Icon>
+  );
+}
+
+/** One glyph mirrored by the caller — a skip is the same shape pointed the other way. */
+export function SkipIcon({ back, ...props }: IconProps & { back?: boolean }) {
+  return (
+    <Icon fill="currentColor" stroke="none" {...props}>
+      <g transform={back ? "scale(-1,1) translate(-24,0)" : undefined}>
+        <path d="M6 6.4v11.2a1 1 0 0 0 1.55.83l8.4-5.6a1 1 0 0 0 0-1.66l-8.4-5.6A1 1 0 0 0 6 6.4Z" />
+        <rect x="16.8" y="5.5" width="2.6" height="13" rx="1.2" />
+      </g>
     </Icon>
   );
 }
