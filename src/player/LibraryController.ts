@@ -273,7 +273,14 @@ export class LibraryController {
         this.setState({ library: cachedLibrary, error: null });
       }
 
-      const restored = await this.dataSource.restoreSession?.();
+      /*
+       * A missing stored credential is not the same thing as a missing sign-in. The keyring
+       * entry can fail to read, be half-written, or have been dropped by a migration, while the
+       * sign-in webview's own Google session is still perfectly alive — so the durable record is
+       * asked before the user is. Costs a hidden window on a path that was otherwise a prompt.
+       */
+      const restored = await this.dataSource.restoreSession?.()
+        || await this.dataSource.refreshSession?.();
       if (!restored) {
         this.setState({ status: "signed-out", authPrompt: null, error: null });
         return;

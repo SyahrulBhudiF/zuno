@@ -47,6 +47,7 @@ const { AuthExpiredError } = await import("../datasource/DataSource");
 function makeDataSource(
   refreshResult: boolean | (() => boolean),
   libraryFailsAfterRecovery = false,
+  restoreResult = true,
 ) {
   let authExpired: (() => void) | null = null;
   let refreshCalls = 0;
@@ -59,7 +60,7 @@ function makeDataSource(
       authExpired = handler;
     },
     async restoreSession() {
-      return true;
+      return restoreResult;
     },
     async refreshSession() {
       refreshCalls += 1;
@@ -142,6 +143,27 @@ function makeDataSource(
     "signed-out",
     "a renewal YouTube still refuses resolves to signed out, not a stuck spinner",
   );
+}
+
+/*
+ * No stored credential at startup. The keyring entry can fail to read while the sign-in webview's
+ * Google session is still alive, and prompting there is a sign-in the user did not need.
+ */
+{
+  const { controller, refreshCalls } = makeDataSource(true, false, false);
+  await controller.initialize();
+
+  equal(refreshCalls(), 1, "a missing credential asks the login partition before the user");
+  equal(controller.getState().status, "ready", "and a renewal there starts up signed in");
+}
+
+// The same, when the partition cannot help either: that is a real sign-out, said plainly.
+{
+  const { controller } = makeDataSource(false, false, false);
+  await controller.initialize();
+
+  equal(controller.getState().status, "signed-out", "a genuinely absent session signs out");
+  equal(controller.getState().error, null, "with no error: nothing failed, nobody is signed in");
 }
 
 console.log("sessionRecovery.check passed");
