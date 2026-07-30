@@ -77,6 +77,7 @@ const TILES: readonly OsTile[] = [
     variants: [
       { label: "AppImage", platform: "linux", match: /\.AppImage$/i, note: "needs chmod +x" },
       { label: ".deb", platform: "linux", match: /\.deb$/i, note: "apt-based distributions" },
+      { label: ".rpm", platform: "linux", match: /\.rpm$/i, note: "fedora and opensuse" },
     ],
   },
 ];
