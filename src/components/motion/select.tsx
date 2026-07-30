@@ -40,6 +40,14 @@ const ITEM_VARIANTS: Variants = {
 
 type Placement = "bottom" | "top";
 
+/**
+ * How tall the option list may get before it scrolls: about six and a half rows.
+ *
+ * Half a row on purpose — a list cut mid-item reads as "there is more below" without needing a
+ * scrollbar to say so.
+ */
+const MAX_LIST_HEIGHT = 224;
+
 interface SelectContextValue {
   value: string | undefined;
   open: boolean;
@@ -257,6 +265,11 @@ export function SelectContent({ className, children }: SelectContentProps) {
   const open = ctx.open;
   const { setPlacement } = ctx;
 
+  /*
+   * The list scrolls past MAX_LIST_HEIGHT rather than growing, so `offsetHeight` — and with it
+   * the panel's animated height and the room the placement flip looks for — is already clamped.
+   * A twenty-language list used to unfold to some 700px and simply run off the window.
+   */
   useLayoutEffect(() => {
     const node = innerRef.current;
     if (!node) return;
@@ -266,6 +279,18 @@ export function SelectContent({ className, children }: SelectContentProps) {
     observer.observe(node);
     return () => observer.disconnect();
   });
+
+  // Opening onto the top of a capped list hides the current choice; this scrolls it into view.
+  // Measured against the list itself rather than via offsetTop, which answers relative to the
+  // positioned root and would count the trigger and the gap as part of the scroll offset.
+  useLayoutEffect(() => {
+    const node = innerRef.current;
+    if (!open || !node) return;
+    const selected = node.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!selected) return;
+    const offset = selected.getBoundingClientRect().top - node.getBoundingClientRect().top;
+    node.scrollTop += offset - (node.clientHeight - selected.offsetHeight) / 2;
+  }, [open]);
 
   // On open, flip upward when there isn't room below and there's more above.
   useLayoutEffect(() => {
@@ -357,7 +382,10 @@ export function SelectContent({ className, children }: SelectContentProps) {
         variants={ctx.reduce ? undefined : LIST_VARIANTS}
         initial={false}
         animate={open ? "show" : "hidden"}
-        className="p-1"
+        // overscroll-contain: a list at its end must not hand the wheel to the settings page
+        // behind it. Only scrollable while open, or a closed panel would swallow the wheel.
+        className={cn("p-1 overscroll-contain", open ? "overflow-y-auto" : "overflow-hidden")}
+        style={{ maxHeight: MAX_LIST_HEIGHT }}
       >
         {children}
       </motion.div>
