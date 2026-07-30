@@ -106,30 +106,24 @@ html {
 }
 
 /*
- * The ticker along the foot of the hero.
+ * The record leaving the sleeve in the hero.
  *
- * A scrolling strip is what a player does with a title too long for its bar, so the gesture is
- * borrowed from the product rather than applied to it. The track is duplicated and translated
- * by exactly half its width, which is what makes the loop seamless — any other distance and
- * there is a visible jump at the wrap.
+ * Slow enough that it reads as a turntable rather than a loading spinner. The disc is centred by
+ * a translate, so the rotation has to carry that translate through every frame — a bare
+ * `rotate` would snap it back to the corner on the first keyframe.
  *
- * Stopped outright under reduced motion, not merely shortened: the global rule collapses
- * durations to 0.001ms, which on an infinite translate reads as a flicker rather than as calm.
+ * The class is only applied when motion is allowed, so there is no reduced-motion override to
+ * write: the global rule would collapse an infinite rotation to a flicker, which is worse than
+ * either extreme.
  */
-.ticker-track {
-  animation: ticker 42s linear infinite;
+.spin-slow {
+  animation: spin-slow 24s linear infinite;
   will-change: transform;
 }
 
-@keyframes ticker {
+@keyframes spin-slow {
   to {
-    transform: translateX(-50%);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ticker-track {
-    animation: none !important;
+    transform: translateY(-50%) rotate(360deg);
   }
 }
 
