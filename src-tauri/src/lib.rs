@@ -138,15 +138,24 @@ const YOUTUBE_MUSIC_PLAYER_API_URL: &str = "https://music.youtube.com/youtubei/v
 const MACOS_LOGIN_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15";
 const YOUTUBE_COOKIE_CHUNK_SIZE: usize = 900;
 const YOUTUBE_COOKIE_MAX_CHUNKS: usize = 16;
-/// How often a rotated cookie is written back to secure storage.
+/// How often a rotation of `YOUTUBE_SLOW_PERSIST_COOKIES` is written back to secure storage.
 ///
 /// Not on every response: Google rotates SIDCC on almost all of them, and the Windows
-/// credential store takes sixteen writes per save. Rotation matters on a scale of hours, so
-/// persisting a few minutes behind the live value costs nothing — the first change after a
-/// launch is written immediately, which is what a short session needs.
+/// credential store takes sixteen writes per save. Every *other* rotation is written at once —
+/// see `YOUTUBE_SLOW_PERSIST_COOKIES` for why that distinction is the whole game.
 const YOUTUBE_COOKIE_PERSIST_INTERVAL: Duration = Duration::from_secs(300);
+/// Cookies whose rotation may be persisted late, because nothing authenticates with them.
+///
+/// Everything else — `__Secure-*PSIDTS` above all — is written the moment it changes. Google
+/// retires the superseded value, so quitting inside the throttle window left a dead credential
+/// on disk and the next launch presented it: the session looked lost overnight when it was only
+/// lost between the last rotation and the last write.
+const YOUTUBE_SLOW_PERSIST_COOKIES: [&str; 3] = ["SIDCC", "__Secure-1PSIDCC", "__Secure-3PSIDCC"];
 /// Seconds a silent renewal may spend before giving up and asking the user.
-const YOUTUBE_SILENT_REFRESH_POLLS: u32 = 12;
+///
+/// Generous enough for a cold WebView2 start plus the Google redirect chain, because the cost of
+/// being a second too impatient is a sign-in prompt the user did not need.
+const YOUTUBE_SILENT_REFRESH_POLLS: u32 = 25;
 const DEFAULT_CACHE_MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const CURRENT_LOG_FILE_NAME: &str = "current.log";
 
@@ -187,23 +196,26 @@ fn serialize_cookie_pairs(pairs: &[(String, String)]) -> String {
         .join("; ")
 }
 
-/// Folds one `Set-Cookie` value into the jar, reporting whether anything changed.
+/// The leading `name=value` of a `Set-Cookie` value.
 ///
-/// Only the leading `name=value` matters. The attributes after it describe where a browser
-/// should send the cookie, and this jar has exactly one destination.
+/// The attributes after it describe where a browser should send the cookie, and this jar has
+/// exactly one destination.
+fn split_set_cookie(set_cookie: &str) -> Option<(&str, &str)> {
+    let (name, value) = set_cookie.split(';').next()?.split_once('=')?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some((name, value.trim()))
+}
+
+/// Folds one `Set-Cookie` value into the jar, reporting whether anything changed.
 fn apply_set_cookie(pairs: &mut Vec<(String, String)>, set_cookie: &str) -> bool {
-    let Some((name, value)) = set_cookie
-        .split(';')
-        .next()
-        .and_then(|pair| pair.split_once('='))
-    else {
+    let Some((name, value)) = split_set_cookie(set_cookie) else {
         return false;
     };
-    let name = name.trim().to_string();
-    let value = value.trim().to_string();
-    if name.is_empty() {
-        return false;
-    }
+    let name = name.to_string();
+    let value = value.to_string();
 
     // Google clears a cookie by echoing it back empty or as a tombstone rather than by
     // omitting it. Keeping those would keep presenting a value the server has retired.
@@ -231,6 +243,30 @@ fn is_youtube_cookie_host(url: &url::Url) -> bool {
         .is_some_and(|host| host == "youtube.com" || host.ends_with(".youtube.com"))
 }
 
+/// Whether this rotation may wait for `YOUTUBE_COOKIE_PERSIST_INTERVAL` before being stored.
+fn is_slow_persist_cookie(set_cookie: &str) -> bool {
+    split_set_cookie(set_cookie)
+        .is_some_and(|(name, _)| YOUTUBE_SLOW_PERSIST_COOKIES.contains(&name))
+}
+
+/// Which Google account a cookie header belongs to, as far as the app needs to care.
+///
+/// Used for one question: did signing in again land on the same account? A re-mint of a lapsed
+/// session keeps this value, so answering "same" is what lets a renewal keep the cached library
+/// and the chosen channel instead of resyncing from scratch. It is a fingerprint, never logged
+/// and never handed to the frontend — only the boolean answer is.
+fn cookie_account_identity(cookie: &str) -> Option<String> {
+    let pairs = parse_cookie_header(cookie);
+    ["SAPISID", "__Secure-3PAPISID", "__Secure-1PAPISID"]
+        .iter()
+        .find_map(|name| {
+            pairs
+                .iter()
+                .find(|(existing, value)| existing == name && !value.is_empty())
+                .map(|(_, value)| value.clone())
+        })
+}
+
 /// Merges rotated cookies into the jar, returning the new header when it changed.
 fn refresh_youtube_cookie_jar(
     app: &tauri::AppHandle,
@@ -243,8 +279,12 @@ fn refresh_youtube_cookie_jar(
         let mut pairs = parse_cookie_header(state.cookie.as_deref()?);
         // Every cookie is applied; `any` would stop at the first change and drop the rest.
         let mut changed = false;
+        let mut credential_changed = false;
         for set_cookie in set_cookies {
-            changed |= apply_set_cookie(&mut pairs, set_cookie);
+            if apply_set_cookie(&mut pairs, set_cookie) {
+                changed = true;
+                credential_changed |= !is_slow_persist_cookie(set_cookie);
+            }
         }
         if !changed {
             return None;
@@ -252,9 +292,11 @@ fn refresh_youtube_cookie_jar(
 
         let merged = serialize_cookie_pairs(&pairs);
         state.cookie = Some(merged.clone());
-        let should_persist = state
-            .persisted_at
-            .is_none_or(|at| at.elapsed() >= YOUTUBE_COOKIE_PERSIST_INTERVAL);
+        // A rotated credential is written now; only the noisy ones wait for the interval.
+        let should_persist = credential_changed
+            || state
+                .persisted_at
+                .is_none_or(|at| at.elapsed() >= YOUTUBE_COOKIE_PERSIST_INTERVAL);
         if should_persist {
             state.persisted_at = Some(Instant::now());
         }
@@ -1672,12 +1714,31 @@ fn store_session_cookie(
     Ok(())
 }
 
+/// The outcome of an interactive sign-in.
+///
+/// `account_changed` is what stops a renewal from costing the user their library. Signing in
+/// again is usually not a new account at all — it is the same person recovering a session that
+/// lapsed, and wiping the cache and the chosen channel for that is a resync nobody asked for.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SignInResult {
+    cookie: String,
+    account_changed: bool,
+}
+
 #[tauri::command]
 async fn sign_in_youtube_music(
     app: tauri::AppHandle,
     jar: tauri::State<'_, YoutubeCookieJar>,
-) -> Result<String, CommandError> {
+) -> Result<SignInResult, CommandError> {
     eprintln!("[internal][tauri][info] sign_in_youtube_music start");
+    // Captured before the window opens: the jar still holds whoever was signed in, even if the
+    // session behind it has lapsed, which is exactly the value the new one is compared against.
+    let previous_identity = jar
+        .0
+        .lock()
+        .ok()
+        .and_then(|state| state.cookie.as_deref().and_then(cookie_account_identity));
     /*
      * Deliberately *not* cleared here any more.
      *
@@ -1699,14 +1760,20 @@ async fn sign_in_youtube_music(
 
     for poll in 1..=300 {
         if let Some(cookie_header) = harvest_session_cookie(&window)? {
+            let account_changed = previous_identity.is_none()
+                || previous_identity != cookie_account_identity(&cookie_header);
             eprintln!(
-                "[internal][tauri][info] sign_in_youtube_music detected session poll={} credential_bytes={}",
+                "[internal][tauri][info] sign_in_youtube_music detected session poll={} credential_bytes={} account_changed={}",
                 poll,
-                cookie_header.len()
+                cookie_header.len(),
+                account_changed
             );
             store_session_cookie(&app, &jar, &cookie_header)?;
             let _ = window.close();
-            return Ok(cookie_header);
+            return Ok(SignInResult {
+                cookie: cookie_header,
+                account_changed,
+            });
         }
 
         if app.get_webview_window(YOUTUBE_LOGIN_WINDOW).is_none() {
@@ -1730,11 +1797,19 @@ async fn sign_in_youtube_music(
 
 /// Renews the session from the sign-in partition without involving the user.
 ///
-/// The partition holds a real browser session that Google keeps alive on its own terms, so
-/// loading music.youtube.com in it is usually enough to mint a working cookie again. Returns
-/// `None` when that fails — which means the sign-in genuinely lapsed and only the user can fix
-/// it. Deliberately short: this runs while somebody is waiting to press Like, and a hidden
-/// window that needs interaction is a window that is never going to finish.
+/// Navigates to `YOUTUBE_LOGIN_URL` — the same Google entry point the interactive sign-in uses,
+/// and the reason this works at all. Loading music.youtube.com directly does *not* re-mint
+/// anything: presented with a retired `__Secure-*PSIDTS` it simply renders the signed-out page,
+/// so this used to harvest the dead cookie back, report a renewal, and leave the app to discover
+/// seconds later that it was still signed out. Only the accounts.google.com round trip reissues
+/// the YouTube-domain cookies from the Google session the partition still holds.
+///
+/// The landing check in `harvest_session_cookie` does double duty here: reaching
+/// music.youtube.com *is* the proof that Google accepted the session without asking anything.
+/// When it needs a password or a second factor the redirect stops short, nothing is harvested,
+/// and `None` says what it has always said — the sign-in genuinely lapsed and only the user can
+/// fix it. Hidden throughout, because a window that needs interaction nobody can see is a window
+/// that never finishes.
 #[tauri::command]
 async fn refresh_youtube_music_cookie(
     app: tauri::AppHandle,
@@ -1744,13 +1819,11 @@ async fn refresh_youtube_music_cookie(
     let loaded = Arc::new(AtomicBool::new(false));
     let window = build_login_window(&app, false, loaded.clone())?;
 
-    let music_url = "https://music.youtube.com/"
-        .parse()
-        .map_err(|error| CommandError {
-            message: format!("invalid YouTube Music URL: {error}"),
-        })?;
-    window.navigate(music_url).map_err(|error| CommandError {
-        message: format!("unable to open YouTube Music silently: {error}"),
+    let login_url = YOUTUBE_LOGIN_URL.parse().map_err(|error| CommandError {
+        message: format!("invalid YouTube Music sign-in URL: {error}"),
+    })?;
+    window.navigate(login_url).map_err(|error| CommandError {
+        message: format!("unable to renew the YouTube Music session silently: {error}"),
     })?;
 
     for poll in 1..=YOUTUBE_SILENT_REFRESH_POLLS {
@@ -3533,8 +3606,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_set_cookie, audio_url_with_range, cookie_domain_matches, is_youtube_cookie_host,
-        parse_cookie_header, sanitize_log_url, serialize_cookie_pairs, signed_content_length,
+        apply_set_cookie, audio_url_with_range, cookie_account_identity, cookie_domain_matches,
+        is_slow_persist_cookie, is_youtube_cookie_host, parse_cookie_header, sanitize_log_url,
+        serialize_cookie_pairs, signed_content_length,
     };
 
     /// The whole point of the jar: a rotated value replaces the stale one, a new value joins,
@@ -3566,6 +3640,43 @@ mod tests {
         );
         // Dropping something already gone is not a change either.
         assert!(!apply_set_cookie(&mut pairs, "YSC=; max-age=0"));
+    }
+
+    /// Which rotations may wait for the interval. Getting this backwards is what made a session
+    /// look lost overnight: a `PSIDTS` rotated at 23:58 and never written before the app quit.
+    #[test]
+    fn only_the_noisy_cookies_may_be_persisted_late() {
+        assert!(is_slow_persist_cookie("SIDCC=abc; path=/; secure"));
+        assert!(is_slow_persist_cookie("__Secure-3PSIDCC=abc; path=/"));
+        assert!(!is_slow_persist_cookie("__Secure-3PSIDTS=fresh; path=/"));
+        assert!(!is_slow_persist_cookie("SAPISID=abc; path=/"));
+        // A tombstone for a credential still has to be stored at once: it is a real change.
+        assert!(!is_slow_persist_cookie("__Secure-1PSID=; max-age=0"));
+        assert!(!is_slow_persist_cookie("not-a-cookie"));
+    }
+
+    /// Same account or not, which decides whether signing in again costs a full resync.
+    #[test]
+    fn account_identity_survives_a_renewal_and_changes_with_the_account() {
+        let lapsed = "SAPISID=account-one; SIDCC=stale; __Secure-3PSIDTS=stale";
+        let renewed = "SAPISID=account-one; SIDCC=fresh; __Secure-3PSIDTS=fresh";
+        let other = "SAPISID=account-two; SIDCC=fresh";
+
+        assert_eq!(
+            cookie_account_identity(lapsed),
+            cookie_account_identity(renewed),
+            "a re-minted session is the same account and must keep its cache"
+        );
+        assert_ne!(cookie_account_identity(lapsed), cookie_account_identity(other));
+        // Fallbacks, for a cookie set that carries no plain SAPISID.
+        assert_eq!(
+            cookie_account_identity("__Secure-3PAPISID=third-party; YSC=x").as_deref(),
+            Some("third-party")
+        );
+        // Nothing to compare is treated as a different account by the caller, so it must be None
+        // rather than an empty string that would match another empty one.
+        assert_eq!(cookie_account_identity("SAPISID=; YSC=x"), None);
+        assert_eq!(cookie_account_identity("YSC=x"), None);
     }
 
     #[test]

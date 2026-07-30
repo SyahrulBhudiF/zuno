@@ -301,6 +301,13 @@ const LIKED_SONGS_PLAYLIST_ID = "LM";
 /** Must match YOUTUBE_LOGIN_WINDOW in src-tauri/src/lib.rs; cancelling closes this window. */
 const YOUTUBE_LOGIN_WINDOW_LABEL = "youtube-music-login";
 
+/** Mirrors `SignInResult` in src-tauri/src/lib.rs. */
+interface SignInResult {
+  cookie: string;
+  /** False when this is the same Google account recovering a lapsed session. */
+  accountChanged: boolean;
+}
+
 const BROWSE_ITEM_TYPES = new Set(["song", "video", "album", "playlist", "artist"]);
 /*
  * v6: v5 snapshots were capped at the first page of each section, so they are discarded rather
@@ -581,6 +588,19 @@ export class YouTubeMusicDataSource extends DataSource {
     session.context.user.serializedDelegationContext = this.musicSerializedDelegationContext;
   }
 
+  /**
+   * Drops the clients built around a cookie that is no longer current, and nothing else.
+   *
+   * youtubei.js bakes the credential into a client when it is constructed, so a renewed session
+   * only takes effect once these are rebuilt. The account selection is deliberately untouched —
+   * a renewal is the same person on the same channel.
+   */
+  private resetMusicClients(): void {
+    this.accountCandidateCache = null;
+    this.musicClientPromise = null;
+    this.webClientPromise = null;
+  }
+
   private resetMusicSessionSelection(): void {
     // Signing out and back in may land on a different Google account entirely, where the old
     // preference would point at a channel that no longer exists.
@@ -594,9 +614,7 @@ export class YouTubeMusicDataSource extends DataSource {
     this.musicSerializedDelegationContext = null;
     this.musicAccountName = "YouTube Music";
     this.musicAccountArtworkUrl = null;
-    this.accountCandidateCache = null;
-    this.musicClientPromise = null;
-    this.webClientPromise = null;
+    this.resetMusicClients();
   }
 
   private getArtwork(item: MusicItem): string | undefined {
@@ -2766,13 +2784,8 @@ export class YouTubeMusicDataSource extends DataSource {
     }
 
     this.musicCookie = cookie;
-    /*
-     * Only the clients are rebuilt, not the account selection: this is the same person on the
-     * same channel, and resetMusicSessionSelection would throw away their chosen channel.
-     */
-    this.accountCandidateCache = null;
-    this.musicClientPromise = null;
-    this.webClientPromise = null;
+    // Only the clients are rebuilt: this is the same person on the same channel.
+    this.resetMusicClients();
     logInternalInfo("YouTubeMusicDataSource.refreshSession success", {
       credentialBytes: cookie.length,
     });
@@ -2791,8 +2804,27 @@ export class YouTubeMusicDataSource extends DataSource {
     });
     // Unbounded: this resolves when the person finishes signing in, not on a timer.
     onStage?.("browser");
-    this.musicCookie = await invoke<string>("sign_in_youtube_music");
+    const { cookie, accountChanged } = await invoke<SignInResult>("sign_in_youtube_music");
+    this.musicCookie = cookie;
     onStage?.("session");
+    logInternalInfo("YouTubeMusicDataSource.signIn command completed", {
+      credentialBytes: cookie.length,
+      accountChanged,
+    });
+
+    /*
+     * The same account signing in again is a renewal, not a new session, so it is treated as
+     * one: the cached library stays, the chosen channel stays, and only the clients holding the
+     * old cookie are rebuilt. Clearing regardless is what turned every lapsed session into a
+     * full resync behind the sign-in overlay — for an account whose cache was still correct.
+     */
+    if (!accountChanged) {
+      this.resetMusicClients();
+      await this.getMusicClient();
+      logInternalInfo("YouTubeMusicDataSource.signIn success (session renewed)");
+      return;
+    }
+
     try {
       await clearCache();
     } catch (error) {
@@ -2800,9 +2832,6 @@ export class YouTubeMusicDataSource extends DataSource {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    logInternalInfo("YouTubeMusicDataSource.signIn command completed", {
-      credentialBytes: this.musicCookie.length,
-    });
     this.resetMusicSessionSelection();
     await this.getMusicClient();
     logInternalInfo("YouTubeMusicDataSource.signIn success");

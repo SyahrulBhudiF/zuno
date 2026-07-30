@@ -1,6 +1,7 @@
 import { useLatestRelease } from "@/useLatestRelease";
 import { Downloads } from "@/components/Downloads";
 import { Hero } from "@/components/Hero";
+import { MiniPlayer } from "@/components/MiniPlayer";
 import { Mono, Section } from "./components/ui";
 import { GITHUB_REPO, RELEASES_URL } from "./releases";
 
@@ -83,6 +84,7 @@ export function App() {
         </Section>
       </main>
       <Footer />
+      <MiniPlayer />
     </div>
   );
 }

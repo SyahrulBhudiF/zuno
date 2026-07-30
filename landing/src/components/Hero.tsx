@@ -1,16 +1,8 @@
-import { useRef, useState, type CSSProperties } from "react";
-import { BrandIcon, OS_ICON } from "./brandIcons";
-import { DownloadIcon, PauseIcon, PlayIcon, SpeakerIcon } from "./icons";
-import { Header } from "./Header";
+import type { CSSProperties } from "react";
+import { BrandIcon, OS_ICON, SERVICE_ICON } from "./brandIcons";
+import { ArrowDownIcon, ArrowRightIcon } from "./icons";
 import { LinkButton, Mono } from "./ui";
-import { useReducedMotion } from "@/useReducedMotion";
-import {
-  GITHUB_REPO,
-  RELEASES_URL,
-  formatSize,
-  type LatestRelease,
-  type PlatformId,
-} from "../releases";
+import { GITHUB_REPO, type LatestRelease, type PlatformId } from "../releases";
 
 const PLATFORM_LABEL: Record<PlatformId, string> = {
   windows: "Windows",
@@ -21,15 +13,13 @@ const PLATFORM_LABEL: Record<PlatformId, string> = {
 
 const DEMO_VIDEO = "https://pub-493a5d4ea10b45dcaa83917aa3856a32.r2.dev/zunodem.mp4";
 const DEMO_POSTER = "./zuno-d1-1.2.PNG";
-/** Read off the file's own header. Declared so the box is reserved before a byte arrives. */
+/** Read off the file's own header. Reserves the box before a byte arrives, and sets the frame's
+ *  aspect — the stage is cut to the footage rather than the footage cropped to the stage. */
 const DEMO_W = 1234;
 const DEMO_H = 922;
 
-/** What the player window says it is playing. The demo is the product, so it is the track. */
-const TRACK_TITLE = "zuno — desktop demo";
-
-/** The queue along the foot. Six, which is one clean row, and each one is a real feature. */
-const QUEUE = [
+/** Six features, one clean row. The hero itself stays pure type, so they sit under the film. */
+const FEATURES = [
   "tabs, one queue each",
   "line-synced lyrics",
   "offline downloads",
@@ -39,184 +29,73 @@ const QUEUE = [
 ];
 
 /**
- * The small mono label used across the chrome.
+ * Entrance cascade.
  *
- * Not `Mono` from ui.tsx: that one hard-codes 13px, and passing a second font-size utility
- * beside it leaves which one wins up to Tailwind's class ordering rather than to intent.
+ * Every line of the hero arrives on the same curve, a beat apart, top to bottom — which is what
+ * makes a stack of centred text read as composed rather than as a page that finished loading.
+ * The delay is the only thing that differs, so it is the only thing passed.
+ *
+ * Under reduced motion the global rule in styles.css collapses the duration, and because
+ * `reveal-in` ends at the resting state that leaves everything simply visible.
  */
-const MICRO = "font-mono text-[11px] tracking-tight tabular-nums";
+const step = (i: number): CSSProperties => ({ animationDelay: `${i * 0.09}s` });
 
-const fmt = (seconds: number) => {
-  const whole = Math.max(0, Math.floor(seconds || 0));
-  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
-};
-
-/** Three bars on staggered delays — the app's own playing indicator, reused as a status light. */
-function Equaliser({ playing }: { playing: boolean }) {
+/**
+ * A floating service badge.
+ *
+ * Decorative, hence `aria-hidden`: both of these already appear in the feature index below, and
+ * announcing them twice buys a screen reader nothing. Hidden outright below `lg`, where the
+ * centred column takes the full width and there are no margins left to float in.
+ *
+ * Two elements rather than one, because the two motions have nothing to do with each other: the
+ * outer box carries the position and the scroll-driven fade, the inner pill carries the bob. A
+ * single element would need one `animation` list with mismatched timelines to do both.
+ *
+ * The negative delay starts the bob already in progress, so the pair does not rise and fall in
+ * lockstep for the first cycle.
+ */
+function ServiceBadge({
+  className,
+  tilt,
+  delay,
+  duration,
+  children,
+}: {
+  className: string;
+  tilt: string;
+  delay: string;
+  duration: string;
+  children: React.ReactNode;
+}) {
   return (
-    <span className="flex h-3 items-end gap-[3px]" aria-hidden="true">
-      {[0, 0.35, 0.7].map((delay, i) => (
-        <span
-          key={i}
-          className={`w-[2px] rounded-full bg-primary ${playing ? "equaliser-bar" : ""}`}
-          style={{ animationDelay: `${delay}s`, height: playing ? "100%" : "45%" }}
-        />
-      ))}
+    <span className={`scroll-fade absolute hidden lg:block ${className}`} aria-hidden="true">
+      <span
+        className="float flex items-center gap-2.5 rounded-full border border-white/10 bg-white/[0.05] py-2 pl-3 pr-3.5 backdrop-blur-md"
+        style={
+          {
+            "--tilt": tilt,
+            animationDelay: delay,
+            animationDuration: duration,
+          } as CSSProperties
+        }
+      >
+        {children}
+      </span>
     </span>
   );
 }
 
 /**
- * The hero, built as the player window itself.
+ * The hero.
  *
- * The alternative — a screenshot floating over a gradient with a shadow under it — is the same
- * picture every desktop-app site ships. This one is the software: chrome across the top, the
- * footage in the pane, and a transport bar underneath whose controls are wired to the video
- * rather than drawn. The scrubber moves because the demo is playing, the play button pauses it,
- * the speaker unmutes it. Nothing on it is a picture of a control.
+ * Type first, product second — the two are not fighting over the same viewport. The fold is the
+ * wordmark and the claim, centred, with nothing behind it; then the demo takes over completely
+ * as a frame that pins to the viewport and grows to fill it while you scroll past.
  *
- * That is also why there is no separate "watch the demo" button: the demo is already running,
- * and the page is holding the thing it is selling.
+ * That split is the whole idea. A hero that runs copy beside a screenshot gives each half of the
+ * frame to a different job and does neither at full size. Sequencing them means the words get a
+ * clean page and the footage gets the entire screen.
  */
-function PlayerWindow({ autoPlay }: { autoPlay: boolean }) {
-  const video = useRef<HTMLVideoElement>(null);
-  const [playing, setPlaying] = useState(autoPlay);
-  const [muted, setMuted] = useState(true);
-  const [time, setTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-
-  const progress = duration ? time / duration : 0;
-
-  const toggle = () => {
-    const el = video.current;
-    if (!el) return;
-    // State follows the element's own events, so a rejected autoplay or a browser-level pause
-    // cannot leave the button lying about what the video is doing.
-    if (el.paused) void el.play().catch(() => undefined);
-    else el.pause();
-  };
-
-  const toggleSound = () => {
-    const el = video.current;
-    if (!el) return;
-    el.muted = !el.muted;
-    setMuted(el.muted);
-  };
-
-  const seek = (fraction: number) => {
-    const el = video.current;
-    if (el && duration) el.currentTime = fraction * duration;
-  };
-
-  return (
-    <div className="relative">
-      {/* The lamp behind the window. Tinted by the brand, not by a six-stop gradient. */}
-      <div
-        className="pointer-events-none absolute -inset-x-6 -bottom-8 -top-6 -z-10 rounded-[2rem] opacity-70 blur-3xl"
-        style={{
-          background:
-            "radial-gradient(60% 60% at 30% 20%, color-mix(in oklch, var(--color-primary) 34%, transparent) 0%, transparent 70%)",
-        }}
-        aria-hidden="true"
-      />
-
-      <figure className="overflow-hidden rounded-2xl bg-[oklch(0.16_0_0)] shadow-[0_40px_120px_-30px_rgb(0_0_0/0.9)] ring-1 ring-white/10">
-        {/* Titlebar. Zuno's own window has one, so the page's does too. */}
-        <div className="flex h-10 items-center gap-3 border-b border-white/[0.07] px-4">
-          <span className="flex gap-1.5" aria-hidden="true">
-            <span className="size-2.5 rounded-full bg-white/15" />
-            <span className="size-2.5 rounded-full bg-white/15" />
-            <span className="size-2.5 rounded-full bg-primary/70" />
-          </span>
-          <span className="mx-auto truncate font-mono text-[11px] uppercase tracking-[0.22em] text-foreground/35">
-            zuno_
-          </span>
-          <span className={`${MICRO} hidden text-foreground/25 sm:block`}>
-            {DEMO_W}×{DEMO_H}
-          </span>
-        </div>
-
-        <video
-          ref={video}
-          className="block w-full bg-black"
-          width={DEMO_W}
-          height={DEMO_H}
-          src={DEMO_VIDEO}
-          poster={DEMO_POSTER}
-          /* Autoplay is muted and inline because every mobile engine requires both, and it is
-             withheld entirely under reduced motion — the transport below is then the way in. */
-          autoPlay={autoPlay}
-          muted
-          loop
-          playsInline
-          preload="metadata"
-          onClick={toggle}
-          onPlay={() => setPlaying(true)}
-          onPause={() => setPlaying(false)}
-          onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-          onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
-          aria-label="Zuno playing a song, with the queue and synced lyrics open"
-        />
-
-        {/* Transport. Every control here moves the video above it. */}
-        <div className="border-t border-white/[0.07] bg-[oklch(0.12_0_0)] px-4 py-3">
-          <div className="flex items-center gap-3">
-            <span className={`${MICRO} w-9 shrink-0 text-foreground/40`}>{fmt(time)}</span>
-            <input
-              className="scrub min-w-0 flex-1"
-              type="range"
-              min={0}
-              max={1}
-              step={0.001}
-              value={progress}
-              onChange={(e) => seek(e.currentTarget.valueAsNumber)}
-              style={{ "--p": progress } as CSSProperties}
-              aria-label="Seek the demo"
-              aria-valuetext={`${fmt(time)} of ${fmt(duration)}`}
-            />
-            <span className={`${MICRO} w-9 shrink-0 text-right text-foreground/40`}>
-              {fmt(duration)}
-            </span>
-          </div>
-
-          <div className="mt-2 flex items-center gap-3">
-            <img className="size-9 shrink-0 rounded-md bg-white/5 p-1.5" src="./logo.png" alt="" />
-            <span className="flex min-w-0 flex-col">
-              <span className="truncate text-sm font-medium text-foreground/90">{TRACK_TITLE}</span>
-              <span className="flex items-center gap-2">
-                <Equaliser playing={playing} />
-                <span className={`${MICRO} text-foreground/35`}>
-                  {playing ? "now playing" : "paused"}
-                </span>
-              </span>
-            </span>
-
-            <div className="ml-auto flex items-center gap-1">
-              <button
-                type="button"
-                className="grid size-9 place-items-center rounded-full text-foreground/50 transition-colors hover:bg-white/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={toggleSound}
-                aria-pressed={!muted}
-                aria-label={muted ? "Unmute the demo" : "Mute the demo"}
-              >
-                <SpeakerIcon size={18} muted={muted} />
-              </button>
-              <button
-                type="button"
-                className="grid size-10 place-items-center rounded-full bg-foreground text-background transition-transform hover:scale-105 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                onClick={toggle}
-                aria-label={playing ? "Pause the demo" : "Play the demo"}
-              >
-                {playing ? <PauseIcon size={18} /> : <PlayIcon size={18} className="ml-0.5" />}
-              </button>
-            </div>
-          </div>
-        </div>
-      </figure>
-    </div>
-  );
-}
-
 export function Hero({
   release,
   platform,
@@ -224,118 +103,182 @@ export function Hero({
   release: LatestRelease | null;
   platform: PlatformId | null;
 }) {
-  const reducedMotion = useReducedMotion();
-  const target = platform ?? "windows";
-  const asset = release?.downloads[target];
   const label = platform ? PLATFORM_LABEL[platform] : "your system";
 
   return (
-    <section
-      id="top"
-      className="grain relative isolate flex min-h-svh w-full flex-col overflow-hidden bg-background"
-    >
+    <>
+
+
       {/*
-        Ambient artwork, the way a player does it: the frame behind the frame, blurred out to a
-        wash of its own colour. It is the poster the video is already loading, so it costs one
-        cached request and it changes with the product instead of being invented in a gradient
-        editor.
+        Sized to the viewport minus the header, so the film frame below starts exactly at the
+        fold rather than a header's height past it.
       */}
-      <img
-        className="pointer-events-none absolute inset-0 -z-10 h-full w-full scale-110 object-cover opacity-25 blur-[90px] saturate-150"
-        src={DEMO_POSTER}
-        alt=""
-        aria-hidden="true"
-      />
-      <div
-        className="pointer-events-none absolute inset-0 -z-10"
-        style={{
-          background:
-            "radial-gradient(120% 80% at 50% 0%, transparent 20%, var(--color-background) 78%)",
-        }}
-        aria-hidden="true"
-      />
+      <section
+        id="top"
+        className="grain relative isolate flex flex-col items-center justify-center px-6 pt-30 pb-20 text-center"
+      >
+        {/*
+          Wider than the viewport and lifted until only the foot of the limb is in frame, so what
+          reads is an arc across the top of the page rather than a circle behind the words.
+        */}
+        <div
+          className="moon-arc pointer-events-none absolute left-1/2 top-0 -z-10 aspect-square w-[min(78rem,170vw)] -translate-x-1/2 -translate-y-[82%] rounded-full"
+          aria-hidden="true"
+        />
 
-      <Header />
+        {/*
+          Flanking the column diagonally, offset from the centre line rather than from the
+          viewport edge — the text is centred, so anything measured from the edge drifts away from
+          it as the window widens. This keeps the same gap at every width.
+        */}
+        <ServiceBadge
+          className="left-[calc(50%-23rem)] top-[27%]"
+          tilt="-7deg"
+          delay="-2.4s"
+          duration="7.5s"
+        >
+          <BrandIcon icon={SERVICE_ICON.discord} width={19} height={15} />
+          <span className="font-mono text-[12px] text-foreground/55">rich presence</span>
+        </ServiceBadge>
 
-      <div className="mx-auto grid w-full max-w-7xl flex-1 items-center gap-y-14 px-6 pb-12 pt-10 lg:grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)] lg:gap-x-16 lg:pb-16 lg:pt-4">
-        <div className="flex flex-col items-start">
-          {/* Set as a player sets its status line: the state, then the pressing. */}
-          <div className="flex items-center gap-2.5 rounded-full border border-white/10 bg-white/[0.04] py-1.5 pl-3 pr-4 backdrop-blur-sm">
-            <Equaliser playing={!reducedMotion} />
-            <span className={`${MICRO} uppercase tracking-[0.2em] text-foreground/45`}>
-              {release ? `v${release.version}` : "apache-2.0"} · free forever
+        <ServiceBadge
+          className="right-[calc(50%-24rem)] top-[49%]"
+          tilt="6deg"
+          delay="-5.1s"
+          duration="8.5s"
+        >
+          <BrandIcon icon={SERVICE_ICON.lastfm} width={48} height={12} />
+          <span className="font-mono text-[12px] text-foreground/55">scrobbling</span>
+        </ServiceBadge>
+
+        {/*
+          The wordmark is the headline.
+
+          It can be, because the line under it says what the thing is inside twelve words. Set as
+          a mark rather than as a sentence: heavier, tighter, and ending in the underscore it is
+          already named after — which the blinking block simply admits is a prompt.
+        */}
+        <img
+          className="hero-in mb-5 size-20 sm:size-24"
+          src="./logo.png"
+          alt=""
+          width={96}
+          height={96}
+          style={step(0)}
+        />
+
+        <h1
+          className="hero-in relative text-[clamp(56px,9vw,96px)] font-bold leading-none tracking-[-0.045em] text-foreground"
+          style={step(1)}
+        >
+          zuno_
+          {release ? (
+            <span className="absolute left-[calc(100%+0.5rem)] top-1 whitespace-nowrap rounded-full border border-primary/40 px-2.5 py-1 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-primary max-sm:hidden">
+              v{release.version}
             </span>
-          </div>
+          ) : null}
+        </h1>
 
-          {/*
-            The one claim no wrapped browser tab can make, set at poster scale. The accent lands
-            on the noun that is the whole argument.
-          */}
-          <h1 className="mt-7 text-balance text-[clamp(48px,6.6vw,92px)] font-semibold leading-[0.88] tracking-[-0.055em] text-foreground">
-            <span className="block">Every tab</span>
-            <span className="block">
-              a <span className="text-primary">queue</span>.
-            </span>
-          </h1>
+        {/* Two deliberate lines: what it is, then the one thing no browser tab does. */}
+        <p
+          className="hero-in mt-5 max-w-[36ch] text-balance text-xl leading-[1.5] tracking-[-0.01em] text-foreground/60"
+          style={step(2)}
+        >
+          A desktop client for the YouTube Music.
+          <br className="max-sm:hidden" />Downloads, Lyrics & No Ads.
+        </p>
 
-          <p className="mt-7 max-w-[42ch] text-pretty text-lg leading-8 text-foreground/60">
-            A desktop client for your own YouTube Music account. Not a wrapped tab — a real
-            window, with your downloads and local files in the same list.
-          </p>
+        <p className="hero-in mt-3 text-[15px] text-foreground/40" style={step(3)}>
+          Free and open source. No telemetry, and no account to create.
+        </p>
 
-          <div className="mt-9 flex flex-wrap items-center gap-3">
-            <LinkButton
-              href={asset?.url ?? RELEASES_URL}
-              rel="noopener"
-              className="group rounded-full px-7 py-4 text-lg transition-transform duration-200 hover:-translate-y-0.5"
-            >
-              <DownloadIcon
-                size={20}
-                className="transition-transform duration-200 group-hover:translate-y-0.5"
-              />
-              Download for {label}
-            </LinkButton>
+        <div
+          className="hero-in mt-9 flex w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center"
+          style={step(4)}
+        >
+          {/* Down to the tiles rather than straight at the asset: the format choice (msi vs exe,
+              deb vs rpm vs AppImage) lives there, and a hero button cannot make it for you. */}
+          <LinkButton href="#download" size="lg">
+            Download for {label}
+            <ArrowDownIcon
+              size={18}
+              className="transition-transform duration-200 group-hover:translate-y-0.5"
+            />
+          </LinkButton>
 
-            <LinkButton
-              variant="muted"
-              href={GITHUB_REPO}
-              rel="noopener"
-              className="rounded-full px-6 py-4 text-lg transition-transform duration-200 hover:-translate-y-0.5"
-            >
-              <BrandIcon icon={OS_ICON.github} width={19} height={19} />
-              Source
-            </LinkButton>
-          </div>
-
-          <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-2">
-            <span className="flex items-center gap-3" aria-label="Windows, macOS and Linux">
-              <BrandIcon icon={OS_ICON.windows} width={16} height={16} />
-              <BrandIcon icon={OS_ICON.macos} width={16} height={16} className="text-foreground" />
-              <BrandIcon icon={OS_ICON.linux} width={16} height={16} />
-            </span>
-            <Mono className="text-foreground/35">
-              {asset ? `${formatSize(asset.size)} · signed` : "windows · macos · linux"}
-            </Mono>
-          </div>
+          <LinkButton variant="outline" size="lg" href={GITHUB_REPO} rel="noopener">
+            Read the source
+            <ArrowRightIcon
+              size={18}
+              className="transition-transform duration-200 group-hover:translate-x-0.5"
+            />
+          </LinkButton>
         </div>
 
-        <div className="w-full max-lg:mx-auto max-lg:max-w-2xl">
-          <PlayerWindow autoPlay={!reducedMotion} />
-        </div>
-      </div>
-
-      {/* The queue. Static: the information is the point, and a marquee makes it unreadable. */}
-      <div className="mx-auto w-full max-w-7xl border-t border-white/10 px-6 py-6">
-        <span className={`${MICRO} uppercase tracking-[0.24em] text-foreground/30`}>up next</span>
-        <ol className="mt-3 grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
-          {QUEUE.map((track, i) => (
-            <li key={track} className="flex items-baseline gap-2.5">
-              <Mono className="text-foreground/25 tabular-nums">{String(i + 1).padStart(2, "0")}</Mono>
-              <span className="text-pretty text-sm leading-6 text-foreground/60">{track}</span>
+        {/* The same three marks the download tiles use, so the promise here and the choice there
+            read as one row. Apple's glyph ships unfilled, so it takes the text colour. */}
+        <ul
+          className="hero-in mt-7 flex flex-wrap items-center justify-center gap-2"
+          style={step(5)}
+        >
+          {(["windows", "macos", "linux"] as const).map((os) => (
+            <li
+              key={os}
+              className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] py-1.5 pl-2.5 pr-3.5 font-mono text-[13px] font-medium tracking-[0.06em] text-foreground/50 backdrop-blur-md"
+            >
+              {/* Apple and Tux are silhouettes on currentColor; the Windows mark carries its
+                  own blue and ignores this. */}
+              <BrandIcon icon={OS_ICON[os]} width={15} height={15} className="text-foreground" />
+              {PLATFORM_LABEL[os === "macos" ? "macos-arm" : os]}
             </li>
           ))}
-        </ol>
+        </ul>
+      </section>
+
+      {/*
+        The film stage.
+
+        Taller than the viewport, with the frame pinned inside it: the demo holds still and grows
+        to fill the screen while the page scrolls behind it, then releases. The video is the only
+        thing in it — no chrome, no transport, no play button, because it is already playing.
+      */}
+      <div className="film-stage">
+        <div className="film-sticky">
+          <div className="film-frame">
+            <video
+              className="absolute inset-0 size-full object-cover"
+              width={DEMO_W}
+              height={DEMO_H}
+              src={DEMO_VIDEO}
+              poster={DEMO_POSTER}
+              /* Muted and inline because every mobile engine requires both before it will honour
+                 autoplay at all. Decoration, hence `aria-hidden` — there is nothing to operate
+                 here and the copy above carries the meaning. */
+              autoPlay
+              muted
+              loop
+              playsInline
+              preload="metadata"
+              aria-hidden="true"
+            />
+            {/* The footage is lit brighter than the page. A flat tint settles it into the
+                surrounding dark without touching the video's own colour. */}
+            <div className="pointer-events-none absolute inset-0 bg-black/25" aria-hidden="true" />
+          </div>
+        </div>
       </div>
-    </section>
+
+      {/* The features, as a quiet index under the film rather than as a claim inside the hero. */}
+      <ol className="mx-auto grid w-full max-w-6xl grid-cols-2 gap-x-8 gap-y-3 px-6 pb-4 pt-14 sm:grid-cols-3 lg:grid-cols-6">
+        {FEATURES.map((feature, i) => (
+          <li key={feature} className="flex items-baseline gap-2.5">
+            <Mono className="tabular-nums text-foreground/25">
+              {String(i + 1).padStart(2, "0")}
+            </Mono>
+            <span className="text-pretty text-sm leading-6 text-foreground/60">{feature}</span>
+          </li>
+        ))}
+      </ol>
+    </>
   );
 }

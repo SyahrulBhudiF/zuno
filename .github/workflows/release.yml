@@ -123,7 +123,7 @@ jobs:
           - name: Linux
             os: ubuntu-latest
             rust_target: ""
-            build_args: --bundles deb,appimage
+            build_args: --bundles deb,rpm,appimage
             apple_signing_identity: ""
     runs-on: ${{ matrix.platform.os }}
 

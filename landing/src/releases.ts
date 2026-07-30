@@ -42,8 +42,8 @@ export const PLATFORM_BUILDS: readonly PlatformBuild[] = [
   {
     id: "linux",
     label: "Linux",
-    hint: "AppImage · .deb",
-    patterns: [/\.AppImage$/i, /\.deb$/i],
+    hint: "AppImage · .deb · .rpm",
+    patterns: [/\.AppImage$/i, /\.deb$/i, /\.rpm$/i],
   },
 ];
 

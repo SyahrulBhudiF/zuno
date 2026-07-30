@@ -27,7 +27,7 @@ export function Header() {
       <div
         className={cn(
           "mx-auto flex h-14 max-w-3xl items-center gap-3 rounded-full px-4",
-          "transition-[background-color,box-shadow,border-color] duration-300",
+
           // Transparent over the hero, solid once there is content behind it — a bar with its
           // own fill on top of the hero reads as a second surface stacked on the first.
           scrolled
@@ -51,7 +51,7 @@ export function Header() {
           >
             source
           </a>
-          <LinkButton href="#download" className="px-4 py-2 text-sm">
+          <LinkButton href="#download" size="sm">
             Download
           </LinkButton>
         </div>
