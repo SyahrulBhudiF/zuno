@@ -7,12 +7,12 @@ in a diff instead of being a thing someone once clicked.
 Apply or update:
 
 ```sh
-gh api repos/nofayz/zuno/rulesets --input .github/rulesets/main.json          # create
-gh api --method PUT repos/nofayz/zuno/rulesets/<id> --input .github/rulesets/main.json  # update
+gh api --method PUT repos/noFAYZ/zuno/rulesets/20021321 --input .github/rulesets/main.json
 ```
 
-`gh api repos/nofayz/zuno/rulesets` lists the ids. The UI equivalent is Settings → Rules →
-Rulesets → New ruleset → Import a ruleset.
+`main.json` is applied — id `20021321`, created 2026-07-30. Edit the file, run the command, and the
+two stay in step; skip the command and the file is fiction. `gh api repos/noFAYZ/zuno/rulesets`
+lists what is actually live. The UI equivalent is Settings → Rules → Rulesets.
 
 ## What `main.json` does
 
