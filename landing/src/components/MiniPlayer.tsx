@@ -16,11 +16,13 @@ import { cn } from "./ui";
  * is a class on it, so nothing here re-renders on mouse-over.
  */
 
-/* Placeholder track. Swap these three for the real song and artwork. */
+/* The demo track. One object, so swapping the song is one edit. */
 const TRACK = {
-  src: "https://pub-493a5d4ea10b45dcaa83917aa3856a32.r2.dev/zunodem.mp4",
-  title: "Placeholder track",
-  artist: "swap TRACK for your own",
+  src: "./low-tide.mp3",
+  title: "Low Tide",
+  artist: "Tom Rhodes",
+  /** The Zuno character loop stands in for cover art; the still tints the glass behind it. */
+  avatar: "./zuno-character.mp4",
   artwork: "./logo.png",
 };
 
@@ -47,7 +49,6 @@ export function MiniPlayer() {
   const [position, setPosition] = useState(HOME);
   const [dragging, setDragging] = useState(false);
 
-  /* Autoplay with sound is blocked everywhere and rightly so — the capsule starts parked. */
   const toggle = () => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -69,9 +70,29 @@ export function MiniPlayer() {
     const sync = () => setPlaying(!audio.paused);
     audio.addEventListener("play", sync);
     audio.addEventListener("pause", sync);
+
+    /*
+     * Autoplay, with the fallback the platform forces.
+     *
+     * Every engine refuses `play()` with sound until the visitor has interacted with the page,
+     * and the refusal is a rejected promise rather than an error — so the first gesture anywhere
+     * on the document starts it instead. `once` means the listener costs nothing after that, and
+     * a browser that does allow the first attempt never registers it at all.
+     */
+    let start: (() => void) | null = null;
+    void audio.play().catch(() => {
+      start = () => void audio.play();
+      document.addEventListener("pointerdown", start, { once: true });
+      document.addEventListener("keydown", start, { once: true });
+    });
+
     return () => {
       audio.removeEventListener("play", sync);
       audio.removeEventListener("pause", sync);
+      if (start) {
+        document.removeEventListener("pointerdown", start);
+        document.removeEventListener("keydown", start);
+      }
     };
   }, []);
 
@@ -118,7 +139,8 @@ export function MiniPlayer() {
       <audio
         ref={audioRef}
         src={TRACK.src}
-        preload="metadata"
+        autoPlay
+        preload="auto"
         onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)}
         onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
       />
@@ -182,14 +204,16 @@ export function MiniPlayer() {
               }}
               aria-hidden="true"
             />
-            <img
-              src={TRACK.artwork}
-              alt=""
-              className={cn(
-                "relative size-[34px] shrink-0 rounded-full bg-neutral-800 object-cover transition-transform duration-300",
-                playing && "motion-safe:animate-[spin_12s_linear_infinite]",
-                "group-hover/art:scale-90",
-              )}
+            {/* The character loop rather than a sleeve. It carries its own motion, so the app's
+                record spin is left off — two rotations at once reads as a glitch. */}
+            <video
+              src={TRACK.avatar}
+              className="relative size-[34px] shrink-0 rounded-full bg-neutral-800 object-cover transition-transform duration-300 group-hover/art:scale-90"
+              autoPlay
+              muted
+              loop
+              playsInline
+              aria-hidden="true"
             />
           </button>
 
