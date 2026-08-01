@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -11,6 +11,11 @@ import { useDiscordPresenceEnabled } from "../settings/discord";
 import { setLastFmScrobblingEnabled, useLastFmScrobblingEnabled } from "../settings/lastfm";
 import { setYouTubeScrobbling, useYouTubeScrobbling } from "../settings/youtubeAccount";
 import { logInternalError, logInternalInfo, logInternalWarn } from "../../internal/logging";
+import {
+  isLinux,
+  isTilingWindowManager,
+  subscribeTilingWindowManager,
+} from "../platform";
 import { MusicTabs } from "./MusicTabs";
 import type { Tab } from "../types/tab";
 import {
@@ -83,6 +88,15 @@ export function TitleBar({
   const [isAccountPanelOpen, setIsAccountPanelOpen] = useState(false);
   const nativeWindowControls = useNativeWindowControls();
   const windowsStyleWindowControls = useWindowsStyleWindowControls();
+  // On Linux, window management belongs to the compositor. Tiling compositors (niri, sway,
+  // hyprland, …) have no minimize at all and draw nothing, so app buttons would be dead
+  // weight; desktops like GNOME/KDE get the custom buttons so close/minimize stay reachable.
+  const tilingWindowManager = useSyncExternalStore(
+    subscribeTilingWindowManager,
+    isTilingWindowManager,
+    () => false,
+  );
+  const showCustomWindowControls = !nativeWindowControls && (!isLinux || !tilingWindowManager);
   const discordEnabled = useDiscordPresenceEnabled();
   const lastFmEnabled = useLastFmScrobblingEnabled();
   const ytScrobblingEnabled = useYouTubeScrobbling();
@@ -446,11 +460,11 @@ export function TitleBar({
         </FloatingPanel>
       </div>
 
-      {!nativeWindowControls && (
+      {showCustomWindowControls && (
         <span className="my-3 w-px shrink-0 bg-border" aria-hidden="true" />
       )}
 
-      {!nativeWindowControls && (
+      {showCustomWindowControls && (
         <div
           className={cn(
             "flex shrink-0 items-center",

@@ -14,6 +14,7 @@ import { hydrateMiniPlayerSettings } from "./ui/settings/miniPlayer";
 import { hydratePlayerControlSettings } from "./ui/settings/playerControls";
 import { hydrateQueuePanelSettings } from "./ui/settings/queuePanel";
 import { hydrateTraySettings } from "./ui/settings/tray";
+import { hydrateMediaSessionSettings } from "./ui/settings/mediaSession";
 import { hydrateAudioQualitySettings } from "./internal/audioQuality";
 import { hydrateAudioEngineMode } from "./ui/settings/audioEngine";
 import { hydrateYouTubeAccountSettings } from "./ui/settings/youtubeAccount";
@@ -27,7 +28,7 @@ import {
   hydrateMainWindowGeometry,
   restoreMainWindowGeometry,
 } from "./ui/settings/mainWindowGeometry";
-import { applyPlatformAttributes } from "./ui/platform";
+import { applyPlatformAttributes, detectTilingWindowManager } from "./ui/platform";
 import { hydrateArtworkCache } from "./internal/artworkCache";
 import { DiscordRpcService } from "./player/DiscordRPC";
 import { hydratePlaybackSettings } from "./player/playbackSettings";
@@ -41,6 +42,7 @@ logInternalInfo("main.bootstrap start");
 // let its image flash the fallback icon.
 hydrateArtworkCache();
 applyPlatformAttributes();
+void detectTilingWindowManager();
 // Before React mounts: a late theme apply shows a flash of the wrong palette.
 applyTheme();
 watchSystemTheme();
@@ -53,6 +55,7 @@ void Promise.all([
   hydratePaperPcMode(),
   hydrateTheme(),
   hydrateWindowControlSettings(),
+  hydrateMediaSessionSettings(),
   hydrateMiniPlayerSettings(),
   hydratePlayerControlSettings(),
   hydrateQueuePanelSettings(),

@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { PlayerState } from "./PlayerController";
 import type { PlayerControllerActions } from "./playerStore";
 import { logInternalWarn } from "../internal/logging";
+import { useLinuxMediaSession } from "../ui/settings/mediaSession";
 
 type NativeMediaAction =
   | "play"
@@ -67,6 +68,12 @@ export function useMediaSession(
   state: MediaSessionState,
   controller: PlayerControllerActions,
 ): void {
+  const linuxMediaSession = useLinuxMediaSession();
+  // The browser `mediaSession` bridge must stay off on Windows/macOS: WebView2 and WKWebView
+  // already bridge it to SMTC / MPNowPlayingInfoCenter on their own, so enabling it there
+  // produces a second now-playing entry and double-fired media keys. Linux has no native
+  // session, so the browser bridge is the MPRIS path and obeys the toggle.
+  const mediaSessionEnabled = !usesNativeMediaSession && linuxMediaSession;
   const nativeMediaCommand = useMemo(getNativeMediaCommand, []);
   const nativeMediaControlEvent = useMemo(getNativeMediaControlEvent, []);
   const sendNativeMediaUpdate = useCallback((context: string, forceMetadata = false) => {
@@ -138,7 +145,26 @@ export function useMediaSession(
   }, [nativeMediaCommand, sendNativeMediaUpdate, state.currentTrack]);
 
   useEffect(() => {
-    if (usesNativeMediaSession || !("mediaSession" in navigator)) return;
+    if (mediaSessionEnabled || !("mediaSession" in navigator)) return;
+
+    // Toggle turned off, or the platform uses its native session: clear whatever the
+    // browser bridge was showing so no duplicate now-playing entry survives.
+    try {
+      navigator.mediaSession.metadata = null;
+      navigator.mediaSession.playbackState = "none";
+      for (const action of [
+        "play", "pause", "stop", "nexttrack", "previoustrack",
+        "seekto", "seekbackward", "seekforward",
+      ] as MediaSessionAction[]) {
+        navigator.mediaSession.setActionHandler(action, null);
+      }
+    } catch {
+      // WebView media-session support varies by installed runtime version.
+    }
+  }, [mediaSessionEnabled]);
+
+  useEffect(() => {
+    if (!mediaSessionEnabled || !("mediaSession" in navigator)) return;
 
     const handlers: Partial<Record<MediaSessionAction, MediaSessionActionHandler>> = {
       play: () => void controller.play(),
@@ -180,10 +206,10 @@ export function useMediaSession(
         }
       }
     };
-  }, [controller]);
+  }, [controller, mediaSessionEnabled]);
 
   useEffect(() => {
-    if (usesNativeMediaSession || !("mediaSession" in navigator)) return;
+    if (!mediaSessionEnabled || !("mediaSession" in navigator)) return;
 
     const track = state.currentTrack;
     try {
@@ -198,11 +224,11 @@ export function useMediaSession(
     } catch {
       // WebView media-session support varies by installed runtime version.
     }
-  }, [state.currentTrack, state.status]);
+  }, [state.currentTrack, state.status, mediaSessionEnabled]);
 
   useEffect(() => {
     if (
-      usesNativeMediaSession
+      !mediaSessionEnabled
       || !("mediaSession" in navigator)
       || !state.currentTrack
     ) return;
@@ -226,5 +252,5 @@ export function useMediaSession(
     updatePosition();
     const intervalId = window.setInterval(updatePosition, 1000);
     return () => window.clearInterval(intervalId);
-  }, [controller, state.currentTrack, state.status]);
+  }, [controller, state.currentTrack, state.status, mediaSessionEnabled]);
 }
