@@ -133,6 +133,8 @@ const MINI_PLAYER_BOTTOM_MARGIN = 24;
 // A long fixed timeout used to swallow the mini player when the window was moved
 // and then minimised shortly after.
 const MAIN_WINDOW_DRAG_BACKGROUND_SUPPRESS_MS = 1500;
+/** How often the session is written purely to keep the restored playback position fresh. */
+const SESSION_HEARTBEAT_MS = 5000;
 const SLEEP_RECOVERY_TIMER_INTERVAL_MS = 15000;
 const SLEEP_RECOVERY_TIMER_DRIFT_MS = 60000;
 const TAB_SHORTCUT_ACTIONS: KeyboardShortcutAction[] = [
@@ -408,7 +410,6 @@ export default function App() {
   }, []);
   const loadingScreenDismissedRef = useRef(false);
   const loadingScreenStartedAtRef = useRef(performance.now());
-  const miniPlayerPositionedRef = useRef(false);
   const miniPlayerEnabledRef = useRef(miniPlayerEnabled);
   const miniPlayerRestoreSuppressUntilRef = useRef(0);
   const mainWindowDragSuppressUntilRef = useRef(0);
@@ -729,8 +730,19 @@ export default function App() {
     };
   }, [dismissLoadingScreen, libraryState.library, libraryState.status, showKeychainNotice]);
 
+  /*
+   * A heartbeat, not the primary persistence path.
+   *
+   * Every change to the tabs or the player session is already written by the effect below, and
+   * `beforeunload` catches a clean exit. All this adds is `positionSec` freshness for a restore
+   * after a crash or a kill — so it ran every second, rebuilding every tab's full queue and
+   * history into a multi-megabyte object graph, stringifying it and writing it synchronously,
+   * for a field that only has to be roughly right.
+   *
+   * At five seconds a hard kill costs at most five seconds of playback position.
+   */
   useEffect(() => {
-    const intervalId = window.setInterval(persistAppSession, 1000);
+    const intervalId = window.setInterval(persistAppSession, SESSION_HEARTBEAT_MS);
     window.addEventListener("beforeunload", persistAppSession);
     return () => {
       window.clearInterval(intervalId);
@@ -1633,31 +1645,27 @@ export default function App() {
 
 
 /*
- * The window follows the setting, rather than existing always and merely being hidden.
+ * The window exists only while it is on screen.
  *
- * Enabled: created up front, so the first time it is needed — backgrounding the app — it appears
- * immediately rather than after a webview cold start. Disabled: destroyed, which is the only
- * thing that actually returns its ~32 MB; hiding leaves the process resident.
+ * It used to be created on mount and merely hidden on return, which left an idle WebView2
+ * renderer resident for the whole session — ~32 MB, plus its share of the shared GPU process,
+ * paid by everyone including the users who never background the app. Creation is deferred to
+ * the moment it is shown and the window is destroyed when the main window comes back; only
+ * destroying returns the memory.
+ *
+ * The cost is a cold webview start on each show. That is paid while the user is looking at
+ * another application, which is the one moment it does not read as lag.
  */
 useEffect(() => {
-  if (miniPlayerEnabled) {
-    void ensureMiniPlayerWindow();
-    return;
-  }
-
-  // The ref describes a window that is about to stop existing. Left set, the replacement made
-  // on re-enable would be treated as already placed and open wherever the OS put it.
-  miniPlayerPositionedRef.current = false;
+  if (miniPlayerEnabled) return;
   void destroyMiniPlayerWindow();
 }, [miniPlayerEnabled]);
 
 
 useEffect(() => {
   const setupListeners = async () => {
-    const hideMiniPlayer = async () => {
-      const miniWin = await WebviewWindow.getByLabel("mini-player");
-      if (miniWin) await miniWin.hide();
-    };
+    /** Destroys rather than hides: a hidden webview keeps its whole renderer process alive. */
+    const dismissMiniPlayer = () => destroyMiniPlayerWindow();
 
     /**
      * @param force bypasses the drag/restore suppression windows. Used for an explicit
@@ -1665,37 +1673,24 @@ useEffect(() => {
      */
     const showMiniPlayerIfAllowed = async (_event?: unknown, force = false) => {
       /*
-       * Checked before the window is asked for, not after.
+       * Every one of these is checked before the window is asked for, not after.
        *
-       * Asking is now what creates it, so testing `enabled` afterwards would spawn the window
-       * for the very users who turned it off, only to hide it again.
+       * Asking is what creates it, so a suppression tested afterwards would spawn a whole
+       * webview process only to tear it down again — which is the cost this window is
+       * lazily created to avoid in the first place.
        */
-      if (!miniPlayerEnabledRef.current) {
-        await hideMiniPlayer();
-        return;
-      }
+      if (!miniPlayerEnabledRef.current) return;
+      if (!force && Date.now() < mainWindowDragSuppressUntilRef.current) return;
+      if (!force && Date.now() < miniPlayerRestoreSuppressUntilRef.current) return;
 
-      // Covers the cold-start race: backgrounding the app in the first moments after launch
-      // can arrive before the creation kicked off on mount has finished.
       const miniWin = await ensureMiniPlayerWindow();
       if (!miniWin) return;
 
-      if (!force && Date.now() < mainWindowDragSuppressUntilRef.current) {
-        await miniWin.hide();
-        return;
-      }
-
-      if (!force && Date.now() < miniPlayerRestoreSuppressUntilRef.current) {
-        await miniWin.hide();
-        return;
-      }
-
-      if (!miniPlayerPositionedRef.current) {
-        try {
-          await placeMiniPlayerAtBottomCenter(miniWin);
-        } catch (_) {}
-        miniPlayerPositionedRef.current = true;
-      }
+      // Placed on every show, because every show is a new window. `placeMiniPlayerAtBottomCenter`
+      // prefers the saved position, so a window the user dragged still comes back where they left it.
+      try {
+        await placeMiniPlayerAtBottomCenter(miniWin);
+      } catch (_) {}
 
       await miniWin.show();
       if (isLinux) {
@@ -1706,20 +1701,17 @@ useEffect(() => {
       await miniWin.setFocus();
     };
 
+    /*
+     * Launching straight into the background — autostart, or a click elsewhere while the app
+     * was still starting — produces no blur event, because focus was never held to lose.
+     */
     const recoverMissedBackgroundEvent = async () => {
-      const [mainWin, miniWin] = await Promise.all([
-        WebviewWindow.getByLabel("main"),
-        WebviewWindow.getByLabel("mini-player"),
-      ]);
-      if (!mainWin || !miniWin) return;
+      if (!miniPlayerEnabledRef.current) return;
 
-      const [mainFocused, miniFocused] = await Promise.all([
-        mainWin.isFocused(),
-        miniWin.isFocused(),
-      ]);
-      if (!mainFocused && !miniFocused) {
-        await showMiniPlayerIfAllowed();
-      }
+      const mainWin = await WebviewWindow.getByLabel("main");
+      if (!mainWin || (await mainWin.isFocused())) return;
+
+      await showMiniPlayerIfAllowed();
     };
 
     const unlistenBackgrounded = await listen("main-window-backgrounded", () =>
@@ -1741,14 +1733,14 @@ useEffect(() => {
 
     const unlistenFocus = await listen("window-focused", () => {
       mainWindowDragSuppressUntilRef.current = 0;
-      void hideMiniPlayer();
+      void dismissMiniPlayer();
     });
     window.addEventListener("main-window-drag-started", handleMainWindowDragStarted);
     window.addEventListener("pointerup", handleMainWindowDragEnded);
     window.addEventListener("pointercancel", handleMainWindowDragEnded);
     const unlistenRestoreMain = await listen("mini-player:restore-main", async () => {
       miniPlayerRestoreSuppressUntilRef.current = Date.now() + 800;
-      await hideMiniPlayer();
+      await dismissMiniPlayer();
     });
     const unlistenPositionChanged = await listen<{ x: number; y: number }>(
       "mini-player:position-changed",
@@ -1757,9 +1749,6 @@ useEffect(() => {
       },
     );
 
-    if (!miniPlayerEnabledRef.current) {
-      await hideMiniPlayer();
-    }
     void recoverMissedBackgroundEvent();
 
     return () => {
