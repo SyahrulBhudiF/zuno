@@ -863,6 +863,34 @@ export default function App() {
     });
   };
 
+  /**
+   * Opens the album a track belongs to.
+   *
+   * `Track.album` is a name with no id, so there is nothing to navigate to directly — the album
+   * has to be looked up. The top album result for "<album> <artist>" is the right one in
+   * practice; when nothing matches, the search page is a more useful landing place than an
+   * error, since the query is already the thing the listener asked about.
+   */
+  const handleNavigateAlbumForTrack = async (track: Track) => {
+    const query = [track.album, track.artist].filter(Boolean).join(" ").trim();
+    if (!query) return;
+
+    try {
+      const results = await searchController.search(query);
+      const album = results?.albums?.[0];
+      if (album) {
+        handleNavigateAlbum(album);
+        return;
+      }
+    } catch (error) {
+      logInternalWarn("App.handleNavigateAlbumForTrack failed", {
+        trackId: track.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    handleSearch(query, false);
+  };
+
   const handleNavigateArtist = (artist: Artist, openInNewTab = false) => {
     playerUIStore.setLyricsOpen(false);
     if (!artist.id) {
@@ -908,9 +936,15 @@ export default function App() {
     });
   };
 
-  const handleConnectionRestored = async () => {
+  /*
+   * Memoized because `PlayerBar` hangs its whole connectivity chain off this identity:
+   * `updateConnectionState` → `checkConnection` → the effect that calls it on mount. A fresh
+   * function each render re-ran that effect on every render, firing a live connectivity probe
+   * each time — several per track change.
+   */
+  const handleConnectionRestored = useCallback(async () => {
     await libraryController.recoverConnection();
-  };
+  }, []);
 
   const handleNavigatePlaylist = (playlist: Playlist) => {
     playerUIStore.setLyricsOpen(false);
@@ -1879,6 +1913,7 @@ useEffect(() => {
     <TrackContextMenuProvider
       libraryController={libraryController}
       onOpenRelated={handleNavigateRelated}
+      onOpenAlbum={(track) => void handleNavigateAlbumForTrack(track)}
     >
     <PlaylistContextMenuProvider libraryController={libraryController}>
     {/*

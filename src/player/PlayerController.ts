@@ -1,4 +1,4 @@
-import type { DataSource } from "../datasource/DataSource";
+import type { DataSource, StreamData } from "../datasource/DataSource";
 import type { Lyrics, Track } from "../datasource/types";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../internal/logging";
 import { AudioEngine } from "./AudioEngine";
@@ -32,6 +32,15 @@ const TRANSITION_TICK_MS = 250;
  * not preload a string of tracks nobody reaches.
  */
 const PRELOAD_LEAD_SEC = 20;
+
+/**
+ * How often a play in progress is reported to the provider's history.
+ *
+ * Matches what YouTube's own player does. The interval is the point, not the value: reported
+ * watch time has to grow with real elapsed time or it is discarded — a single ping claiming a
+ * whole track was heard is accepted and counted as nothing.
+ */
+const SCROBBLE_TICK_MS = 30_000;
 
 export type PlayerStatus = "idle" | "loading" | "playing" | "paused" | "error";
 
@@ -172,9 +181,13 @@ export class PlayerController {
   private playbackOrderMode: PlaybackOrderMode = "in-order";
   private shuffleEnabled = false;
   private isPlaylistMode = false;
+  /** Audio resolved ahead of time for the next track, claimed by `ensureTrackLoaded`. */
+  private warmedStream: { trackId: string; data: StreamData } | null = null;
+  private warmingStream = false;
   private crossfadeSec = 0;
   private gaplessEnabled = true;
   private transitionTimerId: number | null = null;
+  private scrobbleTimerId: number | null = null;
   private transitioning = false;
 
   private state: PlayerState = {
@@ -333,6 +346,9 @@ export class PlayerController {
     playbackQueue?: readonly Track[],
     autoplayWhenQueueEnds = false,
   ): Promise<boolean> {
+    // Close out whatever was playing first: this is the funnel every track change goes
+    // through, so it catches a natural end and a skip with the same one call.
+    this.finishPlayReport();
     const requestId = ++this.playTrackRequestId;
     logInternalInfo("PlayerController.playTrackById start", { videoId });
     /*
@@ -370,31 +386,51 @@ export class PlayerController {
        * abandoning playback.
        */
       const knownTrack = queuedTrack ?? getOfflineTrack(videoId);
-      let fetchedTrack: Track;
+      const mergeWithQueued = (fetched: Track): Track => (queuedTrack
+        ? {
+            ...fetched,
+            ...queuedTrack,
+            durationSec: fetched.durationSec ?? queuedTrack.durationSec,
+            artworkUrl: queuedTrack.artworkUrl ?? fetched.artworkUrl,
+            artists: queuedTrack.artists ?? fetched.artists,
+          }
+        : fetched);
+
+      /*
+       * Metadata is fetched *alongside* the audio, not before it.
+       *
+       * A row that was clicked in a list already carries its title, artist, artwork and
+       * duration — everything the player bar shows. Awaiting `getTrack` before touching the
+       * audio spent a full round trip re-fetching what was already on screen, and it did so
+       * before stream resolution could even begin, so two serial round trips stood between the
+       * click and the first byte. Playing from what we have collapses that to one, and the
+       * refresh lands a moment later with anything the row was missing.
+       *
+       * Only a track we know nothing about still has to wait.
+       */
+      let track: Track;
       if (queuedTrack?.source === "local") {
-        fetchedTrack = queuedTrack;
-      } else {
-        try {
-          fetchedTrack = await this.dataSource.getTrack(videoId);
-        } catch (error) {
-          if (!knownTrack) throw error;
-          logInternalWarn("PlayerController.playTrackById metadata unavailable", {
-            videoId,
-            error: error instanceof Error ? error.message : String(error),
+        track = queuedTrack;
+      } else if (knownTrack) {
+        track = mergeWithQueued(knownTrack);
+        void this.dataSource.getTrack(videoId)
+          .then((fetched) => {
+            // A skip during the refresh makes this answer belong to a track nobody is on.
+            if (requestId !== this.playTrackRequestId) return;
+            this.setState({ currentTrack: mergeWithQueued(fetched) });
+          })
+          .catch((error) => {
+            // Playback is already under way on the known copy; this is a missing refresh, not
+            // a failure — offline is the ordinary case.
+            logInternalWarn("PlayerController.playTrackById metadata refresh failed", {
+              videoId,
+              error: error instanceof Error ? error.message : String(error),
+            });
           });
-          fetchedTrack = knownTrack;
-        }
+      } else {
+        track = mergeWithQueued(await this.dataSource.getTrack(videoId));
       }
       if (requestId !== this.playTrackRequestId) return false;
-      const track = queuedTrack
-        ? {
-            ...fetchedTrack,
-            ...queuedTrack,
-            durationSec: fetchedTrack.durationSec ?? queuedTrack.durationSec,
-            artworkUrl: queuedTrack.artworkUrl ?? fetchedTrack.artworkUrl,
-            artists: queuedTrack.artists ?? fetchedTrack.artists,
-          }
-        : fetchedTrack;
 
       this.loadedTrackId = null;
       this.setState({
@@ -408,6 +444,17 @@ export class PlayerController {
       if (autoplayWhenQueueEnds && playbackQueue?.length === 1) {
         void this.primeRadioQueue(track, requestId);
       }
+      /*
+       * Warm the next track *while* this one loads, not after.
+       *
+       * Resolution costs the better part of a second, and starting only once this track had
+       * finished meant a skip inside the first second always lost the race — which is exactly
+       * how someone skips through a queue looking for something. Both are network-bound and
+       * independent, so they overlap for free. The call at the end of `ensureTrackLoaded`
+       * stays as the catch-up for anything this one could not see yet, and no-ops when the
+       * slot is already filled.
+       */
+      this.warmNextTrack();
       await this.ensureTrackLoaded(track);
       if (requestId !== this.playTrackRequestId) return false;
 
@@ -1087,8 +1134,14 @@ export class PlayerController {
        */
       const isDownloaded = isTrackDownloaded(track.id);
       const useNativeAudio = this.audioEngine.usesNativeAudio() || isDownloaded;
+      /*
+       * A warmed track skips the whole resolve-and-download round trip, which is the entire
+       * wait a listener feels when they press next. Claimed rather than read: it is one slot,
+       * and holding it after use would keep a stale URL alive for a track already playing.
+       */
+      const warmed = this.claimWarmedStream(track.id);
       const audioData = useNativeAudio
-        ? await this.dataSource.getStreamData?.(track)
+        ? warmed ?? await this.dataSource.getStreamData?.(track)
         : undefined;
       if (useNativeAudio && !audioData) {
         throw new Error("The data source does not support native audio playback.");
@@ -1118,7 +1171,12 @@ export class PlayerController {
       logInternalInfo("PlayerController.ensureTrackLoaded success", {
         trackId: track.id,
         durationMs: Math.round(performance.now() - startedAt),
+        warmed: Boolean(warmed),
       });
+      // Start on the next one immediately rather than near the end of this track: a skip lands
+      // whenever the listener decides it does, not only in the last few seconds.
+      this.warmNextTrack();
+      this.beginPlayReport(track);
     } catch (error) {
       logInternalError("PlayerController.ensureTrackLoaded failed", error, {
         trackId: track.id,
@@ -1144,6 +1202,7 @@ export class PlayerController {
     });
     this.state = { ...this.state, ...partial };
     this.syncTransitionTicker();
+    this.syncScrobbleTicker();
     this.emit();
   }
 
@@ -1164,6 +1223,75 @@ export class PlayerController {
   }
 
   /**
+   * Warms whatever the next track will need: its metadata always, its audio on the native engine.
+   *
+   * The native engine has no standby deck, so without this every skip pays for a PO token, an
+   * InnerTube `player` call and a whole-file download before the first sample — seconds of
+   * silence after a button press. One slot is enough: it is only ever the track after the one
+   * playing, and the media server holds three.
+   *
+   * Failures are swallowed on purpose. This is an optimisation; if it does not land,
+   * `ensureTrackLoaded` fetches normally and the listener waits exactly as long as before.
+   */
+  private warmNextTrack(): void {
+    const next = this.peekNextTrack();
+    if (!next) return;
+
+    /*
+     * Metadata first, and for both engines.
+     *
+     * `playTrackById` awaits `getTrack` before it reaches the audio at all, so a cache miss
+     * there is a wait no amount of warmed audio can hide — it was 775ms of a 918ms skip, with
+     * the bytes already sitting ready. `getTrack` is stale-while-revalidate, so this only ever
+     * costs the one request the skip would have made anyway, moved earlier.
+     */
+    if (next.source === "youtube") {
+      void this.dataSource.getTrack(next.id).catch(() => {
+        // Best effort. `playTrackById` still fetches it for real, and reports its own failure.
+      });
+    }
+
+    if (!this.audioEngine.usesNativeAudio()) return;
+    if (!this.dataSource.getStreamData) return;
+    if (this.warmingStream) return;
+    // Local files and downloads are read from disk; there is no network wait to hide.
+    if (next.source === "local" || isTrackDownloaded(next.id)) return;
+    if (this.warmedStream?.trackId === next.id) return;
+
+    const getStreamData = this.dataSource.getStreamData.bind(this.dataSource);
+    this.warmingStream = true;
+    void getStreamData(next)
+      .then((data) => {
+        this.warmedStream = { trackId: next.id, data };
+        logInternalDebug("PlayerController.warmNextTrack audio ready", { trackId: next.id });
+      })
+      .catch((error) => {
+        logInternalWarn("PlayerController.warmNextTrack audio failed", {
+          trackId: next.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        this.warmingStream = false;
+      });
+  }
+
+  /**
+   * Takes the warmed stream if it is for this track, and leaves it alone if it is not.
+   *
+   * It used to empty the slot either way, which was fine while warming only began after the
+   * current track had loaded. Now that a warm starts *alongside* that load, the slot often
+   * holds the next track while this one is still being claimed — and discarding it there threw
+   * away the very thing the early start exists to produce.
+   */
+  private claimWarmedStream(trackId: string): StreamData | undefined {
+    if (this.warmedStream?.trackId !== trackId) return undefined;
+    const { data } = this.warmedStream;
+    this.warmedStream = null;
+    return data;
+  }
+
+  /**
    * Whether a track plays through the IFrame deck rather than an audio element.
    *
    * Only the IFrame path has a deck to preload. Offline and local files are read from disk
@@ -1174,6 +1302,44 @@ export class PlayerController {
     return track.source !== "local"
       && !isTrackDownloaded(track.id)
       && !this.audioEngine.usesNativeAudio();
+  }
+
+  /**
+   * Starts reporting a play, when the provider and the engine both allow it.
+   *
+   * Gated on native playback because the IFrame embed reports its own plays — pinging as well
+   * would count every track twice. Local files have no provider history to report to.
+   */
+  private beginPlayReport(track: Track): void {
+    if (!this.audioEngine.usesNativeAudio() || track.source === "local") return;
+    void this.dataSource.beginPlayReport?.(track);
+  }
+
+  /** Reports the final position of the outgoing play, if one is open. */
+  private finishPlayReport(): void {
+    const track = this.state.currentTrack;
+    if (!track) return;
+    void this.dataSource.updatePlayReport?.(track, this.audioEngine.getCurrentTime(), true);
+  }
+
+  private syncScrobbleTicker(): void {
+    const wanted = this.state.status === "playing"
+      && this.isTabActive
+      && this.audioEngine.usesNativeAudio();
+
+    if (wanted === (this.scrobbleTimerId !== null)) return;
+
+    if (!wanted) {
+      if (this.scrobbleTimerId !== null) globalThis.clearInterval(this.scrobbleTimerId);
+      this.scrobbleTimerId = null;
+      return;
+    }
+
+    this.scrobbleTimerId = globalThis.setInterval(() => {
+      const track = this.state.currentTrack;
+      if (!track || this.state.status !== "playing") return;
+      void this.dataSource.updatePlayReport?.(track, this.audioEngine.getCurrentTime(), false);
+    }, SCROBBLE_TICK_MS);
   }
 
   private syncTransitionTicker(): void {
