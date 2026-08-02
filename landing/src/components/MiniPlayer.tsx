@@ -71,28 +71,9 @@ export function MiniPlayer() {
     audio.addEventListener("play", sync);
     audio.addEventListener("pause", sync);
 
-    /*
-     * Autoplay, with the fallback the platform forces.
-     *
-     * Every engine refuses `play()` with sound until the visitor has interacted with the page,
-     * and the refusal is a rejected promise rather than an error — so the first gesture anywhere
-     * on the document starts it instead. `once` means the listener costs nothing after that, and
-     * a browser that does allow the first attempt never registers it at all.
-     */
-    let start: (() => void) | null = null;
-    void audio.play().catch(() => {
-      start = () => void audio.play();
-      document.addEventListener("pointerdown", start, { once: true });
-      document.addEventListener("keydown", start, { once: true });
-    });
-
     return () => {
       audio.removeEventListener("play", sync);
       audio.removeEventListener("pause", sync);
-      if (start) {
-        document.removeEventListener("pointerdown", start);
-        document.removeEventListener("keydown", start);
-      }
     };
   }, []);
 
@@ -136,11 +117,19 @@ export function MiniPlayer() {
 
   return (
     <div className="pointer-events-none fixed inset-0 z-50">
+      {/*
+        Silent until the play button is pressed.
+
+        It used to autoplay, and fall back to starting on the first pointerdown or keydown
+        anywhere on the document when the browser refused — so a visitor clicking a download
+        link got music they never asked for, from a control they may not have noticed. `metadata`
+        rather than `auto` for the same reason: nothing is fetched beyond the duration the
+        progress ring needs until someone actually wants to hear it.
+      */}
       <audio
         ref={audioRef}
         src={TRACK.src}
-        autoPlay
-        preload="auto"
+        preload="metadata"
         onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)}
         onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
       />
