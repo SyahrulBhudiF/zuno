@@ -51,7 +51,7 @@ import {
   unmetPrecondition,
 } from "./lyricsSources";
 import { getPreferredLyricsSourceId } from "../../internal/lyricsSourcePreference";
-import { looksLikeYouTubeLink, parseYouTubeLink } from "./links";
+import { isVideoId, looksLikeYouTubeLink, parseYouTubeLink } from "./links";
 import { isTrackDownloaded } from "../../player/offlineStore";
 import {
   getDownloadQuality,
@@ -63,6 +63,7 @@ import {
   usesAuthenticatedStreaming,
   usesYouTubeScrobbling,
 } from "../../ui/settings/youtubeAccount";
+import { usesRustAudioEngine } from "../../ui/settings/audioEngine";
 import {
   getLiveCookie,
   notifyAuthRejected,
@@ -999,9 +1000,24 @@ export class YouTubeMusicDataSource extends DataSource {
   }
 
   private toTrack(item: MusicItem): Track | null {
-    const id = item.id ?? item.endpoint?.payload?.videoId;
+    /*
+     * The endpoint wins over `item.id`.
+     *
+     * `item.id` is whatever the renderer happened to be keyed on — a video id for a song, a
+     * *browse* id for a show — while `endpoint.payload.videoId` only ever names the thing that
+     * plays. For an ordinary song the two hold the same value, so this changes nothing there;
+     * it changes the rows that were never playable in the first place.
+     */
+    const id = item.endpoint?.payload?.videoId ?? item.id;
     const title = this.getTitle(item);
-    if (!id || !title) return null;
+    /*
+     * A shape check as well as a presence check. An artist page's popular-songs shelf mixes in
+     * podcast shows whose id is `MPSPPL…`; those became tracks, and clicking one walked all
+     * three Innertube clients only to be told "This video is unavailable" by each. Dropping
+     * them here means they never reach a queue — `toTrack` already returns null for unusable
+     * items and every caller filters.
+     */
+    if (!isVideoId(id) || !title) return null;
     const viewCountText = this.getViewCountText(item);
     const album = this.getTrackAlbum(item);
 
@@ -5863,6 +5879,10 @@ export class YouTubeMusicDataSource extends DataSource {
   }
 
   async getStreamData(track: Track): Promise<StreamData> {
+    if (usesRustAudioEngine()) {
+      return this.getRustStreamData(track);
+    }
+
     if (track.source === "local") {
       if (!track.localPath) {
         throw new Error("Local track path is missing.");
@@ -5937,6 +5957,49 @@ export class YouTubeMusicDataSource extends DataSource {
     return {
       mimeType: payload.mimeType,
       sourceUrl: payload.url,
+    };
+  }
+
+  /**
+   * The same three cases as `getStreamData`, resolved to a *reference* rather than to bytes.
+   *
+   * This is what the Rust engine buys before a single sample is decoded. A local file is a path
+   * instead of the whole song base64-encoded across IPC; a download is a track id instead of a
+   * copy loaded into the media server; a stream is the signed URL itself instead of a
+   * `fetch_audio_source` round trip that publishes the body and hands back a loopback URL. In
+   * every case Rust already has, or can get, the bytes — asking the webview to carry them first
+   * was only ever in service of an `<audio>` element that no longer exists on this path.
+   */
+  private async getRustStreamData(track: Track): Promise<StreamData> {
+    if (track.source === "local") {
+      if (!track.localPath) {
+        throw new Error("Local track path is missing.");
+      }
+      return {
+        mimeType: track.mimeType ?? "audio/mp4",
+        rustSource: { kind: "file", path: track.localPath },
+      };
+    }
+
+    if (isTrackDownloaded(track.id)) {
+      const mimeType = track.mimeType ?? "audio/mp4";
+      /*
+       * The mime type travels with the id because it is what picks the decoder: a downloaded
+       * body is raw bytes on disk with no extension to read, and Opus needs libopus while
+       * everything else goes to rodio.
+       */
+      return { mimeType, rustSource: { kind: "offline", trackId: track.id, mimeType } };
+    }
+
+    const { url, mimeType, cookie } = await this.resolveStreamUrl(track);
+    logInternalInfo("YouTubeMusicDataSource.getRustStreamData resolved", {
+      trackId: track.id,
+      mimeType,
+      authenticated: Boolean(cookie),
+    });
+    return {
+      mimeType,
+      rustSource: { kind: "stream", url, mimeType, cookie },
     };
   }
 

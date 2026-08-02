@@ -10,27 +10,32 @@ import {
  *
  * `iframe` hands the video id to a hidden YouTube IFrame player and lets Google's own embed
  * resolve and stream it. `native` resolves the signed URL here, downloads it through Rust, and
- * plays the bytes from the local media server through an `<audio>` element.
+ * plays the bytes from the local media server through an `<audio>` element. `rust` resolves the
+ * same URL and decodes it in the Rust process with symphonia, straight out to the sound card.
  *
  * The difference that matters is a whole second webview: the IFrame player runs in a
  * `youtube.com` subframe process of its own, which costs roughly 90 MB and a steady slice of
- * the GPU process. Native has no subframe at all.
+ * the GPU process. Neither of the other two has a subframe at all.
  *
- * Native is not the default *yet*, for three reasons: it resolves a signed URL and downloads
- * the whole track before the first sample plays, so it starts slower; it is the path that
- * historically answered 403, which is why this was hardcoded off until PO tokens landed; and
- * gapless and crossfade ride the standby IFrame deck, so neither applies to it. Downloads have
- * used this exact resolve-and-fetch path successfully since PO tokens, which is what makes it
- * worth offering — leaving the default alone means a regression costs a setting rather than
- * everyone's playback.
+ * `rust` is what `native` was trying to be. `native` still hands whole songs to the webview over
+ * loopback HTTP, which means a second copy of every track lives in the renderer, and it has no
+ * standby deck — so gapless and crossfade silently do nothing there. The Rust engine has two
+ * real decks and mixes them, decodes as the bytes arrive rather than after, and never puts audio
+ * in the renderer at all.
+ *
+ * `rust` is the default. What made that safe is not that a signed URL never gets refused — it
+ * still can, and that is what hardcoded `native` off between v1.2.65 and PO tokens landing — but
+ * that a refusal is no longer fatal: `PlayerController` catches a failed resolve or load on a
+ * streamed track and plays it on the IFrame deck instead, costing that one track a subframe.
+ * `iframe` stays selectable for anyone who wants Google's player for everything.
  */
-export type AudioEngineMode = "iframe" | "native";
+export type AudioEngineMode = "iframe" | "native" | "rust";
 
 const STORAGE_KEY = "audio-engine-mode";
 /** Exported so `AudioEngine` can free its decks the moment the mode stops being `iframe`. */
 export const AUDIO_ENGINE_MODE_CHANGE_EVENT = "audio-engine-mode-change";
 const CHANGE_EVENT = AUDIO_ENGINE_MODE_CHANGE_EVENT;
-const DEFAULT_MODE: AudioEngineMode = "iframe";
+const DEFAULT_MODE: AudioEngineMode = "rust";
 
 export const AUDIO_ENGINE_MODES: ReadonlyArray<{
   value: AudioEngineMode;
@@ -38,19 +43,24 @@ export const AUDIO_ENGINE_MODES: ReadonlyArray<{
   hint: string;
 }> = [
   {
+    value: "rust",
+    label: "Rust audio",
+    hint: "Decoded in the app. Lowest memory, gapless and crossfade, falls back if a track is refused.",
+  },
+  {
     value: "iframe",
     label: "YouTube player",
-    hint: "Most reliable. Runs a hidden youtube.com frame, ~90 MB.",
+    hint: "Google's own player for everything. Runs a hidden youtube.com frame, ~90 MB.",
   },
   {
     value: "native",
     label: "Native audio",
-    hint: "No hidden frame. Lower memory, slower to start, no gapless or crossfade.",
+    hint: "Plays through the webview. Keeps a second copy of each track in memory, no gapless.",
   },
 ];
 
 function isAudioEngineMode(value: unknown): value is AudioEngineMode {
-  return value === "iframe" || value === "native";
+  return value === "iframe" || value === "native" || value === "rust";
 }
 
 /*
@@ -93,9 +103,21 @@ export function getAudioEngineMode(): AudioEngineMode {
   return readMode();
 }
 
-/** True when the current mode plays through `<audio>` rather than the YouTube IFrame. */
+/**
+ * True when playback does *not* go through the YouTube IFrame.
+ *
+ * Deliberately covers both non-iframe engines. Every caller of this asks the same question —
+ * "is a signed URL being resolved here rather than by Google's embed" — which is what gates
+ * stream warming, play reporting and the error copy. Use `usesRustAudioEngine` for the narrower
+ * question of *which* of the two.
+ */
 export function usesNativeAudioEngine(): boolean {
-  return readMode() === "native";
+  return readMode() !== "iframe";
+}
+
+/** True when Rust decodes and plays the audio itself, with no `<audio>` element involved. */
+export function usesRustAudioEngine(): boolean {
+  return readMode() === "rust";
 }
 
 export function setAudioEngineMode(mode: AudioEngineMode) {

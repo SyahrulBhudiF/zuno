@@ -1,6 +1,6 @@
 [package]
 name = "zuno"
-version = "1.2.2"
+version = "1.3.0"
 description = "Zuno - a desktop music client"
 authors = ["you"]
 edition = "2021"
@@ -37,8 +37,17 @@ md5 = "0.8.0"
 lofty = "0.24.0"
 notify = "8.2.0"
 futures-util = "0.3.33"
-# Already in the tree via tauri; declared directly only for `sleep` in the range-retry backoff.
-tokio = { version = "1", features = ["time"] }
+# Already in the tree via tauri; declared directly for `sleep` in the range-retry backoff
+# and the semaphore that serialises playback fills.
+tokio = { version = "1", features = ["sync", "time"] }
+rodio = { version = "0.22.2", default-features = false, features = ["playback", "symphonia-all"] }
+# Demuxing only, and pinned to the version rodio already pulls so the binary carries one copy
+# of the Matroska/Ogg readers rather than two.
+symphonia = { version = "0.5", default-features = false, features = ["mkv", "ogg"] }
+# libopus, built from source via cmake. symphonia has no Opus decoder at all, and YouTube
+# serves Opus-in-WebM for the large majority of tracks at `high` — and as the *only* audio
+# offered for many of them, so preferring AAC is not an alternative.
+opus = "0.3.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 aes-gcm = "0.10"

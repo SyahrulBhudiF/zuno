@@ -11,6 +11,9 @@ See [architecture.md](./architecture.md) for the system view.
 |---|---|---|
 | `main.rs` | 24 | Windows AppUserModelID, WebView2 diagnostics workaround, calls `run()` |
 | `lib.rs` | ~3940 | Everything else: commands, cache, settings, logging, session storage + cookie jar, HTTP proxy, audio fetch, offline store, local files/tags/watcher, media server, tray, window events, builder wiring |
+| `audio.rs` | ~460 | The native engine: two rodio decks, the crossfade ramp, the position tick, and the blocking reader that lets symphonia decode a body still downloading |
+| `opus_source.rs` | ~250 | Opus playback — symphonia demuxes the WebM/Ogg container, libopus decodes the packets, the result is a rodio `Source` |
+| `equalizer.rs` | ~300 | Ten-band graphic EQ: a cascade of peaking biquads between the decoder and the deck |
 | `discord_rpc.rs` | 213 | Discord IPC client lifecycle and activity payloads |
 | `lastfm.rs` | 283 | Last.fm auth + scrobbling |
 | `windows_media.rs` | 630 | SMTC + taskbar thumbnail toolbar (Windows only) |
@@ -21,6 +24,8 @@ See [architecture.md](./architecture.md) for the system view.
 `tauri` (features `macos-private-api`, `tray-icon`, `image-png`),
 `tauri-plugin-{autostart,opener,localhost,updater,process,dialog}`,
 `reqwest` (rustls-tls, gzip/brotli/deflate, **stream**), `futures-util` (parallel range downloads),
+`rodio` 0.22 with `symphonia-all` (symphonia decodes, cpal plays, rodio resamples between them),
+`symphonia` 0.5 directly for demuxing and `opus` 0.3 for the one codec symphonia lacks,
 `keyring` 3.6 with native backends, `lofty` 0.24 (audio tag read/write), `notify` 8.2 (folder
 watching), `discord-rich-presence`, `md5`, `base64`, `url`, `portpicker`.
 macOS adds `aes-gcm`, `objc2`, `objc2-foundation`, `block2`, `rand`. Windows adds the `windows`
@@ -207,8 +212,93 @@ Replacing a key mid-playback is safe: `handle_media_request` clones the `Arc` be
 a request already in flight finishes against the bytes it started with.
 
 **Note:** which of these runs for ordinary streaming depends on the audio-engine setting. In
-`iframe` mode (the default) none of them do — the IFrame decks stream directly. Downloads always
-use `offline_audio_save` below.
+`iframe` mode (the default) none of them do — the IFrame decks stream directly. In `rust` mode the
+media server is bypassed too: `native_audio_load` reads through `MediaBuffer` in-process. Downloads
+always use `offline_audio_save` below.
+
+### Audio — the native engine (`audio.rs`)
+
+| Command | Signature | Notes |
+|---|---|---|
+| `native_audio_load` | `(track_id, source, duration_sec?, standby?) -> f64` | Decodes onto the active deck, or the standby one when `standby`. Returns the duration decoded, falling back to the provider's when the container declares none — Opus in WebM usually does not |
+| `native_audio_play` / `_pause` / `_stop` | `()` | |
+| `native_audio_seek` | `(position_sec)` | |
+| `native_audio_set_volume` | `(volume, muted)` | |
+| `native_audio_set_rate` | `(rate)` | Resamples, so it transposes. See §7 |
+| `native_audio_transition` | `(track_id, fade_ms) -> bool` | Swaps to the standby deck. `fade_ms` of 0 is the gapless case; above 0 both decks play and their volumes ramp past each other. False means nothing was preloaded |
+| `native_audio_has_standby` | `(track_id) -> bool` | |
+| `native_audio_drop_standby` | `()` | |
+| `native_audio_set_equalizer` | `(preamp_db, bands_db: Vec<f32>)` | Ten gains in dB, applied to whatever is playing |
+| `media_server_release` | `() -> usize` | Drops every body the media server holds, and returns how many. Called once on the first Rust load, after the `<audio>` element is torn down |
+
+`NativeAudioSource` is one of `stream` (a signed googlevideo URL), `offline` (a track id) or
+`file` (a path, re-validated here rather than trusted from the frontend). Each carries a mime
+type, because that is what picks the decoder — but for anything already on disk the *bytes* win:
+`sniff_container_mime` reads the first 64 and rewinds. `Track.mimeType` describes what was
+resolved for streaming and a row from a playlist listing has none at all, so a downloaded Opus
+file arrived declared `audio/mp4` and went to rodio, which parsed the Matroska and then had no
+Opus decoder for what was inside.
+
+**Opus is not optional.** symphonia has no Opus decoder in 0.5 — not a feature flag, the codec is
+absent — and YouTube serves `audio/webm; codecs="opus"` for the large majority of tracks at
+`high` quality, and as the *only* audio offered for many of them. So `opus_source.rs` uses
+symphonia purely as a demuxer and hands the packets to libopus; everything else (AAC, FLAC, MP3,
+ALAC, Vorbis, WAV) stays on `rodio::Decoder`. `is_opus()` routes on the declared mime type, and
+getting it wrong is a failed load rather than a fallback — neither decoder can read the other's
+format. Two details are load-bearing: OpusHead's **pre-skip** is discarded, or every track opens
+with an audible tick, and a **seek resets the decoder state**, or the first frames after a jump
+are reconstructed against samples from somewhere else and arrive as noise.
+
+**Build requirements this adds.** `opus` builds libopus from source with **cmake**, and `cpal`
+links **ALSA** on Linux (`libasound2-dev` / `alsa-lib`). Both are in `ci.yml`, `release.yml` and
+the AUR PKGBUILD. On Windows, cmake ships with the Visual Studio Build Tools but is not on `PATH`
+by default.
+
+### Equaliser (`equalizer.rs`)
+
+Peaking biquads at the ten ISO octave centres, direct form I, one filter chain per channel —
+sharing one across an interleaved stream would filter left against right. `EqualizedSource` wraps
+the decoder, so it applies to both decks and a crossfade stays consistent.
+
+- **Settings are process-global, not per-source.** A slider has to move the track *playing*, and
+  during a crossfade two decks have to agree. A source checks an `AtomicU64` generation per sample
+  and only takes the lock when it changed; locking per sample would put a mutex in the audio path.
+- **Direct form I** because its state is input/output history, which stays well behaved when the
+  coefficients change under it — and here they change mid-note whenever a slider moves.
+  `retune` swaps coefficients without touching that history, so there is no click.
+- **Flat is bypassed**, not run at unity.
+- **A limiter follows the bands** (`rodio::Source::limit`). Ten bands at +12 dB is far more than a
+  normalised track's headroom; without it the sum clips into something that sounds like a broken
+  decoder. Presets carry a negative preamp for the same reason.
+- Rust holds the values in memory only. `hydrateEqualizer` pushes the stored curve down at boot,
+  or the equaliser silently does nothing until a slider is touched.
+- **Only the Rust engine has it.** A track that fell back to the IFrame deck plays unequalised;
+  the settings section says so rather than leaving it to be discovered.
+
+**The media server is not needed on this path at all.** `media_server()` is lazy, so an app that
+launches straight into `rust` mode never binds the listener — `fetch_audio_source` and
+`offline_audio_source` are the only callers and neither runs. Switching *into* `rust` mid-session
+is the case that matters, and `media_server_release` handles it: up to `MEDIA_SERVER_MAX_ITEMS`
+whole songs are dropped at the first Rust load, once the `<audio>` element that could still be
+range-requesting them is gone. The listener thread and its port stay — reclaiming those means the
+`OnceLock` has to become something emptiable *and* restartable, because the other two engines
+still need the server.
+
+Three things are load-bearing:
+
+- **One owned thread behind a channel.** cpal's stream handle is not `Send` on every backend and
+  Tauri state must be, so only the `Sender` escapes the module. The same thread runs the 250 ms
+  position tick out of its own `recv_timeout`, and steps an in-progress crossfade at 20 ms — a
+  fade that slept in the command loop would starve position events for its whole window.
+- **The decoder is built off the audio thread.** `rodio::Decoder::new` reads the container header,
+  which for a stream means waiting on the network; `native_audio_load` does it on a blocking pool
+  thread and sends the thread a ready `Box<dyn Source + Send>`. Preloading the next track therefore
+  never stalls the position feed of the one playing.
+- **`BufferReader` blocks rather than reporting a short read.** `MediaBuffer` only exposes its
+  contiguous prefix, so a read either returns bytes from offset 0 without a hole or waits for the
+  gap to fill. A short read would look like the end of the stream to symphonia. A failed download
+  reports EOF, not an error, so the track ends and the queue advances instead of hanging on a deck
+  that will never empty.
 
 **`fetch_audio_ranged`** is the one downloader both playback and the offline store use, so the
 two cannot drift apart on speed — playback used to take the single-request path while downloads
@@ -273,6 +363,7 @@ produce the same user-visible outcome — a rescan.
 | `update_windows_media_session` | `windows_media.rs` | Windows only (`#[cfg]` inside `generate_handler!`) |
 | `update_macos_media_session` | `macos_media.rs` | macOS only |
 | `quit_app` | `lib.rs` | Routes to `close_or_hide_main_window` |
+| `native_audio_*` | `audio.rs` | See §3. Emits `native-audio-position` and `native-audio-ended` |
 | `greet` | `lib.rs` | Tauri scaffolding leftover; unused |
 
 **Windows media** (`windows_media.rs`): a `MediaPlayer` + `SystemMediaTransportControls` pair driving
@@ -308,7 +399,8 @@ that the list is missing every command added since it was written (all `offline_
 blocks or stop treating them as a checklist; do not add to them expecting an effect.
 
 `app.security.csp` is `null` — no CSP. Required because the YouTube IFrame API script is loaded from
-`youtube.com` at runtime. If native playback ever replaces the IFrame path, this should be tightened.
+`youtube.com` at runtime. The `rust` audio engine loads nothing from `youtube.com`, so retiring the
+IFrame path is the precondition for tightening this.
 
 Defense in depth that *is* in place:
 
@@ -359,6 +451,7 @@ release workflow under `.github/workflows/`.
 | `cookie_domain_matches_*` | exact, parent-domain, and rejection cases |
 | `media_items_stay_capped_and_evict_the_coldest_first` | `store_media_item` holds the cap and drops the oldest, not an arbitrary entry |
 | `restoring_the_same_track_replaces_rather_than_accumulates` | a stable key means a replay reuses its slot |
+| `buffer_reader_serves_only_the_contiguous_prefix` | `BufferReader` waits for the head instead of serving a chunk that landed early, spans chunk boundaries in one read, reports EOF on a failed download, and clamps a seek past the end |
 
 The frontend's equivalent is `npm run check` (`scripts/run-checks.mjs` over `src/**/*.check.ts`).
 There is no component/DOM test harness on either side.
