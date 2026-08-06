@@ -137,6 +137,10 @@ import {
 } from "../settings/mainWindowGeometry";
 import { setMinimizeToTray, useMinimizeToTray } from "../settings/tray";
 import {
+  setLinuxMediaSession,
+  useLinuxMediaSession,
+} from "../settings/mediaSession";
+import {
   SIDEBAR_MODES,
   setSidebarMode,
   useSidebarMode,
@@ -588,6 +592,7 @@ export function SettingsPage({
   const nativeWindowControls = useNativeWindowControls();
   const mainWindowGeometryPersistenceEnabled = useMainWindowGeometryPersistenceEnabled();
   const minimizeToTray = useMinimizeToTray();
+  const linuxMediaSession = useLinuxMediaSession();
   const offlineState = useOfflineState();
   const streamingQuality = useStreamingQuality();
   const downloadQuality = useDownloadQuality();
@@ -1893,6 +1898,15 @@ export function SettingsPage({
                 }
               }}
             />
+
+            {isLinux && (
+              <SettingToggle
+                title="Show in system media controls"
+                description="Expose playback to the desktop's media widget and media keys (MPRIS). Turning this off stops the now-playing notifications some desktops show."
+                checked={linuxMediaSession}
+                onCheckedChange={setLinuxMediaSession}
+              />
+            )}
           </section>
 
           <section className={SETTINGS_CARD} aria-labelledby="behavior-settings-title">
