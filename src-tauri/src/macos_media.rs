@@ -3,12 +3,26 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{class, msg_send};
 use objc2_foundation::{NSMutableDictionary, NSNumber, NSString};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 
 const MEDIA_CONTROL_EVENT: &str = "macos-media-control";
 const COMMAND_SUCCESS: isize = 0;
+
+/// `MPNowPlayingPlaybackState`. macOS decides the Now Playing app from this, so without it the
+/// media keys go elsewhere and none of the handlers below ever fire.
+const PLAYBACK_STATE_PLAYING: usize = 1;
+const PLAYBACK_STATE_PAUSED: usize = 2;
+const PLAYBACK_STATE_STOPPED: usize = 3;
+
+/// Matches the object arm of `NativeMediaAction` in useMediaSession.ts. `Clone` for `emit`.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SeekAction {
+    action: &'static str,
+    position_sec: f64,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,8 +62,12 @@ impl MacosMediaSession {
 
         install_remote_command_handler(app, "playCommand", "play")?;
         install_remote_command_handler(app, "pauseCommand", "pause")?;
+        // The Play/Pause key on Apple keyboards, the Touch Bar and headphone buttons all send
+        // this rather than play or pause.
+        install_remote_command_handler(app, "togglePlayPauseCommand", "playPause")?;
         install_remote_command_handler(app, "nextTrackCommand", "next")?;
         install_remote_command_handler(app, "previousTrackCommand", "previous")?;
+        install_position_command_handler(app)?;
         *initialized = true;
         Ok(())
     }
@@ -85,6 +103,7 @@ fn install_remote_command_handler(
         match command_selector {
             "playCommand" => msg_send![center, playCommand],
             "pauseCommand" => msg_send![center, pauseCommand],
+            "togglePlayPauseCommand" => msg_send![center, togglePlayPauseCommand],
             "nextTrackCommand" => msg_send![center, nextTrackCommand],
             "previousTrackCommand" => msg_send![center, previousTrackCommand],
             _ => {
@@ -116,6 +135,53 @@ fn install_remote_command_handler(
     Ok(())
 }
 
+/// Separate from the handler above because this one reads `positionTime` off the event, which
+/// is what drives the Control Center scrubber.
+fn install_position_command_handler(app: &AppHandle) -> Result<(), String> {
+    let center = command_center();
+    if center.is_null() {
+        return Err("macOS remote command center unavailable".to_string());
+    }
+
+    let command: *mut AnyObject = unsafe { msg_send![center, changePlaybackPositionCommand] };
+    if command.is_null() {
+        return Err("macOS media command unavailable: changePlaybackPositionCommand".to_string());
+    }
+
+    let app = app.clone();
+    let block = RcBlock::new(move |event: *mut AnyObject| {
+        if event.is_null() {
+            return COMMAND_SUCCESS;
+        }
+        let position_sec: f64 = unsafe { msg_send![event, positionTime] };
+        if position_sec.is_finite() {
+            let _ = app.emit(
+                MEDIA_CONTROL_EVENT,
+                SeekAction { action: "seekTo", position_sec: position_sec.max(0.0) },
+            );
+        }
+        COMMAND_SUCCESS
+    });
+
+    unsafe {
+        let _: () = msg_send![command, setEnabled: true];
+        let _: *mut AnyObject = msg_send![command, addTargetWithHandler: &*block];
+    }
+
+    std::mem::forget(block);
+    Ok(())
+}
+
+/// Set after `nowPlayingInfo`, which is the order Apple documents.
+fn set_playback_state(center: *mut AnyObject, state: usize) {
+    if center.is_null() {
+        return;
+    }
+    unsafe {
+        let _: () = msg_send![center, setPlaybackState: state];
+    }
+}
+
 fn set_now_playing_info(update: MediaSessionUpdate) {
     let center = now_playing_info_center();
     if center.is_null() {
@@ -127,6 +193,7 @@ fn set_now_playing_info(update: MediaSessionUpdate) {
         unsafe {
             let _: () = msg_send![center, setNowPlayingInfo: nil_info];
         }
+        set_playback_state(center, PLAYBACK_STATE_STOPPED);
         return;
     };
 
@@ -153,11 +220,11 @@ fn set_now_playing_info(update: MediaSessionUpdate) {
         );
     }
 
-    let playback_rate = if update.status == "playing" { 1.0 } else { 0.0 };
+    let is_playing = update.status == "playing";
     insert_number(
         &info,
         unsafe { &*MPNowPlayingInfoPropertyPlaybackRate },
-        playback_rate,
+        if is_playing { 1.0 } else { 0.0 },
     );
 
     let _ = update.artwork_url;
@@ -165,6 +232,17 @@ fn set_now_playing_info(update: MediaSessionUpdate) {
     unsafe {
         let _: () = msg_send![center, setNowPlayingInfo: &*info];
     }
+
+    // "loading" counts as playing: it is a track starting, and reporting stopped mid-handover
+    // hands the media keys to another app.
+    set_playback_state(
+        center,
+        match update.status.as_str() {
+            "playing" | "loading" => PLAYBACK_STATE_PLAYING,
+            "paused" => PLAYBACK_STATE_PAUSED,
+            _ => PLAYBACK_STATE_STOPPED,
+        },
+    );
 }
 
 fn insert_string(info: &NSMutableDictionary<NSString, AnyObject>, key: &NSString, value: &str) {
