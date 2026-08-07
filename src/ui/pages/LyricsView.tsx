@@ -431,11 +431,11 @@ export function LyricsView({ onClose }: LyricsViewProps) {
             key={track.artworkUrl}
             data-fx="ambient"
             className={cn(
-              "absolute -inset-[18%] opacity-50 blur-[32px] saturate-[1.7]",
+              "absolute -inset-[18%] opacity-50 blur-[32px] saturate-[1.7] rounded-none",
               !reduce && "lyrics-drift",
             )}
           >
-            <TrackArtwork className="size-full" size={120} artworkUrl={track.artworkUrl} iconSize={0} />
+            <TrackArtwork className="size-full rounded-none" size={120} artworkUrl={track.artworkUrl} iconSize={0} />
           </div>
         )}
         <div className="absolute inset-0 bg-gradient-to-b from-background/75 via-background/88 to-background" />
@@ -465,7 +465,7 @@ export function LyricsView({ onClose }: LyricsViewProps) {
           <TrackArtwork
             artworkUrl={track?.artworkUrl}
             size={288}
-            className="aspect-square w-full rounded-2xl shadow-2xl shadow-black/50"
+            className="aspect-square w-full   shadow-2xl shadow-black/50"
             iconSize={40}
             loading="eager"
           />
@@ -486,7 +486,7 @@ export function LyricsView({ onClose }: LyricsViewProps) {
           <TrackArtwork
             artworkUrl={track?.artworkUrl}
             size={56}
-            className="size-14 rounded-xl shadow-lg shadow-black/30"
+            className="size-14   shadow-lg shadow-black/30"
             iconSize={20}
             loading="eager"
           />
