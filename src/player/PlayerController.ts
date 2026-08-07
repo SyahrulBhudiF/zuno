@@ -860,8 +860,14 @@ export class PlayerController {
     const track = this.state.currentTrack;
     if (!track) return false;
 
-    const duration = this.audioEngine.getDuration();
-    const position = this.audioEngine.getCurrentTime();
+    /*
+     * The snapshot, not the live getters. `ended` clears the engine's track id before the
+     * callback runs, so by the time this is reached `getDuration()` answers 0 and every
+     * premature end looked like a finish — which is why this guard was silent the first time.
+     */
+    const ended = this.audioEngine.takeEndedPlayback();
+    const duration = ended?.durationSec ?? this.audioEngine.getDuration();
+    const position = ended?.positionSec ?? this.audioEngine.getCurrentTime();
 
     if (!isPrematureEnd({
       durationSec: duration,
@@ -904,11 +910,20 @@ export class PlayerController {
      * exhausted deck has already been swapped in and is no longer the standby, so the engine
      * is torn down properly and the reload resolves a fresh stream URL.
      */
+    // The warmed slot holds the same signed URL that just died; keeping it would have the
+    // reload fetch the identical 403 and end early again.
+    this.discardWarmedStream(track.id);
+
     await this.playTrackById(track.id);
     if (position > 0 && this.loadedTrackId === track.id) {
       await this.seekTo(position);
     }
     return true;
+  }
+
+  /** Forgets a pre-resolved stream whose URL has proven dead, so the next load re-resolves. */
+  private discardWarmedStream(trackId: string): void {
+    if (this.warmedStream?.trackId === trackId) this.warmedStream = null;
   }
 
   private async handleTrackEnded(): Promise<void> {
@@ -1202,6 +1217,15 @@ export class PlayerController {
           this.beginPlayReport(track);
           return;
         }
+        /*
+         * The swap was refused, which means Rust found the deck's download dead. The warmed
+         * slot was resolved in the same breath as that deck and holds the same signed URL, so
+         * the load below has to re-resolve rather than replay the URL that just failed.
+         */
+        this.discardWarmedStream(track.id);
+        logInternalWarn("PlayerController.preloadedDeck refused, re-resolving", {
+          trackId: track.id,
+        });
       }
 
       if (track.source === "local") {

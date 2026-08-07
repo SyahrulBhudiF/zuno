@@ -250,6 +250,7 @@ export class AudioEngine {
   private muted = false;
   private playbackRate = 1;
   private onEnded: (() => void) | null = null;
+  private endedAt: { positionSec: number; durationSec: number } | null = null;
   private loadRequestId = 0;
   private stateWaiters = new Set<{
     states: Set<number>;
@@ -375,7 +376,23 @@ export class AudioEngine {
 
   /** Called by the process-wide Rust `ended` router, on the engine that owns playback. */
   handleRustEnded(): void {
+    // Captured before `rustTrackId` goes, or both getters below fall back to zero and the
+    // caller cannot tell a finished track from a stream that ran out.
+    this.endedAt = { positionSec: this.getCurrentTime(), durationSec: this.getDuration() };
     this.rustTrackId = null;
+    this.onEnded?.();
+  }
+
+  /** Position and duration as of the last `ended`. Consumed once. */
+  takeEndedPlayback(): { positionSec: number; durationSec: number } | null {
+    const snapshot = this.endedAt;
+    this.endedAt = null;
+    return snapshot;
+  }
+
+  /** The `<audio>` and IFrame equivalent of `handleRustEnded`: snapshot, then notify. */
+  private emitEnded(): void {
+    this.endedAt = { positionSec: this.getCurrentTime(), durationSec: this.getDuration() };
     this.onEnded?.();
   }
 
@@ -984,7 +1001,7 @@ export class AudioEngine {
     const audio = new Audio();
     audio.preload = "auto";
     audio.src = objectUrl;
-    audio.addEventListener("ended", () => this.onEnded?.());
+    audio.addEventListener("ended", () => this.emitEnded());
     audio.addEventListener("error", () => {
       logInternalError(
         "AudioEngine native audio error",
@@ -1221,7 +1238,7 @@ export class AudioEngine {
 
             this.resolveStateWaiters(event.data, player.getVideoData().video_id ?? null);
             if (event.data === window.YT!.PlayerState.ENDED) {
-              this.onEnded?.();
+              this.emitEnded();
             }
           },
           onError: (event) => {
