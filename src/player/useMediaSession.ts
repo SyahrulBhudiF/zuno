@@ -133,16 +133,26 @@ export function useMediaSession(
     return () => retryIds.forEach((retryId) => window.clearTimeout(retryId));
   }, [nativeMediaCommand, sendNativeMediaUpdate]);
 
+  /*
+   * Position goes out once per second while playing, and once per transition otherwise.
+   *
+   * The OS needs a fresh position for its scrubber, but a paused track's position is fresh
+   * already — this was an IPC call every second for as long as a track was loaded, whether or
+   * not it was moving. `state.status` is a dependency so pausing, resuming and seeking each
+   * still push one update immediately.
+   */
   useEffect(() => {
     if (!nativeMediaCommand || !state.currentTrack) return;
 
     sendNativeMediaUpdate("position");
+    if (state.status !== "playing") return;
+
     const intervalId = window.setInterval(
       () => sendNativeMediaUpdate("position"),
       1000,
     );
     return () => window.clearInterval(intervalId);
-  }, [nativeMediaCommand, sendNativeMediaUpdate, state.currentTrack]);
+  }, [nativeMediaCommand, sendNativeMediaUpdate, state.currentTrack, state.status]);
 
   useEffect(() => {
     if (mediaSessionEnabled || !("mediaSession" in navigator)) return;
@@ -249,7 +259,10 @@ export function useMediaSession(
       }
     };
 
+    // Same reasoning as the native path above: only a moving position needs re-publishing.
     updatePosition();
+    if (state.status !== "playing") return;
+
     const intervalId = window.setInterval(updatePosition, 1000);
     return () => window.clearInterval(intervalId);
   }, [controller, state.currentTrack, state.status, mediaSessionEnabled]);

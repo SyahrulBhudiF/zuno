@@ -241,13 +241,13 @@ export function HomePage({
 
   const madeForYouSection = (
     <section
-      className={`${"flex flex-col gap-3"} ${
+      className={`${"flex flex-col gap-3 overflow-y-visible"} ${
         isLoadingSuggestions ? "opacity-60" : "opacity-100 transition-opacity"
       }`}
     >
         
       <div className="flex items-center justify-between gap-3">
-        <h1>Made for you</h1>
+        <h3>Made for you</h3>
       </div>
       {isLoadingSuggestions ? (
         <div
@@ -277,7 +277,7 @@ export function HomePage({
             cut off while the centre of attention holds the smallest one.
           */
           variant="convex"
-          className="-mx-4 cursor-grab active:cursor-grabbing"
+          className="-mx-4 cursor-grab active:cursor-grabbing overflow-y-visible"
         >
           <DiceCard
             tracks={surpriseSuggestions}
@@ -328,12 +328,12 @@ export function HomePage({
               <button
                 key={track.id}
                 type="button"
-                className="group/row flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                className="group/row flex w-full items-center gap-3   px-2 py-1.5 text-left transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                 onContextMenu={(event) => openTrackMenu(event, track)}
                 onClick={() => playTrack(track, recentPlays)}
               >
                 <TrackArtwork
-                  className="size-11 shrink-0 rounded-md object-cover"
+                  className="size-11 shrink-0   object-cover"
                   size={44}
                   artworkUrl={track.artworkUrl}
                   iconSize={24}

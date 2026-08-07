@@ -1,5 +1,4 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
-import { logInternalInfo } from "../internal/logging";
 import { YouTubeMusicDataSource } from "../datasource/youtube/YouTubeMusicDataSource";
 import { LibraryController } from "./LibraryController";
 import { PlayerController, type PlayerState } from "./PlayerController";
@@ -112,28 +111,14 @@ class ActivePlayerController implements PlayerControllerActions {
     tabManager.getActivePlayer().playNext(track);
   skipToNext = () => tabManager.getActivePlayer().skipToNext();
   seekTo = (time: number) => tabManager.getActivePlayer().seekTo(time);
+  /*
+   * No logging here either — see AudioEngine.setVolume. This ran two full log writes per
+   * pointer move of the slider, each one reading the player state twice to build its payload.
+   */
   setVolume = async (level: number) => {
     const player = tabManager.getActivePlayer();
     const volume = Math.min(1, Math.max(0, level));
-    logInternalInfo("ActivePlayerController.setVolume", {
-      requestedLevel: level,
-      clampedVolume: volume,
-      activeId: tabManager.getActiveId(),
-      activePlayerId: tabManager.getActivePlayerId(),
-      playbackOwnerId: tabManager.getPlaybackOwnerId(),
-      targetStatus: player.getState().status,
-      targetTrackId: player.getState().currentTrack?.id ?? null,
-      beforeVolume: player.getVolume(),
-      beforeMuted: player.isMuted(),
-    });
     await player.setVolume(volume, volume === 0);
-    logInternalInfo("ActivePlayerController.setVolume applied", {
-      activeId: tabManager.getActiveId(),
-      activePlayerId: tabManager.getActivePlayerId(),
-      playbackOwnerId: tabManager.getPlaybackOwnerId(),
-      afterVolume: player.getVolume(),
-      afterMuted: player.isMuted(),
-    });
     tabManager.applyPlaybackSettings({
       volume: player.getVolume(),
       muted: player.isMuted(),

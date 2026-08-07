@@ -90,7 +90,13 @@ import {
   useCompactPlayerBar,
   useExtraPlayerControlsAlwaysVisible,
 } from "../settings/playerControls";
-import { setPaperPcMode, usePaperPcMode } from "../settings/paperPcMode";
+import {
+  RENDER_EFFECTS,
+  setEffectDisabled,
+  setPotatoPcMode,
+  useEffectDisabled,
+  usePotatoPcMode,
+} from "../settings/renderEffects";
 import { setMadeForYouVisible, useMadeForYouVisible } from "../settings/homeSections";
 import { GoogleSignInButton } from "../components/GoogleSignInButton";
 import { ExternalLinkButton } from "../components/ExternalLinkButton";
@@ -406,6 +412,78 @@ function SettingRow({
   );
 }
 
+/**
+ * The Motion & performance card's contents.
+ *
+ * One switch for the blunt version, and a Manage disclosure for the eleven behind it. The
+ * individual switches are a debugging instrument — you flip one, watch the GPU, flip it back —
+ * and eleven of them sitting open in Settings read as eleven decisions the user has to make.
+ */
+function PotatoPcSettings() {
+  const potatoPcMode = usePotatoPcMode();
+  const [isManaging, setIsManaging] = useState(false);
+  const panelId = useId();
+
+  return (
+    <>
+      <SettingRow
+        title="Potato PC"
+        description="Turns off animations, blur, shadows and the ambient artwork, and switches to opaque surfaces. Manage picks them off one at a time."
+      >
+        {(labelId) => (
+          <>
+            <button
+              type="button"
+              onClick={() => setIsManaging((current) => !current)}
+              aria-expanded={isManaging}
+              aria-controls={panelId}
+              className="rounded-full px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            >
+              {isManaging ? "Done" : "Manage"}
+            </button>
+            <Switch
+              checked={potatoPcMode}
+              onCheckedChange={setPotatoPcMode}
+              aria-labelledby={labelId}
+            />
+          </>
+        )}
+      </SettingRow>
+
+      {isManaging && (
+        <div id={panelId} className="flex flex-col">
+          <p className="pb-1 pt-2 text-sm text-muted-foreground">
+            One switch per effect. Turn them off one at a time to find which one your machine is
+            paying for.
+          </p>
+          {RENDER_EFFECTS.map((effect) => (
+            <RenderEffectToggle key={effect.id} effect={effect} />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * Same reason as `ToolbarItemToggle`: one subscription per row.
+ *
+ * The switch reads as "effect on", the store as "effect disabled" — inverted here rather than
+ * in the store, because the attribute the CSS matches on is a list of what is *off*, and an
+ * empty list has to mean "nothing disabled" for a fresh install to look normal.
+ */
+function RenderEffectToggle({ effect }: { effect: (typeof RENDER_EFFECTS)[number] }) {
+  const disabled = useEffectDisabled(effect.id);
+  return (
+    <SettingToggle
+      title={effect.label}
+      description={effect.description}
+      checked={!disabled}
+      onCheckedChange={(checked) => setEffectDisabled(effect.id, !checked)}
+    />
+  );
+}
+
 /** Its own component so each row can hold its own subscription rather than one per item here. */
 function ToolbarItemToggle({ item }: { item: (typeof TOOLBAR_ITEMS)[number] }) {
   const visible = useToolbarItemVisible(item.id);
@@ -572,7 +650,6 @@ export function SettingsPage({
   const themePreference = useThemePreference();
   const [listeningShortcut, setListeningShortcut] = useState<KeyboardShortcutAction | null>(null);
   const keyboardShortcuts = useKeyboardShortcuts();
-  const paperPcMode = usePaperPcMode();
   const miniPlayerEnabled = useMiniPlayerEnabled();
   const miniPlayerHoverAction = useMiniPlayerHoverAction();
   const sidebarMode = useSidebarMode();
@@ -1665,13 +1742,6 @@ export function SettingsPage({
             />
 
 
-            <SettingToggle
-              title="Potato PC mode"
-              description="Disables animations, blur effects, and the animated star background."
-              checked={paperPcMode}
-              onCheckedChange={setPaperPcMode}
-            />
-
           </section>
 
           <section className={SETTINGS_CARD} aria-labelledby="library-trouble-title">
@@ -2161,12 +2231,7 @@ export function SettingsPage({
               </p>
             </div>
 
-            <SettingToggle
-              title="Reduced motion mode"
-              description="Disables animations, blur and shadows across the app."
-              checked={paperPcMode}
-              onCheckedChange={setPaperPcMode}
-            />
+            <PotatoPcSettings />
           </section>
         </div>
       )}

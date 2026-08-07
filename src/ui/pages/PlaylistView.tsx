@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { SpinnerSteps } from "@/components/motion/loader";
-import { ArrowDownIcon, ArrowUpIcon, CloseIcon, SearchIcon } from "@/ui/icons";
+import { ArrowDownIcon, ArrowUpIcon, CloseIcon, FolderAddIcon, SearchIcon } from "@/ui/icons";
 import type { Playlist, Track } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
 import type { PlayerControllerActions } from "../../player/playerStore";
 import { markPlaylistPlayed } from "../../player/recentPlaylists";
 import { shuffleTracks } from "../../player/shuffleTracks";
 import { useTrackContextMenu } from "../components/TrackContextMenu";
-import { isLocalPlaylist } from "../../player/localPlaylists";
+import { addLocalPlaylistPath, isLocalPlaylist } from "../../player/localPlaylists";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { Tooltip } from "@/components/motion/tooltip";
 import { logInternalError } from "../../internal/logging";
 import { SelectionBar } from "../components/SelectionBar";
 import { useTrackSelection } from "../hooks/useTrackSelection";
@@ -238,6 +240,8 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     playbackOrderMode,
   } = useNowPlaying();
   const [tracks, setTracks] = useState<Track[]>([]);
+  /** Bumped when a folder is added, so the scan re-runs in place. */
+  const [localFolderToken, setLocalFolderToken] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreTracks, setHasMoreTracks] = useState(false);
@@ -331,7 +335,35 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
     return () => {
       active = false;
     };
-  }, [playlist, libraryController]);
+  }, [playlist, libraryController, localFolderToken]);
+
+  /*
+   * Assigning folders lives on the page as well as in Settings.
+   *
+   * A local playlist *is* its list of folders, so an empty one has nothing to offer but a
+   * message — and the only way to fix it was a settings screen two levels away with no hint
+   * that it was where to go.
+   */
+  const [isChoosingFolder, setIsChoosingFolder] = useState(false);
+  const handleAddLocalFolder = useCallback(async () => {
+    if (!playlist) return;
+    setIsChoosingFolder(true);
+    try {
+      const selected = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Choose music folder",
+      });
+      if (typeof selected !== "string") return;
+      addLocalPlaylistPath(playlist.id, selected);
+      // The load effect keys off this, so the new folder is scanned without a navigation.
+      setLocalFolderToken((token) => token + 1);
+    } catch (error) {
+      logInternalError("PlaylistView local folder pick failed", error);
+    } finally {
+      setIsChoosingFolder(false);
+    }
+  }, [playlist]);
 
   const loadMoreTracks = useCallback(async () => {
     if (!playlist || !hasMoreTracks || !nextPageKey || isLoading) return;
@@ -705,6 +737,27 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
               alt=""
             />
           ) : undefined}
+          {...(isLocalPlaylistView
+            ? {
+              actions: (
+                <Tooltip content="Add a folder of music to this playlist">
+                  <button
+                    type="button"
+                    onClick={() => void handleAddLocalFolder()}
+                    disabled={isChoosingFolder}
+                    aria-label="Add a music folder"
+                    className="flex size-11 items-center justify-center rounded-full bg-card text-foreground transition-colors hover:bg-muted disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {isChoosingFolder ? (
+                      <SpinnerSteps size={18} color="currentColor" />
+                    ) : (
+                      <FolderAddIcon size={18} aria-hidden="true" />
+                    )}
+                  </button>
+                </Tooltip>
+              ),
+            }
+            : {})}
           actionsDisabled={isLoading || Boolean(error) || tracks.length === 0}
           playback={{
             onToggle: () => void togglePlayCollection(),
@@ -741,7 +794,12 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
       {isLoading && <PlaylistLoadingSpinner label="Loading songs" />}
       {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}
       {!isLoading && !error && !hasMoreTracks && tracks.length === 0 && (
-        <p className="px-2 py-10 text-center text-sm text-muted-foreground">This playlist is empty.</p>
+        <p className="px-2 py-10 text-center text-sm text-muted-foreground">
+          {/* The empty state is exactly when the folder button needs pointing at. */}
+          {isLocalPlaylistView
+            ? "No music yet — use the folder button above to add one."
+            : "This playlist is empty."}
+        </p>
       )}
       {!isLoading && !error && (tracks.length > 0 || hasMoreTracks) && (
         <>

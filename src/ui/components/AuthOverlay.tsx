@@ -1,4 +1,5 @@
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
+import { useReduceMotion } from "../settings/renderEffects";
 import { Loader } from "@/components/motion/loader";
 import { cn } from "@/lib/utils";
 import type { AuthFlow, AuthProgress, AuthStage } from "../../datasource/types";
@@ -82,7 +83,7 @@ interface AuthOverlayProps {
  * the time — the parent renders it conditionally rather than toggling a `hidden` class.
  */
 export function AuthOverlay({ progress, onCancel }: AuthOverlayProps) {
-  const reduce = useReducedMotion() ?? false;
+  const reduce = useReduceMotion();
   const stages = STAGES_BY_FLOW[progress.flow];
   const headings = HEADINGS[progress.flow];
   const activeIndex = stages.findIndex((stage) => stage.id === progress.stage);
@@ -162,7 +163,7 @@ function AuthStep({ stage, state, note }: AuthStepProps) {
    * Read here as well as in the parent. `MotionConfig` at the app root suppresses transform and
    * layout animations, but not an explicit height tween — so this one has to opt out itself.
    */
-  const reduce = useReducedMotion() ?? false;
+  const reduce = useReduceMotion();
 
   return (
     <li

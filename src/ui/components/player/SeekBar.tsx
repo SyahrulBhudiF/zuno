@@ -31,6 +31,8 @@ const SEEK_SLIDER = [
  * 0.2s caps the player bar at ~5 renders/second instead of 60.
  */
 const TIME_COMMIT_THRESHOLD_S = 0.2;
+/** Poll period when playback is not advancing — see the frame loop below. */
+const IDLE_POLL_MS = 250;
 
 function formatTime(seconds: number): string {
   if (isNaN(seconds) || !isFinite(seconds)) return "0:00";
@@ -115,7 +117,7 @@ export function SeekBar() {
    */
   useEffect(() => {
     let animationFrameId = 0;
-    const update = () => {
+    const tick = () => {
       if (!uiState.isSeeking) {
         const engineTime = playerController.getCurrentTime();
         const pendingSeek = pendingSeekRef.current;
@@ -139,11 +141,36 @@ export function SeekBar() {
           setDuration(engineDuration);
         }
       }
-      animationFrameId = requestAnimationFrame(update);
     };
-    animationFrameId = requestAnimationFrame(update);
 
-    return () => cancelAnimationFrame(animationFrameId);
+    /*
+     * Frame-rate only while the time is actually moving.
+     *
+     * The loop used to run for the life of the component: paused, idle, errored, on a track
+     * that had ended — sixty wake-ups a second asking the engine for a number that could not
+     * have changed. Playback still gets rAF so a seek lands on the very next frame.
+     *
+     * Everything else drops to 250ms rather than stopping outright. Polling is what reconciles
+     * a seek the engine has not reported yet and a duration that arrives after the track does,
+     * and both of those happen while paused; a one-shot pass would have to re-implement that
+     * reconciliation, where a slower poll just keeps it, at 4 wake-ups a second instead of 60.
+     */
+    let intervalId = 0;
+    if (state.status === "playing") {
+      const loop = () => {
+        tick();
+        animationFrameId = requestAnimationFrame(loop);
+      };
+      animationFrameId = requestAnimationFrame(loop);
+    } else {
+      tick();
+      intervalId = window.setInterval(tick, IDLE_POLL_MS);
+    }
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+      window.clearInterval(intervalId);
+    };
   }, [uiState.isSeeking, state.status]);
 
   const handleSeekStart = (event: React.PointerEvent<HTMLInputElement>) => {

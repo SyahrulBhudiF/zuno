@@ -50,9 +50,11 @@ function ensureListening(): Promise<UnlistenFn[]> {
         durationSec = event.payload.durationSec;
       }),
       listen<EndedEvent>("native-audio-ended", () => {
+        // Zeroed after, not before: the listener needs the final position to tell a track that
+        // finished from a stream that died.
+        endedListener?.();
         positionSec = 0;
         positionTrackId = null;
-        endedListener?.();
       }),
     ]);
   }

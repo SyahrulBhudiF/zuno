@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { cn } from "@/lib/utils";
 import { AlbumIcon, MusicNoteIcon, PlaylistIcon, UserIcon } from "@/ui/icons";
 import { getArtworkSizeBucket, getArtworkUrlCandidates } from "../../datasource/youtube/artwork";
@@ -10,6 +11,7 @@ import {
   resolveArtworkThroughProxy,
 } from "../../internal/artworkCache";
 import { tauriFetch } from "../../datasource/youtube/tauriFetch";
+import { LOCAL_ARTWORK_PREFIX, LOCAL_IMAGE_PREFIX } from "../../player/localPlaylists";
 
 const ARTWORK_RETRY_DELAYS_MS = [500, 1500];
 
@@ -63,11 +65,17 @@ export function TrackArtwork({
    * candidate, so a remount paints from cache instead of re-requesting the ones that failed
    * last time. Falls back to the normal ladder when nothing is cached yet.
    */
+  // Bytes that live on disk rather than behind a URL: the candidate ladder is skipped and the
+  // proxy effect below reads them through Rust instead.
+  const isEmbeddedArtwork = Boolean(artworkUrl?.startsWith(LOCAL_ARTWORK_PREFIX));
+  const isLocalImage = Boolean(artworkUrl?.startsWith(LOCAL_IMAGE_PREFIX));
+  const isLocalArtwork = isEmbeddedArtwork || isLocalImage;
   const artworkCandidates = useMemo(() => {
     if (!artworkUrl?.trim()) return [];
     const cached = cacheKey ? getResolvedArtworkUrl(cacheKey) : undefined;
-    return cached ? [cached] : getArtworkUrlCandidates(artworkUrl, sizeBucket);
-  }, [artworkUrl, cacheKey, sizeBucket]);
+    if (cached) return [cached];
+    return isLocalArtwork ? [] : getArtworkUrlCandidates(artworkUrl, sizeBucket);
+  }, [artworkUrl, cacheKey, isLocalArtwork, sizeBucket]);
   const [artworkIndex, setArtworkIndex] = useState(0);
   const [retryCount, setRetryCount] = useState(0);
   const [proxiedArtworkUrl, setProxiedArtworkUrl] = useState<string | null>(null);
@@ -147,6 +155,21 @@ export function TrackArtwork({
      */
     const proxyUrl = getArtworkUrlCandidates(artworkUrl, sizeBucket)[0] ?? artworkUrl;
     void resolveArtworkThroughProxy(cacheKey, async () => {
+      // Embedded cover: read it out of the file's tags. Same cache, same object-URL budget,
+      // same request sharing — only where the bytes come from differs.
+      if (isLocalArtwork) {
+        const artwork = isLocalImage
+          ? await invoke<{ mimeType: string; dataBase64: string }>("read_image_file", {
+            path: artworkUrl.slice(LOCAL_IMAGE_PREFIX.length),
+          })
+          : await invoke<{ mimeType: string; dataBase64: string } | null>("local_audio_artwork", {
+            path: artworkUrl.slice(LOCAL_ARTWORK_PREFIX.length),
+          });
+        if (!artwork) throw new Error("This file carries no embedded artwork.");
+        const bytes = Uint8Array.from(atob(artwork.dataBase64), (char) => char.charCodeAt(0));
+        return new Blob([bytes], { type: artwork.mimeType });
+      }
+
       const response = await tauriFetch(proxyUrl, {
         headers: {
           Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
@@ -161,7 +184,7 @@ export function TrackArtwork({
     return () => {
       active = false;
     };
-  }, [artworkCandidates.length, artworkIndex, artworkUrl, cacheKey, sizeBucket, proxiedArtworkUrl]);
+  }, [artworkCandidates.length, artworkIndex, artworkUrl, cacheKey, isLocalArtwork, isLocalImage, sizeBucket, proxiedArtworkUrl]);
 
   return (
     <span
@@ -193,6 +216,23 @@ export function TrackArtwork({
           src={currentArtworkUrl}
           alt=""
           loading={loading}
+          /*
+           * Decode off the main thread. The default is `auto`, which lets the browser decode
+           * synchronously during the paint that first shows the image — with a grid of covers
+           * arriving together that is a burst of main-thread decode work landing inside frames
+           * that also have to lay out and paint. The cost is that an image can appear a frame
+           * or two later, which is invisible here: every one of these fades in over 200ms from
+           * a placeholder anyway.
+           */
+          decoding="async"
+          /*
+           * googleusercontent refuses image requests carrying the app's own origin as a
+           * referer, which is why the log shows every cover walking the whole candidate ladder
+           * and only then succeeding through the Rust proxy — the proxy sends no referer. This
+           * lets the direct load work, which is 3-4 fewer failed requests per cover and one
+           * fewer thing that can leave a placeholder behind.
+           */
+          referrerPolicy="no-referrer"
           onLoad={() => {
             setLoadedArtworkUrl(currentArtworkUrl);
             /*
@@ -206,6 +246,17 @@ export function TrackArtwork({
           }}
           onError={() => {
             setLoadedArtworkUrl(null);
+            /*
+             * A dead `blob:` means the cache evicted it under its byte budget and revoked the
+             * URL while this image was still pointing at it. Clearing the proxied URL is what
+             * lets the effect run again — it bails while one is set, so without this the cover
+             * stayed a placeholder until the row remounted.
+             */
+            if (baseArtworkUrl?.startsWith("blob:")) {
+              if (cacheKey) forgetResolvedArtworkUrl(cacheKey);
+              setProxiedArtworkUrl(null);
+              return;
+            }
             /*
              * A cached resolution that fails is stale — the URL worked once and no longer does.
              * Dropping it rebuilds the full candidate ladder next time instead of retrying the

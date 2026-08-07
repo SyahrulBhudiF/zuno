@@ -62,7 +62,7 @@ export function PickCard({
     const handleUp = (event: PointerEvent) => {
       const start = tapRef.current;
       tapRef.current = null;
-      if (!start) return;
+      if (!start || event.button !== 0) return;
 
       const travelled = Math.hypot(event.clientX - start.x, event.clientY - start.y);
       if (travelled <= TAP_SLOP_PX) onSelect?.();
@@ -93,7 +93,9 @@ export function PickCard({
         disabled ? "cursor-default opacity-60" : "cursor-pointer",
       )}
       onPointerDown={(event) => {
-        if (disabled) return;
+        // Primary button only. `pointerdown` fires for right-click as well, so without this
+        // the window `pointerup` below read the context-menu press as a tap and played it.
+        if (disabled || event.button !== 0) return;
         tapRef.current = { x: event.clientX, y: event.clientY };
       }}
       // Keyboard-generated clicks report detail 0; mouse taps are handled above, so this
@@ -118,7 +120,7 @@ export function PickCard({
       */}
       <span
         className={cn(
-          "relative block size-full overflow-hidden rounded-2xl bg-card shadow-md",
+          "relative block size-full overflow-hidden rounded-xl bg-card shadow-md",
           "ring-1 ring-white/10 transition-all duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)]",
           !disabled && "group-hover/pick:-translate-y-1.5 group-hover/pick:shadow-xl group-hover/pick:ring-white/25",
         )}

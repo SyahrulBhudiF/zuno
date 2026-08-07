@@ -55,6 +55,16 @@ try {
         format: "esm",
         outfile: bundle,
         logLevel: "silent",
+        /* Vite resolves asset imports to a URL string; esbuild needs telling. Without this a
+           check fails to bundle because a module three imports away pulled in an image. */
+        loader: {
+          ".svg": "dataurl",
+          ".png": "dataurl",
+          ".jpg": "dataurl",
+          ".jpeg": "dataurl",
+          ".webp": "dataurl",
+          ".mp4": "dataurl",
+        },
       });
     } catch (error) {
       failures.push({ check, stage: "bundle", output: String(error?.message ?? error) });

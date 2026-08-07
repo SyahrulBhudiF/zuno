@@ -148,8 +148,14 @@ const QueueRow = memo(function QueueRow({
           />
           <span
             className={cn(
-              "absolute inset-0 grid place-items-center rounded-lg bg-background/70 text-[11px] font-semibold tabular-nums text-foreground backdrop-blur-[2px]",
-              "opacity-0 transition-opacity group-hover/queue-item:opacity-100",
+              "absolute inset-0 grid place-items-center rounded-lg bg-background/70 text-[11px] font-semibold tabular-nums text-foreground",
+              /*
+               * The blur is applied on hover, not hidden by the opacity. `backdrop-filter` is
+               * what forces an element onto its own compositor layer, and this badge is
+               * mounted on every row in the queue — at `opacity-0` it showed nothing while
+               * still asking for a layer per row.
+               */
+              "opacity-0 transition-opacity group-hover/queue-item:opacity-100 group-hover/queue-item:backdrop-blur-[2px]",
             )}
             aria-hidden="true"
           >

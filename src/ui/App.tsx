@@ -91,7 +91,7 @@ import {
   type OnboardingStep,
 } from "./components/Onboarding";
 import { isLinux, isMacOS } from "./platform";
-import { usePaperPcMode } from "./settings/paperPcMode";
+import { useReduceMotion } from "./settings/renderEffects";
 
 import { emit, listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -109,6 +109,7 @@ import {
   getSavedMiniPlayerPosition,
   saveMiniPlayerPosition,
   useMiniPlayerEnabled,
+  useMiniPlayerWindowLive,
 } from "./settings/miniPlayer";
 import { setAutostartEnabled } from "./settings/autostart";
 import {
@@ -302,11 +303,13 @@ export default function App() {
   const [releaseNoteVersion, setReleaseNoteVersion] = useState<string | null>(null);
   const playerUIState = usePlayerUIState();
   const miniPlayerEnabled = useMiniPlayerEnabled();
+  const miniPlayerWindowLive = useMiniPlayerWindowLive();
   const keyboardShortcuts = useKeyboardShortcuts();
   const lastFmScrobblingEnabled = useLastFmScrobblingEnabled();
-  // Paper-PC mode kills CSS animation via !important; this makes beUI's JS-driven
-  // motion honour the same setting, since motion only reads the OS media query.
-  const paperPcMode = usePaperPcMode();
+  // The stylesheet kills CSS animation via !important; this is the JS half. Motion writes
+  // inline styles, so no stylesheet can reach it — and its own `useReducedMotion` reads the
+  // OS media query alone, which is why this is the app's hook and not that one.
+  const reduceMotion = useReduceMotion();
 
   // The window is transparent so the app root can round its own corners. When the window
   // is maximised or fullscreen those corners would expose the desktop, so drop the radius.
@@ -633,7 +636,16 @@ export default function App() {
       });
     };
 
+    /*
+     * The single call is the one that matters on every other status: it is what tells the
+     * scrobbler a track was paused, changed or stopped. The interval exists only to watch a
+     * playing track cross its scrobble threshold, so it has nothing to do while the position
+     * is not moving — and it was running once a second for the whole session regardless, with
+     * scrobbling switched off, with nothing loaded, engine reads and all.
+     */
     syncLastFm();
+    if (!lastFmScrobblingEnabled || playerState.status !== "playing") return;
+
     const intervalId = window.setInterval(syncLastFm, 1000);
     return () => window.clearInterval(intervalId);
   }, [
@@ -742,14 +754,23 @@ export default function App() {
    * At five seconds a hard kill costs at most five seconds of playback position.
    */
   useEffect(() => {
-    const intervalId = window.setInterval(persistAppSession, SESSION_HEARTBEAT_MS);
+    /*
+     * Only while playing. The one field this heartbeat exists to keep fresh is `positionSec`,
+     * and a paused or idle player's position does not move — so on a machine sitting on the
+     * home page it was rebuilding and stringifying every tab's queue and history, on a timer,
+     * to write back a number that was already correct. The effect below still persists on
+     * every real change, and the teardown here still writes on the way out.
+     */
+    const intervalId = playerState.status === "playing"
+      ? window.setInterval(persistAppSession, SESSION_HEARTBEAT_MS)
+      : 0;
     window.addEventListener("beforeunload", persistAppSession);
     return () => {
       window.clearInterval(intervalId);
       window.removeEventListener("beforeunload", persistAppSession);
       persistAppSession();
     };
-  }, [persistAppSession]);
+  }, [persistAppSession, playerState.status]);
 
   useEffect(() => {
     persistAppSession();
@@ -1880,8 +1901,22 @@ useEffect(() => {
     });
   };
 
-  syncTime();
-  const timeSyncIntervalId = window.setInterval(syncTime, 1000);
+  /*
+   * Only while somebody is listening.
+   *
+   * This pushes playback position and volume to the mini player. It ran unconditionally for
+   * the whole session — two Tauri events a second, each one a serialize and a hop across the
+   * IPC boundary — into a window that is created on demand, destroyed the moment the main
+   * window comes back, and never created at all for anyone with the mini player switched off.
+   *
+   * `syncPlayerState` above stays subscribed either way: it is edge-triggered and deduped, so
+   * it costs nothing between track changes, and it is what the mini player reads first.
+   */
+  let timeSyncIntervalId = 0;
+  if (miniPlayerWindowLive) {
+    syncTime();
+    timeSyncIntervalId = window.setInterval(syncTime, 1000);
+  }
 
   /*
    * A window that just appeared has missed every state emit so far, and the dedupe above means
@@ -1900,7 +1935,7 @@ useEffect(() => {
     window.clearInterval(timeSyncIntervalId);
     void resync.then((unlisten) => unlisten());
   };
-}, []);
+}, [miniPlayerWindowLive]);
 
 useEffect(() => {
   const setup = async () => {
@@ -1926,7 +1961,7 @@ useEffect(() => {
 }, []);
 
   return (
-    <MotionConfig reducedMotion={paperPcMode ? "always" : "user"}>
+    <MotionConfig reducedMotion={reduceMotion ? "always" : "user"}>
     <ArtistNavigationProvider onNavigate={handleNavigateArtist}>
     <TrackContextMenuProvider
       libraryController={libraryController}

@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useReducedMotion } from "motion/react";
+import { useReduceMotion } from "../settings/renderEffects";
 import { cn } from "@/lib/utils";
 import { CloseIcon, LyricsIcon, RefreshIcon } from "@/ui/icons";
 import type { Lyrics, LyricsSourceAttempt, LyricsSourceStatus } from "../../datasource/types";
@@ -76,7 +76,7 @@ export function LyricsView({ onClose }: LyricsViewProps) {
   );
   const track = playerState.currentTrack;
   const isPlaying = playerState.status === "playing";
-  const reduce = useReducedMotion() ?? false;
+  const reduce = useReduceMotion();
   const offset = useLyricsOffset(track?.id);
   const fontScale = useLyricsFontScale();
   const translationLang = useLyricsTranslationLang();
@@ -410,19 +410,32 @@ export function LyricsView({ onClose }: LyricsViewProps) {
     >
       {/*
         The cover, oversized and blurred past recognition, is the only colour on the screen.
-        Sized at the smallest variant deliberately: at 70px of blur nothing above 120px
-        survives to be seen, so a larger one would cost texture memory and show nothing.
+        Sized at the smallest variant deliberately: nothing above 120px survives the blur, so a
+        larger source would cost texture memory and show nothing.
+
+        The radius is 32px, not 70px. This is the most expensive single element in the app: a
+        136%-of-window box, so ~2600x1470 on a 1080p display, which is a 15 MB layer before the
+        filter has done anything — and blur cost scales with radius, because Chromium runs more
+        downsample passes and allocates intermediates expanded by it.
+
+        70px was buying almost nothing. The source is a 120px image stretched roughly twenty
+        times, so one source pixel already covers ~20 display pixels and the upscale is doing
+        the softening; 70px of filter was ~3.5 source pixels of extra blur on top of that.
+        32px is the radius `Layout` settled on for the same trick at the same upscale, for the
+        same reason. Toggle Settings > Potato PC > Manage > "Blur and colour filters" to see
+        the whole class of effect on and off.
       */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
         {track?.artworkUrl && (
           <div
             key={track.artworkUrl}
+            data-fx="ambient"
             className={cn(
-              "absolute -inset-[18%] opacity-50 blur-[70px] saturate-[1.7]",
+              "absolute -inset-[18%] opacity-50 blur-[32px] saturate-[1.7] rounded-none",
               !reduce && "lyrics-drift",
             )}
           >
-            <TrackArtwork className="size-full" size={120} artworkUrl={track.artworkUrl} iconSize={0} />
+            <TrackArtwork className="size-full rounded-none" size={120} artworkUrl={track.artworkUrl} iconSize={0} />
           </div>
         )}
         <div className="absolute inset-0 bg-gradient-to-b from-background/75 via-background/88 to-background" />
@@ -452,7 +465,7 @@ export function LyricsView({ onClose }: LyricsViewProps) {
           <TrackArtwork
             artworkUrl={track?.artworkUrl}
             size={288}
-            className="aspect-square w-full rounded-2xl shadow-2xl shadow-black/50"
+            className="aspect-square w-full   shadow-2xl shadow-black/50"
             iconSize={40}
             loading="eager"
           />
@@ -473,7 +486,7 @@ export function LyricsView({ onClose }: LyricsViewProps) {
           <TrackArtwork
             artworkUrl={track?.artworkUrl}
             size={56}
-            className="size-14 rounded-xl shadow-lg shadow-black/30"
+            className="size-14   shadow-lg shadow-black/30"
             iconSize={20}
             loading="eager"
           />

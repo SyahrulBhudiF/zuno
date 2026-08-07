@@ -54,12 +54,21 @@ export function Layout({
   const scrollDragOffsetRef = useRef<number | null>(null);
   const isScrollbarHoveredRef = useRef(false);
   const isDraggingScrollbarRef = useRef(false);
+  /*
+   * Two halves on purpose.
+   *
+   * `isVisible` and `canScroll` change a handful of times per scroll gesture and decide what
+   * renders, so they are state. The thumb's position and height change on every scroll event,
+   * and they were state too — which made scrolling any long page re-render `Layout` and every
+   * page inside it, sixty-plus times a second, to move one div a few pixels. They are written
+   * straight to the node now. Nothing else reads them during render.
+   */
   const [scrollbarState, setScrollbarState] = useState({
     isVisible: false,
     canScroll: false,
-    thumbTop: 0,
-    thumbHeight: 0,
   });
+  const scrollbarThumbRef = useRef<HTMLDivElement>(null);
+  const thumbGeometryRef = useRef({ top: 0, height: 0 });
   const [isDraggingScrollbar, setIsDraggingScrollbar] = useState(false);
 
   const clearScrollHideTimer = useCallback(() => {
@@ -68,6 +77,7 @@ export function Layout({
     scrollHideTimerRef.current = null;
   }, []);
 
+  /** Writes the thumb geometry to the DOM, and only touches state when state actually moved. */
   const updateScrollbarMetrics = useCallback((forceVisible = false) => {
     const scrollRoot = pageContentRef.current;
     if (!scrollRoot) return;
@@ -75,13 +85,11 @@ export function Layout({
     const { clientHeight, scrollHeight, scrollTop } = scrollRoot;
     const canScroll = scrollHeight > clientHeight + 1;
     if (!showTransientScrollbar || !canScroll) {
-      setScrollbarState((current) => ({
-        ...current,
-        isVisible: false,
-        canScroll,
-        thumbTop: 0,
-        thumbHeight: 0,
-      }));
+      thumbGeometryRef.current = { top: 0, height: 0 };
+      setScrollbarState((current) =>
+        current.isVisible === false && current.canScroll === canScroll
+          ? current
+          : { isVisible: false, canScroll });
       return;
     }
 
@@ -96,12 +104,22 @@ export function Layout({
     const maxScrollTop = Math.max(1, scrollHeight - clientHeight);
     const thumbTop = Math.round((scrollTop / maxScrollTop) * travel);
 
-    setScrollbarState({
-      isVisible: forceVisible ? true : isScrollbarHoveredRef.current || isDraggingScrollbarRef.current,
-      canScroll,
-      thumbTop,
-      thumbHeight,
-    });
+    thumbGeometryRef.current = { top: thumbTop, height: thumbHeight };
+    const thumb = scrollbarThumbRef.current;
+    if (thumb) {
+      thumb.style.height = `${thumbHeight}px`;
+      thumb.style.transform = `translateY(${thumbTop}px)`;
+    }
+
+    const isVisible = forceVisible
+      ? true
+      : isScrollbarHoveredRef.current || isDraggingScrollbarRef.current;
+    // Returning `current` unchanged is what makes a scroll that only moves the thumb cost
+    // nothing in React: `useState` bails out of the re-render when the value is identical.
+    setScrollbarState((current) =>
+      current.isVisible === isVisible && current.canScroll === canScroll
+        ? current
+        : { isVisible, canScroll });
   }, [showTransientScrollbar]);
 
   const revealScrollbar = useCallback((persist = false) => {
@@ -124,14 +142,16 @@ export function Layout({
     if (!scrollRoot || !scrollbarState.canScroll) return;
 
     const rect = scrollRoot.getBoundingClientRect();
-    const travel = Math.max(1, rect.height - scrollbarState.thumbHeight);
+    const travel = Math.max(1, rect.height - thumbGeometryRef.current.height);
     const thumbTop = Math.max(
       0,
       Math.min(travel, clientY - rect.top - pointerOffset),
     );
     const maxScrollTop = Math.max(1, scrollRoot.scrollHeight - scrollRoot.clientHeight);
     scrollRoot.scrollTop = (thumbTop / travel) * maxScrollTop;
-  }, [scrollbarState.canScroll, scrollbarState.thumbHeight]);
+    // The thumb height is read from a ref now, so it is no longer a dependency — which also
+    // means this callback keeps its identity across a scroll instead of being rebuilt.
+  }, [scrollbarState.canScroll]);
 
   useEffect(() => {
     const scrollRoot = pageContentRef.current;
@@ -140,7 +160,19 @@ export function Layout({
       return;
     }
 
-    const handleScroll = () => revealScrollbar();
+    /*
+     * One update per frame. Scroll events are not frame-aligned — a trackpad or a smooth-scroll
+     * animation can deliver several between paints — and each one reads `scrollHeight`, which
+     * forces the browser to flush layout before it can answer.
+     */
+    let scrollFrame = 0;
+    const handleScroll = () => {
+      if (scrollFrame) return;
+      scrollFrame = requestAnimationFrame(() => {
+        scrollFrame = 0;
+        revealScrollbar();
+      });
+    };
     const handleResize = () => updateScrollbarMetrics(
       isScrollbarHoveredRef.current || isDraggingScrollbarRef.current,
     );
@@ -149,6 +181,7 @@ export function Layout({
     scrollRoot.addEventListener("scroll", handleScroll, { passive: true });
     window.addEventListener("resize", handleResize);
     return () => {
+      if (scrollFrame) cancelAnimationFrame(scrollFrame);
       scrollRoot.removeEventListener("scroll", handleScroll);
       window.removeEventListener("resize", handleResize);
     };
@@ -187,6 +220,7 @@ export function Layout({
               key={ambientArtwork}
               className="pointer-events-none absolute inset-x-0 top-0 h-[22rem] overflow-hidden [mask-image:linear-gradient(to_bottom,background_25%,transparent)] rounded-tl-lg"
               aria-hidden="true"
+              data-fx="ambient"
             >
               {/*
                 The blur radius drives the intermediate textures the compositor allocates, and
@@ -260,7 +294,7 @@ export function Layout({
                       : null;
                     const offset = target === thumb && thumbRect
                       ? event.clientY - thumbRect.top
-                      : scrollbarState.thumbHeight / 2;
+                      : thumbGeometryRef.current.height / 2;
 
                     event.preventDefault();
                     event.currentTarget.setPointerCapture(event.pointerId);
@@ -302,10 +336,13 @@ export function Layout({
                           ? "bg-foreground/50"
                           : "bg-foreground/25 hover:bg-foreground/40",
                       )}
+                      ref={scrollbarThumbRef}
                       data-scrollbar-thumb
+                      /* Only the first paint after the thumb mounts; every move after that is
+                         written straight to this node by updateScrollbarMetrics. */
                       style={{
-                        height: `${scrollbarState.thumbHeight}px`,
-                        transform: `translateY(${scrollbarState.thumbTop}px)`,
+                        height: `${thumbGeometryRef.current.height}px`,
+                        transform: `translateY(${thumbGeometryRef.current.top}px)`,
                       }}
                     />
                   </div>

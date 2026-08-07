@@ -37,7 +37,7 @@ import {
   getLocalPlaylistTrackPage,
   getLocalTracksForPlaylist,
   isLocalPlaylist,
-  removeLocalPlaylistPath,
+  removeLocalPlaylistTrack,
   removeLocalTrackFromPlaylist,
 } from "./localPlaylists";
 
@@ -731,7 +731,7 @@ export class LibraryController {
     forgetTrackInPlaylist(track, playlist);
     if (track.source === "local") {
       if (isLocalPlaylist(playlist)) {
-        if (track.localPath) removeLocalPlaylistPath(playlist.id, track.localPath);
+        if (track.localPath) removeLocalPlaylistTrack(playlist.id, track.localPath);
         return;
       }
       removeLocalTrackFromPlaylist(track, playlist);

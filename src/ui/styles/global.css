@@ -258,10 +258,18 @@ textarea:focus-visible {
 }
 
 /*
- * Paper-PC mode: opaque surfaces, no blur, no animation — for weak GPUs.
- * Overrides the @theme colours with fully opaque equivalents, since the defaults
- * are translucent and rely on backdrop-filter that this mode disables below.
- * JS-driven beUI motion is stopped separately via <MotionConfig> in App.tsx.
+ * Potato PC mode: the opaque palette.
+ *
+ * This block used to also carry a wall of `!important` resets — animation, transition,
+ * shadow, will-change, backdrop-filter — which is exactly what the `data-fx-off` switches
+ * below now do, one category at a time. Two mechanisms killing the same properties meant the
+ * blunt one silently won: with Potato PC on, turning an individual effect back on to see what
+ * it cost changed nothing, and the switch looked broken.
+ *
+ * So Potato PC is now the palette plus `setAllEffectsDisabled(true)` (see renderEffects.ts),
+ * and there is one mechanism. What remains here genuinely cannot live in the switches: the
+ * default surfaces are translucent and lean on a backdrop-filter that the `backdrop` switch
+ * removes, so without opaque replacements the mode's own surfaces stop being readable.
  */
 html[data-paper-pc] {
   --color-background: #070707;
@@ -271,18 +279,47 @@ html[data-paper-pc] {
   --color-border: #2c2c2c;
 }
 
-html[data-paper-pc] *,
-html[data-paper-pc] *::before,
-html[data-paper-pc] *::after {
-  animation: none !important;
-  transition: none !important;
-  box-shadow: none !important;
-  scroll-behavior: auto !important;
+/*
+ * The OS-level setting. Motion/React reads it (every `useReducedMotion` call goes straight to
+ * this media query), but nothing was reading it for plain CSS — so a machine with Reduce
+ * Motion on still got the spinner, the bouncing loader, the visualiser bars, the 44s lyrics
+ * drift, the marquee and every hover transition in the app.
+ *
+ * Near-zero durations rather than `none`: an animation that never starts also never fires
+ * `animationend`, and killing the event outright is a class of bug that only shows up in
+ * whatever library grows a dependency on it later. `alternate` is reset because a reversing
+ * animation with one iteration settles on its *start* frame, which for `.music-bar` and
+ * `lyrics-drift` is the wrong end.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-direction: normal !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+    will-change: auto !important;
+  }
+
+  /*
+   * The one animation the rule above cannot be blunt with. Every other keyframe in the app
+   * ends where it starts, so collapsing the duration parks it on a frame that looks like the
+   * resting state; the marquee ends a full track-width to the left, which under that rule
+   * would snap the title clean out of its column and show nothing at all.
+   */
+  .animate-marquee,
+  .animate-marquee-vertical {
+    animation: none !important;
+  }
 }
 
-html[data-paper-pc]:not([data-platform-linux]) *,
-html[data-paper-pc]:not([data-platform-linux]) *::before,
-html[data-paper-pc]:not([data-platform-linux]) *::after,
+/*
+ * WebKitGTK composites a backdrop-filter badly enough that it is never worth having there,
+ * regardless of any setting. This is the platform, not a preference — which is why it stayed
+ * when the Potato PC half of this rule moved to the `backdrop` switch.
+ */
 html[data-platform-linux] *,
 html[data-platform-linux] *::before,
 html[data-platform-linux] *::after {
@@ -290,6 +327,75 @@ html[data-platform-linux] *::after {
   -webkit-backdrop-filter: none !important;
 }
 
+/*
+ * Per-effect kill switches (see settings/renderEffects.ts).
+ *
+ * One attribute holding a space-separated list, matched with `~=`, rather than one attribute
+ * per effect: eleven `toggleAttribute` calls and eleven attributes on <html> to express one
+ * list. Everything here is `!important` because it is overriding utilities, and blunt on
+ * purpose — this is a debug instrument, not a theme.
+ */
+html[data-fx-off~="transitions"] *,
+html[data-fx-off~="transitions"] *::before,
+html[data-fx-off~="transitions"] *::after {
+  transition: none !important;
+  /* Smooth scrolling is a transition of scroll position, and the only other place it was
+     turned off was the Potato PC block this switch replaced. */
+  scroll-behavior: auto !important;
+}
+
+html[data-fx-off~="animations"] *,
+html[data-fx-off~="animations"] *::before,
+html[data-fx-off~="animations"] *::after {
+  animation: none !important;
+}
+
+html[data-fx-off~="backdrop"] *,
+html[data-fx-off~="backdrop"] *::before,
+html[data-fx-off~="backdrop"] *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html[data-fx-off~="filters"] *,
+html[data-fx-off~="filters"] *::before,
+html[data-fx-off~="filters"] *::after {
+  filter: none !important;
+}
+
+html[data-fx-off~="shadows"] *,
+html[data-fx-off~="shadows"] *::before,
+html[data-fx-off~="shadows"] *::after {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+html[data-fx-off~="will-change"] *,
+html[data-fx-off~="will-change"] *::before,
+html[data-fx-off~="will-change"] *::after {
+  will-change: auto !important;
+}
+
+/* Whole layers, not properties — these are marked `data-fx` at their root in TSX. */
+html[data-fx-off~="ambient"] [data-fx~="ambient"] {
+  display: none !important;
+}
+
+html[data-fx-off~="lyrics-drift"] .lyrics-drift {
+  animation: none !important;
+  will-change: auto !important;
+}
+
+html[data-fx-off~="visualizer"] .music,
+html[data-fx-off~="visualizer"] .audio-loader,
+html[data-fx-off~="visualizer"] .spinner-steps {
+  display: none !important;
+}
+
+html[data-fx-off~="marquee"] .animate-marquee,
+html[data-fx-off~="marquee"] .animate-marquee-vertical {
+  animation: none !important;
+}
 
 .audio-loader {
   display: flex;
@@ -362,6 +468,35 @@ html[data-platform-linux] *::after {
 @keyframes spinner-steps {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/*
+ * Marquee, for titles too long for their column (TrackInfo, MiniPlayer).
+ *
+ * These keyframes were missing entirely. Tailwind v4 resolves `animate-marquee` against a
+ * `--animate-marquee` theme key, and with no key there is no utility — the class name landed
+ * in the markup and the compiler emitted nothing, so the marquee has never once scrolled. The
+ * component's own duration and direction are set inline, and inline longhand outranks the
+ * shorthand here, so this only has to supply the timeline.
+ *
+ * `--gap` comes from the wrapper: the track is duplicated, and the second copy has to arrive
+ * exactly where the first left, gap included, or the loop visibly stutters once per cycle.
+ */
+@theme {
+  --animate-marquee: marquee 30s linear infinite;
+  --animate-marquee-vertical: marquee-vertical 30s linear infinite;
+}
+
+@keyframes marquee {
+  to {
+    transform: translateX(calc(-100% - var(--gap, 1rem)));
+  }
+}
+
+@keyframes marquee-vertical {
+  to {
+    transform: translateY(calc(-100% - var(--gap, 1rem)));
   }
 }
 

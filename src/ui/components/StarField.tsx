@@ -20,6 +20,7 @@ export function StarField() {
     <div
       className="pointer-events-none absolute inset-0 overflow-hidden rounded-2xl"
       aria-hidden="true"
+      data-fx="ambient"
     >
       {/*
         Both blooms share one opacity token (--ambient-bloom, set per theme in global.css).

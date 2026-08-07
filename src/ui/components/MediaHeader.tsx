@@ -160,11 +160,18 @@ export function MediaHeader({
         <TrackArtwork
           className={cn(
             "size-44 shrink-0 shadow-2xl ring-1 ring-white/10",
-            circularArtwork ? "rounded-full" : "rounded-2xl",
+            circularArtwork ? "rounded-full" : "rounded-none",
           )}
           artworkUrl={artworkUrl}
           iconSize={72}
           loading="eager"
+          /*
+           * `size-44` is 176 CSS px. Without this the component skips size bucketing and keeps
+           * the original URL — and the stored `artworkUrl` is deliberately the *largest*
+           * candidate the source offered (see `selectArtworkUrl`), so this slot was decoding a
+           * full-size cover into a 176px box, eagerly, on every album, playlist and artist page.
+           */
+          size={176}
           variant={artworkVariant}
         />
       )}
@@ -187,30 +194,26 @@ export function MediaHeader({
              * Pause control while the track being played belongs here. Playing something
              * else leaves this reading "Play", which is what the button would then do.
              */
-            <button
-              type="button"
-              disabled={actionsDisabled}
-              onClick={playback.onToggle}
-              aria-label={isPlaying ? "Pause" : "Play"}
-              className="flex min-w-[7.5rem] items-center justify-center gap-2 rounded-full bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-transform hover:scale-[1.03] active:scale-95 disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-            >
-              {isLoading ? (
-                <>
-                  <SpinnerSteps size={18} color="currentColor" />
-                  Loading
-                </>
-              ) : isPlaying ? (
-                <>
-                  <PauseActiveIcon size={18} aria-hidden="true" />
-                  Pause
-                </>
-              ) : (
-                <>
-                  <PlayActiveIcon size={18} aria-hidden="true" />
-                  Play
-                </>
-              )}
-            </button>
+            <Tooltip content={isPlaying ? "Pause" : "Play"}>
+              <button
+                type="button"
+                disabled={actionsDisabled}
+                onClick={playback.onToggle}
+                aria-label={isPlaying ? "Pause" : "Play"}
+                /* size-13 against the siblings' size-11: the primary action reads as primary
+                   through size and fill, so it does not need a word as well. Fixed width also
+                   drops the `min-w` that existed to stop Play/Pause/Loading jumping. */
+                className="flex size-13 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform hover:scale-[1.03] active:scale-95 disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              >
+                {isLoading ? (
+                  <SpinnerSteps size={22} color="currentColor" />
+                ) : isPlaying ? (
+                  <PauseActiveIcon size={22} aria-hidden="true" />
+                ) : (
+                  <PlayActiveIcon size={22} aria-hidden="true" />
+                )}
+              </button>
+            </Tooltip>
           ) : null}
 
           {onShuffle ? (

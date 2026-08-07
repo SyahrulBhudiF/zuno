@@ -424,7 +424,7 @@ export const TrackRow = memo(function TrackRow({
       onContextMenu={onContextMenu ? handleContextMenu : undefined}
       aria-current={isCurrent ? "true" : undefined}
       className={cn(
-        "group/row relative flex w-full items-center gap-3 rounded-xl px-2 py-1.5 text-left",
+        "group/row relative flex w-full items-center gap-3  px-2 py-1.5 text-left",
         "transition-colors hover:bg-card focus-visible:outline-none focus-visible:ring-2",
         "focus-visible:ring-inset focus-visible:ring-ring",
         /*
@@ -512,7 +512,7 @@ export const TrackRow = memo(function TrackRow({
 
       {showArtwork ? (
         <TrackArtwork
-          className="size-10 shrink-0 rounded-md"
+          className="size-10 shrink-0 "
           size={40}
           artworkUrl={track.artworkUrl}
           iconSize={18}

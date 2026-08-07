@@ -7,7 +7,7 @@ import {
   KeyIcon,
 } from "@/ui/icons";
 import { primaryModifierLabel } from "../platform";
-import { usePaperPcMode } from "../settings/paperPcMode";
+import { useReduceMotion } from "../settings/renderEffects";
 import {
   CARD_WIDTH,
   ONBOARDING_STEPS,
@@ -154,6 +154,14 @@ function useTypedText(text: string, enabled: boolean) {
   return { typed, reveal, done: typed === text };
 }
 
+/*
+ * Same substitution as AppLoadingScreen's: a blurred solid disc is a radial gradient, and the
+ * gradient costs a raster pass where the filter cost a compositor layer plus an intermediate
+ * texture expanded by ~3x the 120px radius on each side. Two of these were on screen at once.
+ */
+const GLOW_GRADIENT =
+  "radial-gradient(circle, color-mix(in oklab, var(--color-primary) 15%, transparent) 0%, transparent 70%)";
+
 interface OnboardingProps {
   step: OnboardingStep;
   /** Ends the tour entirely. */
@@ -164,10 +172,11 @@ interface OnboardingProps {
 }
 
 export function Onboarding({ step, onSkip, onSkipStep, onBack }: OnboardingProps) {
-  const paperPcMode = usePaperPcMode();
+  // The typewriter is a JS timer, so no stylesheet can stop it — this is the hook that can.
+  const reduceMotion = useReduceMotion();
   const content = getStepContent()[step];
   const rect = useTargetRect(content.target);
-  const { typed, reveal, done } = useTypedText(content.text, !paperPcMode);
+  const { typed, reveal, done } = useTypedText(content.text, !reduceMotion);
 
   const cardRef = useRef<HTMLDivElement>(null);
   const [cardHeight, setCardHeight] = useState(160);
@@ -241,7 +250,9 @@ export function Onboarding({ step, onSkip, onSkipStep, onBack }: OnboardingProps
               top: rect.top,
               width: rect.right - rect.left,
               height: rect.bottom - rect.top,
-              boxShadow: paperPcMode ? undefined : "0 0 40px var(--color-primary)",
+              /* Not gated in JS any more: the `shadows` switch is a stylesheet rule with
+                 `!important`, which outranks this inline style on its own. */
+              boxShadow: "0 0 40px var(--color-primary)",
             }}
           />
         </>
@@ -366,7 +377,10 @@ export function OnboardingWelcome() {
       role="status"
       aria-label="Welcome"
     >
-      <div className="pointer-events-none absolute left-1/2 top-1/2 size-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/15 blur-[120px]" />
+      <div
+        className="pointer-events-none absolute left-1/2 top-1/2 size-[660px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+        style={{ background: GLOW_GRADIENT }}
+      />
       <div className="relative flex flex-col items-center gap-3 text-center">
         <strong>Welcome</strong>
       </div>
@@ -386,7 +400,10 @@ export function KeychainNotice({ onContinue }: KeychainNoticeProps) {
       aria-modal="true"
       aria-labelledby="keychain-title"
     >
-      <div className="pointer-events-none absolute left-1/2 top-1/2 size-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/15 blur-[120px]" />
+      <div
+        className="pointer-events-none absolute left-1/2 top-1/2 size-[660px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+        style={{ background: GLOW_GRADIENT }}
+      />
       <div className="relative flex w-[min(28rem,90vw)] flex-col items-center gap-3 rounded-2xl bg-popover p-6 text-center shadow-2xl">
         <span
           className="grid size-12 place-items-center rounded-full bg-primary/15 text-primary"
