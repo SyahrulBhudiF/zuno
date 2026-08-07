@@ -9,17 +9,19 @@
 # must be committed alongside this file; they are not written by hand.
 app-id: io.github.nofayz.Zuno
 
-# 47, not 46, because of Rust rather than WebKit: the SDK extensions track the freedesktop
-# base, 46 sits on 23.08, and that carries Cargo 1.81 — too old for the `edition2024` several
-# transitive crates now require. 47 sits on 24.08. The 47 runtime still provides
-# webkit2gtk-4.1 alongside webkitgtk-6.0, so Tauri links as before.
+# 50 because Flathub rejects EOL runtimes, and a GNOME branch is EOL as soon as the next
+# stable ships. 50 is the current one. It still provides webkit2gtk-4.1 alongside
+# webkitgtk-6.0, so Tauri links as before.
 runtime: org.gnome.Platform
-runtime-version: "47"
+runtime-version: "50"
 sdk: org.gnome.Sdk
 
+# The SDK extensions track the freedesktop base, not the GNOME version — 50 sits on 25.08,
+# so that is the branch to install. node22 rather than node20: Node 20 went end of life in
+# April 2026 and has no 25.08 extension to install.
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-  - org.freedesktop.Sdk.Extension.node20
+  - org.freedesktop.Sdk.Extension.node22
 
 command: zuno
 
@@ -56,7 +58,7 @@ modules:
     buildsystem: simple
 
     build-options:
-      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node20/bin
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node22/bin
       env:
         # Matches where flatpak-cargo-generator writes its config; the sandbox has no
         # writable $HOME for cargo's default location.
@@ -68,9 +70,9 @@ modules:
     sources:
       - type: git
         url: https://github.com/noFAYZ/zuno.git
-        tag: v1.2.1
+        tag: v1.3.0
         # Pinned so the build is reproducible even if the tag were ever moved.
-        commit: 168eae956555a07e7be6e185cb82f1079a861c7d
+        commit: 4983173f2a507fa52191a4eac73ed1ebe5026fad
 
       # Generated. See packaging/flatpak/README.md.
       - cargo-sources.json

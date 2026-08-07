@@ -62,27 +62,44 @@ jobs:
         run: |
           flatpak remote-add --user --if-not-exists flathub \
             https://dl.flathub.org/repo/flathub.flatpakrepo
-          # The SDK extensions track the freedesktop base, not the GNOME version — GNOME 47
-          # sits on 24.08, so rust-stable//47 does not exist and the build would fail
+          # org.flatpak.Builder carries flatpak-builder-lint, which is the check Flathub
+          # actually runs — and its flatpak-builder is the version they build with, rather
+          # than whatever the container image happens to ship.
+          #
+          # The SDK extensions track the freedesktop base, not the GNOME version — GNOME 50
+          # sits on 25.08, so rust-stable//50 does not exist and the build would fail
           # resolving it.
           flatpak install --user -y --noninteractive flathub \
-            org.gnome.Platform//47 \
-            org.gnome.Sdk//47 \
-            org.freedesktop.Sdk.Extension.rust-stable//24.08 \
-            org.freedesktop.Sdk.Extension.node20//24.08
+            org.flatpak.Builder \
+            org.gnome.Platform//50 \
+            org.gnome.Sdk//50 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08 \
+            org.freedesktop.Sdk.Extension.node22//25.08
 
       - name: Validate metadata
         run: |
-          # Both are hard gates at Flathub review, and both are cheap to check here.
+          # All three are hard gates at Flathub review, and all three are cheap to check here.
+          # The manifest lint is the one the submission docs tell you to run before opening
+          # the PR; it catches finish-args and export mistakes the other two never look at.
           appstreamcli validate --no-net packaging/flatpak/io.github.nofayz.Zuno.metainfo.xml
           desktop-file-validate packaging/flatpak/io.github.nofayz.Zuno.desktop
+          flatpak run --command=flatpak-builder-lint org.flatpak.Builder \
+            manifest packaging/flatpak/io.github.nofayz.Zuno.yml
 
       - name: Build
         run: |
-          flatpak-builder --user --disable-rofiles-fuse --force-clean \
+          flatpak run org.flatpak.Builder --user --disable-rofiles-fuse --force-clean \
             --install-deps-from=flathub \
             --repo=repo build-dir packaging/flatpak/io.github.nofayz.Zuno.yml
           flatpak build-bundle repo zuno.flatpak io.github.nofayz.Zuno
+
+      # Not a gate. The repo lint expects screenshots already mirrored into the ostree
+      # commit, which only happens on Flathub's own builders — it will fail here for a
+      # reason that says nothing about the submission. Read it, do not trust the exit code.
+      - name: Lint the built repo
+        continue-on-error: true
+        run: |
+          flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo repo
 
       - uses: actions/upload-artifact@v4
         if: always()
