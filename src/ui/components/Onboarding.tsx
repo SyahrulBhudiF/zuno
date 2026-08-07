@@ -154,6 +154,14 @@ function useTypedText(text: string, enabled: boolean) {
   return { typed, reveal, done: typed === text };
 }
 
+/*
+ * Same substitution as AppLoadingScreen's: a blurred solid disc is a radial gradient, and the
+ * gradient costs a raster pass where the filter cost a compositor layer plus an intermediate
+ * texture expanded by ~3x the 120px radius on each side. Two of these were on screen at once.
+ */
+const GLOW_GRADIENT =
+  "radial-gradient(circle, color-mix(in oklab, var(--color-primary) 15%, transparent) 0%, transparent 70%)";
+
 interface OnboardingProps {
   step: OnboardingStep;
   /** Ends the tour entirely. */
@@ -369,7 +377,10 @@ export function OnboardingWelcome() {
       role="status"
       aria-label="Welcome"
     >
-      <div className="pointer-events-none absolute left-1/2 top-1/2 size-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/15 blur-[120px]" />
+      <div
+        className="pointer-events-none absolute left-1/2 top-1/2 size-[660px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+        style={{ background: GLOW_GRADIENT }}
+      />
       <div className="relative flex flex-col items-center gap-3 text-center">
         <strong>Welcome</strong>
       </div>
@@ -389,7 +400,10 @@ export function KeychainNotice({ onContinue }: KeychainNoticeProps) {
       aria-modal="true"
       aria-labelledby="keychain-title"
     >
-      <div className="pointer-events-none absolute left-1/2 top-1/2 size-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/15 blur-[120px]" />
+      <div
+        className="pointer-events-none absolute left-1/2 top-1/2 size-[660px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+        style={{ background: GLOW_GRADIENT }}
+      />
       <div className="relative flex w-[min(28rem,90vw)] flex-col items-center gap-3 rounded-2xl bg-popover p-6 text-center shadow-2xl">
         <span
           className="grid size-12 place-items-center rounded-full bg-primary/15 text-primary"

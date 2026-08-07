@@ -3,6 +3,22 @@ import { cn } from "@/lib/utils";
 /* import appIcon from "../../../assets/img/Logo.png";
  */import introVideo from "../../../assets/img/zuno.mp4";
 
+/*
+ * The accent bloom, as a gradient rather than a blurred circle.
+ *
+ * It was a 420px solid disc with `blur-[120px]`. A filter that large is not cheap the way a
+ * background is: the element becomes its own compositor layer, and Chromium has to allocate an
+ * intermediate texture expanded by roughly three times the radius on every side — a 420px disc
+ * rasterising into something past 1100px square, in multiple passes, on the startup screen
+ * where the GPU process is still warming up.
+ *
+ * A blurred solid circle is a radial gradient. This one is drawn straight into the raster pass:
+ * no filter, no layer, no intermediate. The box is grown to 660px because the gradient has to
+ * cover the area the blur used to bleed into.
+ */
+const LOADING_GLOW =
+  "radial-gradient(circle, color-mix(in oklab, var(--color-primary) 7%, transparent) 0%, transparent 70%)";
+
 const LOADING_LINES = [
   " Finding your rhythm...",
   " Loading your library...",
@@ -33,7 +49,10 @@ export function AppLoadingScreen({ isLeaving }: AppLoadingScreenProps) {
     >
       
       {/* Accent bloom behind the mark. */}
-      <div className="pointer-events-none absolute left-1/2 top-1/2 size-[420px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-orange-600/5 blur-[120px]" />
+      <div
+        className="pointer-events-none absolute left-1/2 top-1/2 size-[660px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+        style={{ background: LOADING_GLOW }}
+      />
 
       <div className="relative flex flex-col items-center gap-5">
 {/*         <motion.img
