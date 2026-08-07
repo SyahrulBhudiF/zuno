@@ -1,6 +1,7 @@
 import type { DataSource, StreamData } from "../datasource/DataSource";
 import type { Lyrics, Track } from "../datasource/types";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../internal/logging";
+import { isPrematureEnd } from "./prematureEnd";
 import { AudioEngine } from "./AudioEngine";
 import { Queue } from "./Queue";
 import { recordPlay } from "./playHistory";
@@ -46,6 +47,11 @@ const PRELOAD_LEAD_SEC = 20;
 const SCROBBLE_TICK_MS = 30_000;
 /** How long after the last volume change the settings are written. See setVolume. */
 const PLAYBACK_SETTINGS_PERSIST_MS = 400;
+/**
+ * How much of a track may be left when it ends before that counts as a failure rather than a
+ * finish. Generous, because the only thing on the other side of it is a needless reload.
+ */
+const PREMATURE_END_TOLERANCE_SEC = 5;
 
 export type PlayerStatus = "idle" | "loading" | "playing" | "paused" | "error";
 
@@ -166,6 +172,8 @@ export class PlayerController {
   private playTrackRequestId = 0;
   private autoplayEnabled = false;
   private handlingTrackEnd = false;
+  /** The track already reloaded once after ending early, so a second failure gives up. */
+  private prematureEndTrackId: string | null = null;
   private pendingSeekTime: number | null = null;
   private radioQueueRequestId = 0;
   /*
@@ -828,11 +836,90 @@ export class PlayerController {
     }
   }
 
+  /**
+   * Tells a track that finished apart from a stream that died, and reloads the second kind.
+   *
+   * The engine reports "ended" for both, and the queue cannot see the difference — so a track
+   * whose audio ran out after eight seconds looked exactly like a three-minute song finishing,
+   * and playback advanced. That is the "plays for a few seconds then skips" symptom, and the
+   * cause is upstream: googlevideo refuses individual byte ranges often enough that a deck
+   * preloaded minutes earlier can end up holding only its first chunk (`fill_media_buffer` in
+   * lib.rs logs `chunk N failed`, falls back to a whole-file fetch, and gives up if that is
+   * refused too). Nothing invalidated the deck, so the gapless swap handed over to a few
+   * seconds of audio.
+   *
+   * Reloading rather than skipping, because the track was never the problem — the signed URL
+   * behind it was. Clearing `loadedTrackId` puts `ensureTrackLoaded` back through stream
+   * resolution for a fresh one, and by this point the exhausted deck is no longer the standby,
+   * so nothing hands the same bytes back.
+   *
+   * Deliberately not specific to a 403: it measures the outcome, so it also covers a dropped
+   * connection, a truncated body, and whatever the next upstream change breaks.
+   */
+  private async recoverFromPrematureEnd(): Promise<boolean> {
+    const track = this.state.currentTrack;
+    if (!track) return false;
+
+    const duration = this.audioEngine.getDuration();
+    const position = this.audioEngine.getCurrentTime();
+
+    if (!isPrematureEnd({
+      durationSec: duration,
+      positionSec: position,
+      crossfadeSec: this.crossfadeSec,
+      toleranceSec: PREMATURE_END_TOLERANCE_SEC,
+    })) {
+      // A track that reached its end clears the marker: the next failure gets its own retry.
+      this.prematureEndTrackId = null;
+      return false;
+    }
+
+    /*
+     * One retry. If a freshly resolved URL dies in the same place the track itself is the
+     * problem, and looping on it is worse for the listener than moving to the next one.
+     */
+    if (this.prematureEndTrackId === track.id) {
+      logInternalWarn("PlayerController.prematureEnd retry failed, advancing", {
+        trackId: track.id,
+        positionSec: Math.round(position),
+        durationSec: Math.round(duration),
+      });
+      this.prematureEndTrackId = null;
+      return false;
+    }
+
+    this.prematureEndTrackId = track.id;
+    logInternalWarn("PlayerController.prematureEnd reloading", {
+      trackId: track.id,
+      positionSec: Math.round(position),
+      durationSec: Math.round(duration),
+    });
+
+    /*
+     * `playTrackById` clears `loadedTrackId` and `pendingSeekTime` itself, so the resume
+     * position has to be applied after it rather than staged before — staging it here is what
+     * the seek path does for a restored session, and it would be wiped on the way in.
+     *
+     * It also skips its own `stop()` when the track is still preloaded; by this point the
+     * exhausted deck has already been swapped in and is no longer the standby, so the engine
+     * is torn down properly and the reload resolves a fresh stream URL.
+     */
+    await this.playTrackById(track.id);
+    if (position > 0 && this.loadedTrackId === track.id) {
+      await this.seekTo(position);
+    }
+    return true;
+  }
+
   private async handleTrackEnded(): Promise<void> {
     if (this.handlingTrackEnd || !this.isTabActive) return;
     this.handlingTrackEnd = true;
 
     try {
+      // Before every other branch: a stream that died is not an end, so it must not trigger
+      // repeat-one, consume the stop-after marker, or advance the queue.
+      if (await this.recoverFromPrematureEnd()) return;
+
       if (this.playbackOrderMode === "repeat-one" && this.state.currentTrack) {
         await this.playTrackById(this.state.currentTrack.id);
         return;
