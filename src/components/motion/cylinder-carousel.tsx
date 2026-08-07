@@ -316,6 +316,9 @@ export function CylinderCarousel({
 
   const onPointerDown = useCallback(
     (e: ReactPointerEvent) => {
+      // Primary button only: a right-click would otherwise capture the pointer and leave the
+      // carousel stuck mid-drag, because the press that opens a context menu never releases here.
+      if (e.button !== 0) return;
       e.preventDefault();
       stopGlide();
       draggingRef.current = true;
