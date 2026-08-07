@@ -85,7 +85,7 @@ export function HomeDestinations({
 
   return (
     <section className="flex flex-col gap-3" aria-label="Go to">
-      <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fit,minmax(11rem,1fr))]">
+      <div className="grid gap-2.5 [grid-template-columns:repeat(auto-fit,minmax(12rem,1fr))]">
         {cards.map((card) => (
           <motion.button
             key={card.key}
@@ -95,29 +95,45 @@ export function HomeDestinations({
             whileTap={{ scale: 0.98 }}
             transition={{ type: "spring", stiffness: 520, damping: 34 }}
             className={cn(
-              "group/dest relative flex items-center overflow-hidden rounded-2xl bg-card/60 p-3 text-left",
-              "ring-1 ring-inset ring-transparent transition-colors hover:bg-card hover:ring-border",
+              // `pl-12` is the stamp's gutter: it ends at 36px, so the text clears it by 12px.
+              "group/dest relative flex items-center overflow-hidden rounded-2xl bg-card/60 p-4 pl-12 text-left",
+              "transition-colors hover:bg-card",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             )}
           >
             {/*
-              Stamped rather than sat in a chip: the button's `overflow-hidden` crops it, so it
-              reads as part of the card's surface instead of an element competing with the
-              label. `/15` and not lower because these are stroked icons — a fill would hold at
-              10%, but 1.5px strokes at this size disappear.
+              Stamped rather than sat in a chip, and cropped only on the left — an icon clipped
+              on three sides reads as an accident rather than a decision.
             */}
             <card.icon
-              size={64}
-              className="pointer-events-none absolute -left-3 top-1/2 -translate-y-1/2 text-primary/15 transition-colors group-hover/dest:text-primary/25"
+              size={48}
+              /*
+               * Optical compensation. 1.5 is tuned for a 20px glyph; at 48px the same value is
+               * proportionally a third as heavy and the icon reads as wire. Scaling the stroke
+               * with the size is what keeps the weight looking constant.
+               */
+              strokeWidth={2.25}
+              className="pointer-events-none absolute -left-3 top-1/2 -translate-y-1/2 text-primary/20 transition-colors group-hover/dest:text-primary/35"
               aria-hidden="true"
             />
 
             {/* `relative` puts the text above the absolutely positioned stamp. */}
-            <span className="relative flex min-w-0 flex-col pl-10">
-              <span className="truncate text-sm font-semibold text-foreground">{card.label}</span>
-              <span className="truncate text-xs text-muted-foreground">
-                {card.badge ?? card.hint}
+            <span className="relative flex min-w-0 flex-col gap-0.5">
+              <span className="truncate text-sm font-semibold leading-none text-foreground">
+                {card.label}
               </span>
+              {/*
+                Live state and the static hint are different kinds of thing, so they are not
+                styled the same. A count is a reading — foreground, tabular so it cannot jitter
+                as it changes. The hint is a description of a place you have not been yet.
+              */}
+              {card.badge ? (
+                <span className="truncate text-xs font-medium tabular-nums text-foreground/75">
+                  {card.badge}
+                </span>
+              ) : (
+                <span className="truncate text-xs text-muted-foreground">{card.hint}</span>
+              )}
             </span>
           </motion.button>
         ))}
