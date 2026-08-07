@@ -7,7 +7,9 @@ Comment=Desktop client for YouTube Music
 # Player are what put it under Music rather than loose in Multimedia.
 Categories=AudioVideo;Audio;Player;
 Keywords=music;youtube;player;streaming;audio;
-Exec=zuno %U
+# No %U: nothing here registers a URL scheme or a MimeType, so the field code would be
+# advertising handling the app does not do.
+Exec=zuno
 Icon=io.github.nofayz.Zuno
 Terminal=false
 # Must match the WM_CLASS the window actually sets, or the shell shows a second, iconless
