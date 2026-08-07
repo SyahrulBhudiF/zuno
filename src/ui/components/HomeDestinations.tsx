@@ -96,7 +96,7 @@ export function HomeDestinations({
             transition={{ type: "spring", stiffness: 520, damping: 34 }}
             className={cn(
               // `pl-12` is the stamp's gutter: it ends at 36px, so the text clears it by 12px.
-              "group/dest relative flex items-center overflow-hidden rounded-2xl bg-card/60 p-4 pl-12 text-left",
+              "group/dest relative flex items-center overflow-hidden rounded-xl bg-card/80 p-3 pl-12 text-left border border-border",
               "transition-colors hover:bg-card",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             )}
@@ -106,14 +106,14 @@ export function HomeDestinations({
               on three sides reads as an accident rather than a decision.
             */}
             <card.icon
-              size={48}
+              size={38}
               /*
                * Optical compensation. 1.5 is tuned for a 20px glyph; at 48px the same value is
                * proportionally a third as heavy and the icon reads as wire. Scaling the stroke
                * with the size is what keeps the weight looking constant.
                */
               strokeWidth={2.25}
-              className="pointer-events-none absolute -left-3 top-1/2 -translate-y-1/2 text-primary/20 transition-colors group-hover/dest:text-primary/35"
+              className="pointer-events-none absolute -left-3 top-1/2 -translate-y-1/2 text-red-400 transition-colors group-hover/dest:text-red-800"
               aria-hidden="true"
             />
 
