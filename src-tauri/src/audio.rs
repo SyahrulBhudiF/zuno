@@ -182,10 +182,25 @@ impl Seek for BufferReader {
     }
 }
 
+/**
+ * Whether the bytes behind a deck are still arriving.
+ *
+ * A deck is loaded as soon as the decoder can read the container header, which is the head of
+ * the first chunk — the rest of the file is still downloading behind it. When that download
+ * fails there is nothing about the deck itself that looks wrong: it holds a real source with a
+ * real duration, and it will play the seconds it has and then simply stop.
+ *
+ * A closure rather than a field, because what "still arriving" means belongs to whoever opened
+ * the reader. `lib.rs` builds one over the `MediaBuffer` for streams; offline and local files
+ * have no such failure mode and pass `None`.
+ */
+pub(crate) type DeckHealth = Arc<dyn Fn() -> bool + Send + Sync>;
+
 struct Deck {
     sink: Player,
     track_id: Option<String>,
     duration_sec: f64,
+    health: Option<DeckHealth>,
 }
 
 impl Deck {
@@ -193,6 +208,12 @@ impl Deck {
         self.sink.stop();
         self.track_id = None;
         self.duration_sec = 0.0;
+        self.health = None;
+    }
+
+    /// False only when a probe exists and says the source is broken. No probe means healthy.
+    fn is_healthy(&self) -> bool {
+        self.health.as_ref().is_none_or(|probe| probe())
     }
 }
 
@@ -214,6 +235,8 @@ pub(crate) enum Command {
         fallback_duration_sec: f64,
         decoded_duration_sec: Option<f64>,
         standby: bool,
+        /// See `DeckHealth`. `None` for sources that cannot fail mid-playback.
+        health: Option<DeckHealth>,
         reply: Sender<Result<f64, String>>,
     },
     Play(Sender<Result<(), String>>),
@@ -306,8 +329,18 @@ fn run(app: AppHandle, rx: Receiver<Command>, ready: Sender<Result<(), String>>)
         }
     };
     let decks = [
-        Deck { sink: Player::connect_new(stream.mixer()), track_id: None, duration_sec: 0.0 },
-        Deck { sink: Player::connect_new(stream.mixer()), track_id: None, duration_sec: 0.0 },
+        Deck {
+            sink: Player::connect_new(stream.mixer()),
+            track_id: None,
+            duration_sec: 0.0,
+            health: None,
+        },
+        Deck {
+            sink: Player::connect_new(stream.mixer()),
+            track_id: None,
+            duration_sec: 0.0,
+            health: None,
+        },
     ];
     for deck in &decks {
         deck.sink.pause();
@@ -390,6 +423,7 @@ impl Engine {
                 fallback_duration_sec,
                 decoded_duration_sec,
                 standby,
+                health,
                 reply,
             } => {
                 let index = if standby { self.standby() } else { self.active };
@@ -419,6 +453,7 @@ impl Engine {
                 deck.sink.set_speed(rate);
                 deck.track_id = Some(track_id);
                 deck.duration_sec = duration;
+                deck.health = health;
 
                 if !standby {
                     self.playing = false;
@@ -481,6 +516,22 @@ impl Engine {
                     let _ = reply.send(false);
                     return false;
                 }
+                /*
+                 * Checked again here, not only in `HasStandby`.
+                 *
+                 * The download can fail in the gap between the caller asking and the caller
+                 * swapping, and this is the last point where refusing is free — past it the
+                 * outgoing deck has been cleared and there is nothing to fall back to.
+                 */
+                if !self.decks[standby].is_healthy() {
+                    eprintln!(
+                        "[internal][tauri][warn] native_audio transition refused, download failed track_id={}",
+                        track_id
+                    );
+                    self.decks[standby].clear();
+                    let _ = reply.send(false);
+                    return false;
+                }
 
                 self.cancel_fade();
                 let target = self.output_volume();
@@ -508,6 +559,21 @@ impl Engine {
             Command::HasStandby { track_id, reply } => {
                 let standby = self.standby();
                 let matched = self.decks[standby].track_id.as_deref() == Some(track_id.as_str());
+                /*
+                 * A preloaded deck whose download died is worse than no preload at all: the
+                 * caller would skip stream resolution, hand over gaplessly, and play the few
+                 * seconds that did arrive. Reporting it as absent sends the caller down the
+                 * normal load path, which resolves a fresh URL.
+                 */
+                if matched && !self.decks[standby].is_healthy() {
+                    eprintln!(
+                        "[internal][tauri][warn] native_audio standby discarded, download failed track_id={}",
+                        track_id
+                    );
+                    self.decks[standby].clear();
+                    let _ = reply.send(false);
+                    return false;
+                }
                 let _ = reply.send(matched);
             }
             Command::DropStandby => {

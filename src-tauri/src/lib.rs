@@ -3447,12 +3447,31 @@ async fn native_audio_load(
         }
     };
 
+    /*
+     * The deck's window onto its own download.
+     *
+     * A deck is reported loaded as soon as the decoder can read the container header out of the
+     * head chunk, while the rest of the file is still arriving. If that fill then fails — and
+     * googlevideo refuses individual ranges often enough that it does — the deck still holds a
+     * real source with a real duration, and nothing about it looks wrong until it is played and
+     * stops after a few seconds. Handing the deck a probe is what lets `HasStandby` and
+     * `Transition` refuse it instead of swapping into a track that cannot finish.
+     *
+     * Offline and local files pass `None`: their bytes are already on disk, so there is no
+     * fill to fail.
+     */
+    let health: Option<audio::DeckHealth> = buffer.map(|buffer| {
+        Arc::new(move || buffer.lock().map(|guard| !guard.failed).unwrap_or(false))
+            as audio::DeckHealth
+    });
+
     let duration = audio::request(&state, |reply| audio::Command::Load {
         track_id: track_id.clone(),
         source: decoded,
         fallback_duration_sec: duration_sec.unwrap_or(0.0),
         decoded_duration_sec: decoded_duration,
         standby: standby.unwrap_or(false),
+        health,
         reply,
     })
     .map_err(cache_error)?
