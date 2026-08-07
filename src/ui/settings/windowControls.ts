@@ -1,7 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { logInternalError } from "../../internal/logging";
-import { isLinux } from "../platform";
 import {
   hydrateLocalBooleanSetting,
   readLocalBooleanSetting,
@@ -35,7 +34,10 @@ function readWindowsStyleWindowControls() {
 }
 
 function readNativeWindowControls() {
-  return readLocalBooleanSetting(NATIVE_CONTROLS_STORAGE_KEY, isLinux);
+  // Default off on every platform: the window is configured without decorations
+  // (tauri.conf.json `decorations: false`) and the app draws its own title bar,
+  // so the OS frame is opt-in rather than something Linux users are stuck with.
+  return readLocalBooleanSetting(NATIVE_CONTROLS_STORAGE_KEY, false);
 }
 
 function emitWindowControlsChange() {
@@ -68,7 +70,7 @@ export async function hydrateWindowControlSettings() {
     hydrateLocalBooleanSetting(WINDOWS_STYLE_STORAGE_KEY, false, CHANGE_EVENT),
     hydrateLocalBooleanSetting(
       NATIVE_CONTROLS_STORAGE_KEY,
-      isLinux,
+      false,
       CHANGE_EVENT,
       () => applyNativeWindowControls(),
     ),

@@ -672,6 +672,9 @@ const SyncedLine = memo(function SyncedLine({
     [index, register],
   );
 
+  // Check if there's letters
+  const isArabic = /[\u0600-\u06FF]/.test(text);
+
   // An empty LRC line is a real instrumental beat, not junk. It keeps its slot so the timing
   // stays honest, and announces itself when it comes up.
   if (!text.trim()) {
@@ -700,11 +703,14 @@ const SyncedLine = memo(function SyncedLine({
     <button
       ref={attach}
       type="button"
+      // The direction of the language
+      dir={isArabic ? "rtl" : "ltr"}
       tabIndex={isTabbable ? 0 : -1}
       aria-current={isActive ? "true" : undefined}
       onFocus={() => onFocusLine(index)}
+      // Using (text-start) instead of (text-left)
       className={cn(
-        "group relative origin-left text-pretty text-left font-bold leading-[1.16] tracking-[-0.035em]",
+        "group relative origin-left text-pretty text-start font-bold leading-[1.16] tracking-[-0.035em]",
         "transition-[opacity,filter,color] duration-500 ease-out",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         /*
@@ -724,10 +730,13 @@ const SyncedLine = memo(function SyncedLine({
     >
       {/* The one piece of brand colour on the screen, and the only thing marking which line
           is playing when the sweep is at either end. */}
+      
+      {/* Posistion the highlight indicator on the right for Arabic (RTL), and on the left for (LTR) Languages */}
       <span
         aria-hidden="true"
         className={cn(
-          "absolute -left-5 top-[0.28em] h-[0.72em] w-[3px] rounded-full bg-primary transition-opacity duration-300",
+          "absolute top-[0.28em] h-[0.72em] w-[3px] rounded-full bg-primary transition-opacity duration-300",
+          isArabic ? "-right-5" : "-left-5",
           isActive ? "opacity-100" : "opacity-0 group-hover:opacity-40",
         )}
       />

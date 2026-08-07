@@ -4549,6 +4549,16 @@ fn discord_rpc_clear(
     Ok(())
 }
 
+/// The compositor the app is running under, so the frontend can decide whether the
+/// window manager already provides window management (tiling compositors) or the app
+/// must draw its own buttons.
+#[tauri::command]
+fn desktop_environment() -> String {
+    std::env::var("XDG_CURRENT_DESKTOP")
+        .or_else(|_| std::env::var("XDG_SESSION_DESKTOP"))
+        .unwrap_or_default()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize Discord RPC manager
@@ -4557,14 +4567,6 @@ pub fn run() {
 
     #[allow(unused_mut)]
     let mut context = tauri::generate_context!();
-    #[cfg(target_os = "linux")]
-    {
-        for window in &mut context.config_mut().app.windows {
-            if window.label == "main" {
-                window.decorations = true;
-            }
-        }
-    }
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .manage(CacheLock(Mutex::new(())))
@@ -4671,6 +4673,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            desktop_environment,
             quit_app,
             frontend_log,
             app_setting_get,
