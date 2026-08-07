@@ -49,7 +49,9 @@ export function AppLoadingScreen({ isLeaving }: AppLoadingScreenProps) {
   initial={{ opacity: 0, scale: 0.92 }}
   animate={{ opacity: 1, scale: 1 }}
   transition={{ type: "spring", stiffness: 260, damping: 24 }}
-  className="size-18 drop-shadow-2xl backdrop-blur rounded-full object-cover
+  /* No `backdrop-blur`: this is an opaque, object-cover video — the filter was blurring a
+     backdrop that the video itself completely covers, once per video frame, during startup. */
+  className="size-18 drop-shadow-2xl rounded-full object-cover
              [mask-image:radial-gradient(circle_at_center,black_58%,transparent_100%)]
              [-webkit-mask-image:radial-gradient(circle_at_center,black_58%,transparent_100%)]"
   autoPlay

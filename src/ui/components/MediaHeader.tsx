@@ -165,6 +165,13 @@ export function MediaHeader({
           artworkUrl={artworkUrl}
           iconSize={72}
           loading="eager"
+          /*
+           * `size-44` is 176 CSS px. Without this the component skips size bucketing and keeps
+           * the original URL — and the stored `artworkUrl` is deliberately the *largest*
+           * candidate the source offered (see `selectArtworkUrl`), so this slot was decoding a
+           * full-size cover into a 176px box, eagerly, on every album, playlist and artist page.
+           */
+          size={176}
           variant={artworkVariant}
         />
       )}

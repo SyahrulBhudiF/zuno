@@ -32,19 +32,24 @@ export function PlaybackOptions() {
     () => playerController.getSleepTimerRemainingMs(),
   );
 
+  const isSleeping = remainingMs !== null;
+
   /*
    * Polled once a second rather than driven by player state: the deadline is wall-clock, so
    * nothing in the store changes as it counts down and there is no event to subscribe to.
-   * The interval only runs while a timer is actually set.
+   *
+   * Only while a timer is set. This component lives in the player bar, so it is mounted for
+   * the entire session — the comment here used to claim the interval was conditional while the
+   * effect ran on `[]`, ticking once a second, forever, for a countdown almost nobody has
+   * started. `applySleep` seeds `remainingMs` itself, which is what starts this.
    */
   useEffect(() => {
+    if (!isSleeping) return;
     const tick = () => setRemainingMs(playerController.getSleepTimerRemainingMs());
     tick();
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
-  }, []);
-
-  const isSleeping = remainingMs !== null;
+  }, [isSleeping]);
 
   const applyRate = (next: number) => {
     playerController.setPlaybackRate(next);

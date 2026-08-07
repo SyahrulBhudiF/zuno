@@ -253,15 +253,22 @@ export async function tauriFetch(input: RequestInfo | URL, init?: TauriFetchInit
   const body_base64 = await buildBodyBase64(input, init);
   const url = getRequestUrl(normalizeUrl(input), headers);
 
-  logInternalInfo("tauriFetch.request", {
+  /*
+   * Debug, not info, and without the two derived URL fields.
+   *
+   * Every network call the app makes came through here at info level, so a five-minute session
+   * wrote a hundred-odd of these — each one parsing `url` twice more to produce a hostname and
+   * a path already spelled out in the `url` field beside them, then sanitizing, stringifying,
+   * crossing the IPC boundary and hitting the disk. The log reached 163 KB in those five
+   * minutes, which is what buries the lines somebody is actually reading.
+   */
+  logInternalDebug("tauriFetch.request", {
     method,
     url,
     headerCount: Object.keys(headers).length,
     hasBody: Boolean(body_base64),
     headers: getSafeHeaders(headers),
     bodySummary: summarizeRequestBody(body_base64),
-    urlDomain: new URL(url).hostname,
-    urlPath: new URL(url).pathname,
   });
 
   try {
@@ -314,7 +321,12 @@ export async function tauriFetch(input: RequestInfo | URL, init?: TauriFetchInit
       url,
       status: proxyResponse.status,
       responseHeaderCount: Object.keys(proxyResponse.headers).length,
-      responseHeaders: getSafeHeaders(proxyResponse.headers),
+      /*
+       * The count, not the headers. Response headers were the single largest thing in the log
+       * — `alt-svc` and `cf-ray` alone run to hundreds of characters per request — and unlike
+       * the *request* headers above they carry nothing about the auth state anyone opens this
+       * file to investigate. `responseBytes` below is what that investigation actually reads.
+       */
       responseBytes: bodyBytes.byteLength,
       durationMs: Math.round(performance.now() - startedAt),
       success: proxyResponse.status >= 200 && proxyResponse.status < 300,

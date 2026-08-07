@@ -193,6 +193,15 @@ export function TrackArtwork({
           src={currentArtworkUrl}
           alt=""
           loading={loading}
+          /*
+           * Decode off the main thread. The default is `auto`, which lets the browser decode
+           * synchronously during the paint that first shows the image — with a grid of covers
+           * arriving together that is a burst of main-thread decode work landing inside frames
+           * that also have to lay out and paint. The cost is that an image can appear a frame
+           * or two later, which is invisible here: every one of these fades in over 200ms from
+           * a placeholder anyway.
+           */
+          decoding="async"
           onLoad={() => {
             setLoadedArtworkUrl(currentArtworkUrl);
             /*

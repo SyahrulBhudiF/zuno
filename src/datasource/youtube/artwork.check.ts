@@ -75,8 +75,24 @@ check(getArtworkSizeBucket(900) === null, "a slot larger than every bucket keeps
 (globalThis as Record<string, unknown>).devicePixelRatio = 2;
 check(getArtworkSizeBucket(40) === 120, "a retina 40px slot needs 80px, so still 120");
 check(
-  getArtworkSizeBucket(200) === 544,
+  getArtworkSizeBucket(260) === 544,
   "density is applied before bucketing, or hi-dpi art renders soft",
+);
+
+/*
+ * The card sizes, at the density most people have. These are the two that decide how much
+ * bitmap a grid holds — before the 400 bucket existed both landed on 544, which is 2.4x the
+ * pixels either of them can display.
+ */
+check(getArtworkSizeBucket(176) === 400, "a 176px card at 2x needs 352px, so 400 not 544");
+check(getArtworkSizeBucket(200) === 400, "a 200px card at 2x needs 400px, so 400 exactly");
+check(
+  getArtworkSizeBucket(201) === 544,
+  "one pixel past the 400 bucket steps up rather than rendering soft",
+);
+check(
+  getArtworkSizeBucket(280) === null,
+  "a 2x slot needing more than 544 still keeps the original",
 );
 
 console.log("artwork.check.ts OK");

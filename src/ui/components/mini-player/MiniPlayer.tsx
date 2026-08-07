@@ -955,6 +955,9 @@ export default function MiniPlayer() {
               )}
               iconSize={15}
               loading="eager"
+              /* 34px circle. Same omission as MediaHeader had: without it this asked for the
+                 full-size cover, in the window whose whole reason to exist is being small. */
+              size={34}
             />
             <span
               className="pointer-events-none absolute inset-0 grid place-items-center rounded-full bg-black/60 opacity-0 transition-opacity duration-200 group-hover/art:opacity-100"

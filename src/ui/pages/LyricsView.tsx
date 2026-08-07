@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useReducedMotion } from "motion/react";
+import { useReduceMotion } from "../settings/renderEffects";
 import { cn } from "@/lib/utils";
 import { CloseIcon, LyricsIcon, RefreshIcon } from "@/ui/icons";
 import type { Lyrics, LyricsSourceAttempt, LyricsSourceStatus } from "../../datasource/types";
@@ -76,7 +76,7 @@ export function LyricsView({ onClose }: LyricsViewProps) {
   );
   const track = playerState.currentTrack;
   const isPlaying = playerState.status === "playing";
-  const reduce = useReducedMotion() ?? false;
+  const reduce = useReduceMotion();
   const offset = useLyricsOffset(track?.id);
   const fontScale = useLyricsFontScale();
   const translationLang = useLyricsTranslationLang();
@@ -417,6 +417,7 @@ export function LyricsView({ onClose }: LyricsViewProps) {
         {track?.artworkUrl && (
           <div
             key={track.artworkUrl}
+            data-fx="ambient"
             className={cn(
               "absolute -inset-[18%] opacity-50 blur-[70px] saturate-[1.7]",
               !reduce && "lyrics-drift",

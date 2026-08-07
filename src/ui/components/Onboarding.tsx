@@ -7,7 +7,7 @@ import {
   KeyIcon,
 } from "@/ui/icons";
 import { primaryModifierLabel } from "../platform";
-import { usePaperPcMode } from "../settings/paperPcMode";
+import { useReduceMotion } from "../settings/renderEffects";
 import {
   CARD_WIDTH,
   ONBOARDING_STEPS,
@@ -164,10 +164,11 @@ interface OnboardingProps {
 }
 
 export function Onboarding({ step, onSkip, onSkipStep, onBack }: OnboardingProps) {
-  const paperPcMode = usePaperPcMode();
+  // The typewriter is a JS timer, so no stylesheet can stop it — this is the hook that can.
+  const reduceMotion = useReduceMotion();
   const content = getStepContent()[step];
   const rect = useTargetRect(content.target);
-  const { typed, reveal, done } = useTypedText(content.text, !paperPcMode);
+  const { typed, reveal, done } = useTypedText(content.text, !reduceMotion);
 
   const cardRef = useRef<HTMLDivElement>(null);
   const [cardHeight, setCardHeight] = useState(160);
@@ -241,7 +242,9 @@ export function Onboarding({ step, onSkip, onSkipStep, onBack }: OnboardingProps
               top: rect.top,
               width: rect.right - rect.left,
               height: rect.bottom - rect.top,
-              boxShadow: paperPcMode ? undefined : "0 0 40px var(--color-primary)",
+              /* Not gated in JS any more: the `shadows` switch is a stylesheet rule with
+                 `!important`, which outranks this inline style on its own. */
+              boxShadow: "0 0 40px var(--color-primary)",
             }}
           />
         </>

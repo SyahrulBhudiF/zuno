@@ -132,8 +132,15 @@ export function HistoryPage({
 
       {days.map((day) => (
         <section key={day.label} className="flex flex-col gap-2">
-          {/* Sticky so the day you are scrolling through stays named. */}
-          <h2 className="sticky top-0 z-10 -mx-2 bg-background/85 px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur">
+          {/*
+            Sticky so the day you are scrolling through stays named.
+
+            No `backdrop-blur`: a sticky element is by definition on screen for the whole
+            scroll, so its backdrop filter is re-evaluated every frame you scroll — and there
+            is one of these per day. At 85% opacity over the same colour the blur was
+            resolving to something nobody could have seen.
+          */}
+          <h2 className="sticky top-0 z-10 -mx-2 bg-background/85 px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             {day.label}
           </h2>
 

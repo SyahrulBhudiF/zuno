@@ -44,6 +44,8 @@ const PRELOAD_LEAD_SEC = 20;
  * whole track was heard is accepted and counted as nothing.
  */
 const SCROBBLE_TICK_MS = 30_000;
+/** How long after the last volume change the settings are written. See setVolume. */
+const PLAYBACK_SETTINGS_PERSIST_MS = 400;
 
 export type PlayerStatus = "idle" | "loading" | "playing" | "paused" | "error";
 
@@ -191,6 +193,7 @@ export class PlayerController {
   private gaplessEnabled = true;
   private transitionTimerId: number | null = null;
   private scrobbleTimerId: number | null = null;
+  private playbackSettingsTimerId: ReturnType<typeof setTimeout> | null = null;
   private transitioning = false;
 
   private state: PlayerState = {
@@ -325,15 +328,7 @@ export class PlayerController {
       muted: this.audioEngine.isMuted(),
     };
     if (persist) {
-      savePlaybackSettings({
-        volume: this.state.volume,
-        muted: this.state.muted,
-        // Read back off the engine rather than off `settings`: a partial apply would otherwise
-        // persist a default over a value the user had chosen.
-        playbackRate: this.audioEngine.getPlaybackRate(),
-        crossfadeSec: this.crossfadeSec,
-        gaplessEnabled: this.gaplessEnabled,
-      });
+      savePlaybackSettings(this.currentPlaybackSettings());
     }
     this.syncTransitionTicker();
   }
@@ -660,11 +655,7 @@ export class PlayerController {
 
   setPlaybackRate(rate: number): void {
     this.audioEngine.setPlaybackRate(rate);
-    savePlaybackSettings({
-      volume: this.state.volume,
-      muted: this.state.muted,
-      playbackRate: this.audioEngine.getPlaybackRate(),
-    });
+    savePlaybackSettings(this.currentPlaybackSettings());
     this.emit();
   }
 
@@ -1575,18 +1566,63 @@ export class PlayerController {
     this.emit();
   }
 
+  /**
+   * The one write path that is driven by a drag rather than a click.
+   *
+   * No log line and no synchronous persist: this is called once per pointer move of the volume
+   * slider, and both of those were being paid a hundred times a second for a gesture whose only
+   * meaningful moment is where it ends.
+   */
   async setVolume(level: number, muted = level <= 0): Promise<void> {
-    logInternalInfo("PlayerController.setVolume", { level, muted });
     this.audioEngine.setVolume(level);
     this.audioEngine.setMuted(muted);
     this.setState({
       volume: this.audioEngine.getVolume(),
       muted: this.audioEngine.isMuted(),
     });
-    savePlaybackSettings({
+    this.persistPlaybackSettingsSoon();
+  }
+
+  /**
+   * Every persisted playback setting, read from the live engine and controller.
+   *
+   * `savePlaybackSettings` fills an absent field with its *default* rather than leaving the
+   * stored value alone, so a partial object is a silent reset. Three of the four call sites
+   * passed `{ volume, muted }` and nothing else — which meant that nudging the volume wrote
+   * playbackRate 1, crossfade 0 and gapless true over whatever the listener had chosen.
+   */
+  private currentPlaybackSettings(): PlaybackSettings {
+    return {
       volume: this.state.volume,
       muted: this.state.muted,
-    });
+      playbackRate: this.audioEngine.getPlaybackRate(),
+      crossfadeSec: this.crossfadeSec,
+      gaplessEnabled: this.gaplessEnabled,
+    };
+  }
+
+  /**
+   * Persist after the gesture settles.
+   *
+   * A save is a `JSON.stringify`, a `localStorage` write and a Tauri IPC hop to the durable
+   * store. Trailing rather than leading, because the value that matters is the one the slider
+   * is released on. `dispose` flushes, so a pending write cannot be lost to a tab closing.
+   */
+  private persistPlaybackSettingsSoon(): void {
+    if (this.playbackSettingsTimerId !== null) {
+      globalThis.clearTimeout(this.playbackSettingsTimerId);
+    }
+    this.playbackSettingsTimerId = globalThis.setTimeout(() => {
+      this.playbackSettingsTimerId = null;
+      savePlaybackSettings(this.currentPlaybackSettings());
+    }, PLAYBACK_SETTINGS_PERSIST_MS);
+  }
+
+  private flushPlaybackSettings(): void {
+    if (this.playbackSettingsTimerId === null) return;
+    globalThis.clearTimeout(this.playbackSettingsTimerId);
+    this.playbackSettingsTimerId = null;
+    savePlaybackSettings(this.currentPlaybackSettings());
   }
 
   async skipToPrevious(): Promise<void> {
@@ -1664,6 +1700,7 @@ export class PlayerController {
   }
 
   dispose(): void {
+    this.flushPlaybackSettings();
     this.isTabActive = false;
     this.syncTransitionTicker();
     this.audioEngine.setOnEnded(null);
@@ -1696,10 +1733,7 @@ export class PlayerController {
     logInternalInfo("PlayerController.toggleMute", { muted: nextMuted });
     this.audioEngine.setMuted(nextMuted);
     this.setState({ muted: this.audioEngine.isMuted() });
-    savePlaybackSettings({
-      volume: this.state.volume,
-      muted: this.state.muted,
-    });
+    savePlaybackSettings(this.currentPlaybackSettings());
   }
 
   async getLyrics(track: Track): Promise<Lyrics | null> {

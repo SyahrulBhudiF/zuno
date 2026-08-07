@@ -140,6 +140,39 @@ export async function hydrateMiniPlayerSettings() {
 let miniPlayerCreation: Promise<WebviewWindow | null> | null = null;
 
 /*
+ * Whether the window is on screen right now.
+ *
+ * The main window pushes playback time and volume to it on an interval, and had no way to ask
+ * whether anybody was listening — so it emitted two Tauri events every second for the whole
+ * session, across the IPC boundary, to a window that exists only while the app is backgrounded
+ * and usually does not exist at all. This is the answer to that question.
+ */
+let miniPlayerWindowLive = false;
+const liveListeners = new Set<() => void>();
+
+function setMiniPlayerWindowLive(live: boolean): void {
+  if (live === miniPlayerWindowLive) return;
+  miniPlayerWindowLive = live;
+  for (const listener of liveListeners) listener();
+}
+
+function subscribeToWindowLive(listener: () => void): () => void {
+  liveListeners.add(listener);
+  return () => {
+    liveListeners.delete(listener);
+  };
+}
+
+function getWindowLive(): boolean {
+  return miniPlayerWindowLive;
+}
+
+/** True while the mini player window exists. Drives the main window's push-sync interval. */
+export function useMiniPlayerWindowLive(): boolean {
+  return useSyncExternalStore(subscribeToWindowLive, getWindowLive, () => false);
+}
+
+/*
  * Creation and destruction are serialized against each other.
  *
  * Alt-tabbing fires blur and focus within a few milliseconds, and focus now *destroys* the
@@ -191,6 +224,10 @@ export function ensureMiniPlayerWindow(): Promise<WebviewWindow | null> {
 
   const creation = queueMiniPlayerOp(createMiniPlayerWindow);
   miniPlayerCreation = creation;
+  void creation.then(
+    (miniWin) => setMiniPlayerWindowLive(miniWin !== null),
+    () => setMiniPlayerWindowLive(false),
+  );
   void creation.catch(() => null).finally(() => {
     if (miniPlayerCreation === creation) miniPlayerCreation = null;
   });
@@ -200,6 +237,7 @@ export function ensureMiniPlayerWindow(): Promise<WebviewWindow | null> {
 /** Frees the window's process. `hide()` keeps it resident; only destroying returns the memory. */
 export function destroyMiniPlayerWindow(): Promise<void> {
   return queueMiniPlayerOp(async () => {
+    setMiniPlayerWindowLive(false);
     const miniWin = await WebviewWindow.getByLabel(MINI_PLAYER_LABEL);
     if (!miniWin) return;
     try {

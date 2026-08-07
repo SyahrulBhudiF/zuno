@@ -36,6 +36,8 @@ import { hydratePlayHistory } from "./player/playHistory";
 import { hydrateSessionRestoreSetting } from "./ui/settings/sessionRestore";
 import { hydrateToolbarItemSettings } from "./ui/settings/toolbarItems";
 import { hydrateHomeSectionSettings } from "./ui/settings/homeSections";
+import { applyRenderEffects, hydrateRenderEffects } from "./ui/settings/renderEffects";
+import { startMemoryReport } from "./internal/memoryReport";
 
 logInternalInfo("main.bootstrap start");
 // Before React mounts: a resolution restored after first paint is a resolution that already
@@ -46,12 +48,17 @@ applyPlatformAttributes();
 applyTheme();
 watchSystemTheme();
 applyPaperPcMode();
+applyRenderEffects();
+// One line a minute in the app log, so "the renderer is using 220 MB" can be split into heap,
+// DOM, images and subframes instead of guessed at. Settings → Troubleshooting → Open log.
+startMemoryReport();
 void applyNativeWindowControls();
 void hydrateMainWindowGeometry().then(restoreMainWindowGeometry).catch((error) => {
   logInternalError("mainWindowGeometry.restore failed", error);
 });
 void Promise.all([
   hydratePaperPcMode(),
+  hydrateRenderEffects(),
   hydrateTheme(),
   hydrateWindowControlSettings(),
   hydrateMiniPlayerSettings(),

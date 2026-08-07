@@ -580,25 +580,21 @@ export class AudioEngine {
     this.player?.seekTo(Math.max(0, seconds), true);
   }
 
+  /*
+   * Deliberately silent.
+   *
+   * This is called on every pointer move of the volume slider. The eleven-field log that used
+   * to live here read the YouTube player's volume twice, then went through `sanitizeForLog`,
+   * `JSON.stringify`, an `invoke("frontend_log")` IPC hop that writes to a file, and a
+   * `console.info` — sixty to a hundred and twenty times a second, for the duration of a drag.
+   * Two more copies of the same thing sat in `ActivePlayerController.setVolume`.
+   *
+   * The diagnostics that justified them are still available where they cost nothing: `setMuted`
+   * below logs, and mute is the state transition those investigations were actually about.
+   */
   setVolume(level: number): void {
-    const nextVolume = Math.min(1, Math.max(0, level));
-    const beforePlayerVolume = this.player ? this.player.getVolume() : null;
-    const beforeAudioVolume = this.audio?.volume ?? null;
-    this.volume = nextVolume;
+    this.volume = Math.min(1, Math.max(0, level));
     this.applyOutputVolume();
-    logInternalInfo("AudioEngine.setVolume", {
-      requestedLevel: level,
-      volume: this.volume,
-      hasNativeAudio: Boolean(this.audio),
-      hasYouTubePlayer: Boolean(this.player),
-      beforeAudioVolume,
-      afterAudioVolume: this.audio?.volume ?? null,
-      beforePlayerVolume,
-      afterPlayerVolume: this.player ? this.player.getVolume() : null,
-      muted: this.muted,
-      playerMuted: this.player?.isMuted() ?? null,
-      currentVideoId: this.currentVideoId,
-    });
   }
 
   getVolume(): number {
@@ -606,6 +602,16 @@ export class AudioEngine {
   }
 
   setMuted(isMuted: boolean): void {
+    /*
+     * The log below fires on a change of state, not on every call.
+     *
+     * `applyPlaybackSettings` pushes the whole settings object — volume and muted together —
+     * into every open tab's engine, and that happens on every pointer move of the volume
+     * slider. So this ran a full log write per tab per move, almost always to record that
+     * `muted` was still false. A mute transition is the event worth a line in the log; a
+     * restatement of the current value is not.
+     */
+    const changed = this.muted !== isMuted;
     const beforeAudioMuted = this.audio?.muted ?? null;
     const beforePlayerMuted = this.player?.isMuted() ?? null;
     this.muted = isMuted;
@@ -616,6 +622,7 @@ export class AudioEngine {
       this.player?.unMute();
     }
     this.applyOutputVolume();
+    if (!changed) return;
     logInternalInfo("AudioEngine.setMuted", {
       muted: this.muted,
       hasNativeAudio: Boolean(this.audio),
