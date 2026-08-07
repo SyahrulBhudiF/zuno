@@ -9,10 +9,12 @@ import {
 } from "react";
 import { cn } from "@/lib/utils";
 import { Loader } from "@/components/motion/loader";
-import { BookmarkActiveIcon, BookmarkIcon, CheckIcon, CopyIcon, DownloadIcon, PencilIcon, TrashIcon } from "@/ui/icons";
+import { BookmarkActiveIcon, BookmarkIcon, CheckIcon, CopyIcon, DownloadIcon, ImageIcon, PencilIcon, TrashIcon } from "@/ui/icons";
 import type { Album, Playlist } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
-import { isLocalPlaylist } from "../../player/localPlaylists";
+import { isLocalPlaylist, LOCAL_IMAGE_PREFIX, setLocalPlaylistArtwork } from "../../player/localPlaylists";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { forgetArtworkSource } from "../../internal/artworkCache";
 import { exportPlaylist } from "../../player/playlistTransfer";
 import {
   PlaylistContext,
@@ -249,6 +251,37 @@ export function PlaylistContextMenuProvider({
     }
   };
 
+  /*
+   * The cache is keyed by the `local-image:` URL, which does not change when the file behind
+   * it does — so a cover picked twice would keep painting the first one without this.
+   */
+  const refreshPlaylistArtwork = (artworkPath: string | null) => {
+    if (!playlist) return;
+    if (playlist.artworkUrl?.startsWith(LOCAL_IMAGE_PREFIX)) {
+      forgetArtworkSource(playlist.artworkUrl);
+    }
+    if (artworkPath) forgetArtworkSource(`${LOCAL_IMAGE_PREFIX}${artworkPath}`);
+    setLocalPlaylistArtwork(playlist.id, artworkPath);
+    setPosition(null);
+  };
+
+  const choosePlaylistImage = async () => {
+    if (!playlist) return;
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        title: "Choose playlist image",
+        filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "bmp", "webp"] }],
+      });
+      if (typeof selected !== "string") return;
+      refreshPlaylistArtwork(selected);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Unable to set that image.");
+    }
+  };
+
+  const clearPlaylistImage = async () => refreshPlaylistArtwork(null);
+
   const submitRename = async () => {
     if (!playlist || renameDraft === null) return;
     const trimmed = renameDraft.trim();
@@ -369,6 +402,28 @@ export function PlaylistContextMenuProvider({
             >
               <PencilIcon size={18} />
               <span>Rename</span>
+            </button>
+          )}
+          {isLocalPlaylistMenu && (
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              onClick={() => void choosePlaylistImage()}
+            >
+              <ImageIcon size={18} />
+              <span>Change image</span>
+            </button>
+          )}
+          {isLocalPlaylistMenu && playlist?.artworkUrl?.startsWith(LOCAL_IMAGE_PREFIX) && (
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              onClick={() => void clearPlaylistImage()}
+            >
+              <ImageIcon size={18} />
+              <span>Use default image</span>
             </button>
           )}
           {playlist && (

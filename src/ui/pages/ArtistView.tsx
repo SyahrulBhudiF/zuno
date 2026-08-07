@@ -53,6 +53,9 @@ function getArtistUrl(artist: Artist): string {
   return `https://music.youtube.com/search?q=${encodeURIComponent(artist.name)}`;
 }
 
+/** How many of the artist's songs the Popular shelf shows before it is expanded. */
+const POPULAR_PREVIEW_COUNT = 6;
+
 export function ArtistView({
   artist,
   playerController,
@@ -70,6 +73,7 @@ export function ArtistView({
   const { openPlaylistMenu, openAlbumMenu } = usePlaylistContextMenu();
   const { currentTrackId, isPlaying, isLoading: isPlayerLoading } = useNowPlaying();
   const [page, setPage] = useState<ArtistPage | null>(null);
+  const [showAllSongs, setShowAllSongs] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<ReleaseFilter>("all");
@@ -92,6 +96,7 @@ export function ArtistView({
     setIsLoading(true);
     setError(null);
     setFilter("all");
+    setShowAllSongs(false);
     void libraryController.getArtist(artist.id, (updated) => {
       if (active) setPage(updated);
     })
@@ -124,7 +129,17 @@ export function ArtistView({
   ) ?? [];
 
   const displayedArtist = page?.artist ?? artist;
-  const popularSongs = page?.popularSongs.slice(0, 6) ?? [];
+  /*
+   * Six is all `popularSongs` ever holds — the data source caps it there when it enriches them
+   * with view counts. The rest of the artist's catalogue is already fetched and sitting in
+   * `allSongs`, so expanding costs a render rather than a round trip.
+   */
+  const allSongs = page?.allSongs ?? [];
+  const popularSongs = showAllSongs
+    ? allSongs
+    : (page?.popularSongs.slice(0, POPULAR_PREVIEW_COUNT) ?? []);
+  // Hidden when the shelf was unavailable, in which case `allSongs` falls back to these six.
+  const hiddenSongCount = allSongs.length - popularSongs.length;
 
   useEffect(() => {
     setIsSubscribed(page?.subscribed ?? false);
@@ -363,6 +378,16 @@ export function ArtistView({
                   />
                 ))}
               </div>
+              {(hiddenSongCount > 0 || showAllSongs) && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllSongs((current) => !current)}
+                  aria-expanded={showAllSongs}
+                  className="self-start rounded-full bg-white/[0.04] px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-white/[0.08] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {showAllSongs ? "Show less" : `Show all ${allSongs.length} songs`}
+                </button>
+              )}
             </section>
           )}
 

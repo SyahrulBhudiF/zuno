@@ -355,8 +355,19 @@ struct CacheWriteResult {
 struct LocalAudioFile {
     path: String,
     title: String,
+    artist: Option<String>,
     album: Option<String>,
     duration_sec: Option<u64>,
+    /// Whether the file carries embedded cover art, so the UI knows to ask for it.
+    has_artwork: bool,
+}
+
+/// Embedded cover art. Base64 because a `Vec<u8>` crosses Tauri's IPC as a JSON number array.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalArtwork {
+    mime_type: String,
+    data_base64: String,
 }
 
 fn cache_error(message: impl Into<String>) -> CommandError {
@@ -424,6 +435,126 @@ fn local_audio_title(path: &Path) -> String {
         .to_string()
 }
 
+/**
+ * One scanned file, described by its tags.
+ *
+ * The filename and the parent folder are the fallback, not the answer. The scan used to stop
+ * there — every local track came back titled after its file, attributed to nothing, with no
+ * duration and no art, because the tag reader existed only behind the tag editor.
+ *
+ * A tag read per file makes the scan slower than a `read_dir`; that is the cost of the metadata
+ * being right, and it is paid once per page load rather than per play.
+ */
+fn local_audio_entry(path: &Path) -> LocalAudioFile {
+    use lofty::file::{AudioFile, TaggedFileExt};
+    use lofty::tag::Accessor;
+
+    let mut entry = LocalAudioFile {
+        path: path.to_string_lossy().to_string(),
+        title: local_audio_title(path),
+        artist: None,
+        album: path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_string()),
+        duration_sec: None,
+        has_artwork: false,
+    };
+
+    // An unreadable or untagged file keeps the filesystem fallback rather than disappearing.
+    let Ok(tagged) = lofty::read_from_path(path) else {
+        return entry;
+    };
+
+    let duration = tagged.properties().duration().as_secs();
+    if duration > 0 {
+        entry.duration_sec = Some(duration);
+    }
+
+    let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) else {
+        return entry;
+    };
+
+    let text = |value: Option<std::borrow::Cow<'_, str>>| {
+        value
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+
+    if let Some(title) = text(tag.title()) {
+        entry.title = title;
+    }
+    entry.artist = text(tag.artist());
+    if let Some(album) = text(tag.album()) {
+        entry.album = Some(album);
+    }
+    entry.has_artwork = !tag.pictures().is_empty();
+
+    entry
+}
+
+/**
+ * Reads an image the user picked, for the tag editor to preview and then embed.
+ *
+ * The magic-byte check is the point: a file picker filter is a suggestion, and lofty will
+ * happily embed whatever bytes it is handed under whatever mime type it is told — which
+ * produces a file every other player renders as a broken cover.
+ */
+#[tauri::command]
+fn read_image_file(path: String) -> Result<LocalArtwork, CommandError> {
+    use base64::Engine;
+
+    let path = PathBuf::from(path);
+    let data = fs::read(&path).map_err(|error| cache_error(format!("image read failed: {error}")))?;
+    if data.len() > MAX_ARTWORK_BYTES {
+        return Err(cache_error("that image is too large to embed"));
+    }
+
+    let mime_type = match data.as_slice() {
+        [0xff, 0xd8, 0xff, ..] => "image/jpeg",
+        [0x89, b'P', b'N', b'G', ..] => "image/png",
+        [b'G', b'I', b'F', b'8', ..] => "image/gif",
+        [b'B', b'M', ..] => "image/bmp",
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => "image/webp",
+        _ => return Err(cache_error("that file is not a PNG, JPEG, GIF, BMP or WebP image")),
+    };
+
+    Ok(LocalArtwork {
+        mime_type: mime_type.to_string(),
+        data_base64: base64::engine::general_purpose::STANDARD.encode(&data),
+    })
+}
+
+/// The first embedded picture, for the one file the UI is about to show.
+#[tauri::command]
+fn local_audio_artwork(path: String) -> Result<Option<LocalArtwork>, CommandError> {
+    use base64::Engine;
+    use lofty::file::TaggedFileExt;
+
+    let path = PathBuf::from(path);
+    if !path.is_file() || !is_local_audio_file(&path) {
+        return Err(cache_error("local audio file is unavailable."));
+    }
+
+    let tagged = lofty::read_from_path(&path)
+        .map_err(|error| cache_error(format!("tag read failed: {error}")))?;
+    let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) else {
+        return Ok(None);
+    };
+    let Some(picture) = tag.pictures().first() else {
+        return Ok(None);
+    };
+
+    Ok(Some(LocalArtwork {
+        mime_type: picture
+            .mime_type()
+            .map(|mime| mime.to_string())
+            .unwrap_or_else(|| "image/jpeg".to_string()),
+        data_base64: base64::engine::general_purpose::STANDARD.encode(picture.data()),
+    }))
+}
+
 fn scan_local_audio_path(path: &Path, files: &mut Vec<LocalAudioFile>) -> Result<(), CommandError> {
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
@@ -432,16 +563,7 @@ fn scan_local_audio_path(path: &Path, files: &mut Vec<LocalAudioFile>) -> Result
 
     if metadata.is_file() {
         if is_local_audio_file(path) {
-            files.push(LocalAudioFile {
-                path: path.to_string_lossy().to_string(),
-                title: local_audio_title(path),
-                album: path
-                    .parent()
-                    .and_then(|parent| parent.file_name())
-                    .and_then(|name| name.to_str())
-                    .map(|name| name.to_string()),
-                duration_sec: None,
-            });
+            files.push(local_audio_entry(path));
         }
         return Ok(());
     }
@@ -486,7 +608,31 @@ struct LocalAudioTags {
     genre: Option<String>,
     track_number: Option<u32>,
     year: Option<u32>,
+    /// Write-only: absent means leave the existing cover alone. See `ArtworkEdit`.
+    #[serde(default, skip_serializing)]
+    artwork: Option<ArtworkEdit>,
 }
+
+/**
+ * What to do with the file's cover on save.
+ *
+ * Three states, not two. A plain `Option<Picture>` could only say "set this" or "remove it",
+ * so every save from a dialog the user never touched the artwork in would rewrite or delete a
+ * cover they meant to keep.
+ */
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+enum ArtworkEdit {
+    Keep,
+    Remove,
+    Replace {
+        mime_type: String,
+        data_base64: String,
+    },
+}
+
+/// Cover art is embedded in the file, so an unreasonable one bloats every copy of the song.
+const MAX_ARTWORK_BYTES: usize = 12 * 1024 * 1024;
 
 /// Reads real tags from a file.
 ///
@@ -551,6 +697,7 @@ fn local_audio_read_tags(path: String) -> Result<LocalAudioTags, CommandError> {
         year: tag
             .get_string(lofty::tag::ItemKey::Year)
             .and_then(|value| value.trim().get(..4).and_then(|text| text.parse().ok())),
+        artwork: None,
     })
 }
 
@@ -606,6 +753,44 @@ fn local_audio_write_tags(path: String, tags: LocalAudioTags) -> Result<(), Comm
         }
         None => {
             let _ = tag.remove_key(ItemKey::Year);
+        }
+    }
+
+    match tags.artwork {
+        None | Some(ArtworkEdit::Keep) => {}
+        Some(ArtworkEdit::Remove) => {
+            // Every picture, not just the front cover: leaving a stray back-cover or artist
+            // shot behind is what makes a "removed" cover reappear somewhere else.
+            while !tag.pictures().is_empty() {
+                let _ = tag.remove_picture(0);
+            }
+        }
+        Some(ArtworkEdit::Replace {
+            mime_type,
+            data_base64,
+        }) => {
+            use base64::Engine;
+            use lofty::picture::{MimeType, Picture, PictureType};
+
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(data_base64.as_bytes())
+                .map_err(|error| cache_error(format!("artwork decode failed: {error}")))?;
+            if data.is_empty() {
+                return Err(cache_error("that image is empty"));
+            }
+            if data.len() > MAX_ARTWORK_BYTES {
+                return Err(cache_error("that image is too large to embed"));
+            }
+
+            while !tag.pictures().is_empty() {
+                let _ = tag.remove_picture(0);
+            }
+            tag.push_picture(
+                Picture::unchecked(data)
+                    .pic_type(PictureType::CoverFront)
+                    .mime_type(MimeType::from_str(&mime_type))
+                    .build(),
+            );
         }
     }
 
@@ -4530,6 +4715,8 @@ pub fn run() {
             read_text_file,
             write_text_file,
             local_audio_read_tags,
+            local_audio_artwork,
+            read_image_file,
             local_audio_write_tags,
             local_audio_watch,
             local_audio_unwatch,

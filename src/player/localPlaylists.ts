@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Playlist, Track, TrackPage } from "../datasource/types";
 import { getAppSetting, setAppSetting } from "../internal/appSettings";
+import playlistPlaceholder from "../../assets/img/playlistplaceholder.svg";
 
 const STORAGE_KEY = "ytc-local-playlists-v1";
 const LOCAL_PLAYLIST_TRACKS_STORAGE_KEY = "ytc-local-playlist-tracks-v1";
@@ -22,14 +23,38 @@ export interface LocalPlaylist {
   id: string;
   name: string;
   paths: string[];
+  /** A cover the user picked. Absent means the bundled placeholder. */
+  artworkPath?: string;
+  /**
+   * Files hidden from this playlist even though a folder in `paths` still contains them.
+   *
+   * `paths` is a mixed list of folders and individually added files, so removing a song could
+   * only ever work for the second kind — a track that came from a scanned folder is not in the
+   * list, and filtering the list by its path removed nothing at all.
+   */
+  excludedPaths?: string[];
 }
 
 interface LocalAudioFile {
   path: string;
   title: string;
+  artist?: string;
   album?: string;
   durationSec?: number;
+  hasArtwork: boolean;
 }
+
+/**
+ * Marks a track whose cover is embedded in the file rather than fetchable over HTTP.
+ *
+ * `TrackArtwork` resolves this through `local_audio_artwork` instead of the network. A scheme
+ * rather than a flag on `Track` because everything downstream — the artwork cache, the ambient
+ * wash, the media session — already keys off `artworkUrl`.
+ */
+export const LOCAL_ARTWORK_PREFIX = "local-art:";
+
+/** Same idea for a loose image file on disk, used for playlist covers. */
+export const LOCAL_IMAGE_PREFIX = "local-image:";
 
 function createId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -46,10 +71,19 @@ function normalizePlaylist(value: unknown): LocalPlaylist | null {
   const paths = Array.isArray(candidate.paths)
     ? candidate.paths.filter((path): path is string => typeof path === "string" && path.trim().length > 0)
     : [];
+  const artworkPath = typeof candidate.artworkPath === "string" && candidate.artworkPath.trim()
+    ? candidate.artworkPath.trim()
+    : undefined;
+  const excluded = Array.isArray(candidate.excludedPaths)
+    ? candidate.excludedPaths.filter((path): path is string =>
+      typeof path === "string" && path.trim().length > 0)
+    : [];
   return {
     id: candidate.id,
     name: candidate.name.trim(),
     paths: Array.from(new Set(paths.map((path) => path.trim()))),
+    artworkPath,
+    excludedPaths: Array.from(new Set(excluded.map((path) => path.trim()))),
   };
 }
 
@@ -329,7 +363,33 @@ export function addLocalPlaylistPath(id: string, path: string): void {
   if (!trimmedPath) return;
   writeLocalPlaylists(readLocalPlaylists().map((playlist) =>
     playlist.id === id
-      ? { ...playlist, paths: Array.from(new Set([...playlist.paths, trimmedPath])) }
+      ? {
+        ...playlist,
+        paths: Array.from(new Set([...playlist.paths, trimmedPath])),
+        // Adding something back is an undo of removing it, or the song would stay hidden.
+        excludedPaths: (playlist.excludedPaths ?? []).filter((item) => item !== trimmedPath),
+      }
+      : playlist
+  ));
+}
+
+/**
+ * Removes one song from a local playlist.
+ *
+ * Both halves are needed and neither is enough: dropping it from `paths` covers a file that was
+ * added individually, and the exclusion covers a file the scan keeps finding inside a folder
+ * that is still assigned.
+ */
+export function removeLocalPlaylistTrack(id: string, filePath: string): void {
+  const trimmedPath = filePath.trim();
+  if (!trimmedPath) return;
+  writeLocalPlaylists(readLocalPlaylists().map((playlist) =>
+    playlist.id === id
+      ? {
+        ...playlist,
+        paths: playlist.paths.filter((item) => item !== trimmedPath),
+        excludedPaths: Array.from(new Set([...(playlist.excludedPaths ?? []), trimmedPath])),
+      }
       : playlist
   ));
 }
@@ -350,7 +410,25 @@ export function localPlaylistToPlaylist(playlist: LocalPlaylist): Playlist {
     kind: "local",
     isEditable: true,
     localPaths: playlist.paths,
+    /*
+     * A local playlist has no cover to fetch, so every surface used to fall back to its own
+     * glyph. The bundled placeholder gives them one identity instead of three, and a picked
+     * image replaces it through the same `TrackArtwork` path as embedded cover art.
+     */
+    artworkUrl: playlist.artworkPath
+      ? `${LOCAL_IMAGE_PREFIX}${playlist.artworkPath}`
+      : playlistPlaceholder,
   };
+}
+
+/** Sets or clears the cover for a local playlist. `null` restores the placeholder. */
+export function setLocalPlaylistArtwork(playlistId: string, artworkPath: string | null): void {
+  const playlists = readLocalPlaylists();
+  const next = playlists.map((playlist) =>
+    playlist.id === playlistId
+      ? { ...playlist, artworkPath: artworkPath ?? undefined }
+      : playlist);
+  writeLocalPlaylists(next);
 }
 
 /**
@@ -465,19 +543,27 @@ export function reorderLocalPlaylistTracks(
 }
 
 export async function getLocalPlaylistTrackPage(playlist: Playlist): Promise<TrackPage> {
-  const paths = playlist.localPaths ?? getLocalPlaylist(playlist.id)?.paths ?? [];
+  const stored = getLocalPlaylist(playlist.id);
+  const paths = playlist.localPaths ?? stored?.paths ?? [];
   if (!paths.length) return { tracks: [], hasMore: false };
   const files = await invoke<LocalAudioFile[]>("local_audio_scan", { paths });
-  const scannedTracks: Track[] = files.map((file): Track => ({
-    id: localTrackId(file.path),
-    source: "local",
-    title: file.title,
-    artist: "Local files",
-    album: file.album,
-    durationSec: file.durationSec,
-    playlistItemId: file.path,
-    localPath: file.path,
-  }));
+  // Songs the user removed. The folder they live in is still assigned, so the scan keeps
+  // returning them and this is the only thing that keeps them out.
+  const excluded = new Set(stored?.excludedPaths ?? []);
+  const scannedTracks: Track[] = files
+    .filter((file) => !excluded.has(file.path))
+    .map((file): Track => ({
+      id: localTrackId(file.path),
+      source: "local",
+      title: file.title,
+      // The literal string "Local files" used to sit here for every track, tags or not.
+      artist: file.artist ?? "Unknown artist",
+      album: file.album,
+      durationSec: file.durationSec,
+      artworkUrl: file.hasArtwork ? `${LOCAL_ARTWORK_PREFIX}${file.path}` : undefined,
+      playlistItemId: file.path,
+      localPath: file.path,
+    }));
 
   // Apply saved track order if it exists
   const order = readTrackOrder();

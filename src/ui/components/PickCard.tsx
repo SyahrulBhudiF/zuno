@@ -120,7 +120,7 @@ export function PickCard({
       */}
       <span
         className={cn(
-          "relative block size-full overflow-hidden rounded-2xl bg-card shadow-md",
+          "relative block size-full overflow-hidden rounded-xl bg-card shadow-md",
           "ring-1 ring-white/10 transition-all duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)]",
           !disabled && "group-hover/pick:-translate-y-1.5 group-hover/pick:shadow-xl group-hover/pick:ring-white/25",
         )}

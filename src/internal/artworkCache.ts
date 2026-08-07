@@ -20,6 +20,8 @@
  *   what was already learned. Object URLs are deliberately excluded: they die with the page.
  */
 
+import { logInternalWarn } from "./logging";
+
 const MAX_ENTRIES = 500;
 /**
  * Ceiling on blob bytes held at once.
@@ -36,8 +38,17 @@ const resolved = new Map<string, string>();
 /** Values that own a blob and must be revoked when evicted, and what each one weighs. */
 const ownedBlobBytes = new Map<string, number>();
 let totalBlobBytes = 0;
-/** Sources where every candidate and the proxy all failed. */
-const failed = new Set<string>();
+/**
+ * Sources where every candidate and the proxy all failed, and when.
+ *
+ * Timestamped rather than a plain set: a failure used to be permanent for the session, so one
+ * blip — a dropped connection, a rate limit — meant that cover showed the placeholder until
+ * the app restarted, while the same album kept working at every other size because the key
+ * includes the size bucket. That is the "sometimes it loads, sometimes it does not" report.
+ */
+const failed = new Map<string, number>();
+/** How long a failed source is left alone before the ladder is worth walking again. */
+const FAILURE_TTL_MS = 60_000;
 /** Proxy fetches already running, keyed by source URL, so callers share one request. */
 const inFlight = new Map<string, Promise<string | null>>();
 
@@ -99,18 +110,38 @@ export function forgetResolvedArtworkUrl(sourceUrl: string): void {
   schedulePersist();
 }
 
+/**
+ * Drops every cached resolution and failure for a source, across all size buckets.
+ *
+ * Entries are keyed `<source>@<bucket>`, so forgetting one key leaves the same cover cached at
+ * every other size. Used when the bytes behind a source change under us — editing the cover art
+ * embedded in a local file is the case that exists.
+ */
+export function forgetArtworkSource(sourceUrl: string): void {
+  for (const key of [...resolved.keys()]) {
+    if (key === sourceUrl || key.startsWith(`${sourceUrl}@`)) forgetResolvedArtworkUrl(key);
+  }
+  for (const key of [...failed.keys()]) {
+    if (key === sourceUrl || key.startsWith(`${sourceUrl}@`)) failed.delete(key);
+  }
+}
+
 /** True once every candidate and the proxy have failed for this source. */
 export function hasArtworkFailed(sourceUrl: string): boolean {
-  return failed.has(sourceUrl);
+  const failedAt = failed.get(sourceUrl);
+  if (failedAt === undefined) return false;
+  if (Date.now() - failedAt < FAILURE_TTL_MS) return true;
+  failed.delete(sourceUrl);
+  return false;
 }
 
 export function rememberArtworkFailure(sourceUrl: string): void {
   // Bounded the same way, and by the same reasoning, as the resolved map.
   if (failed.size >= MAX_ENTRIES) {
-    const oldest = failed.values().next().value;
+    const oldest = failed.keys().next().value;
     if (oldest !== undefined) failed.delete(oldest);
   }
-  failed.add(sourceUrl);
+  failed.set(sourceUrl, Date.now());
 }
 
 /**
@@ -144,7 +175,13 @@ export function resolveArtworkThroughProxy(
       });
       return objectUrl;
     })
-    .catch(() => {
+    .catch((error: unknown) => {
+      // Logged because this is the path that ends in a placeholder, and it was silent — a
+      // cover that never appeared left nothing behind to explain why.
+      logInternalWarn("artworkCache proxy failed", {
+        sourceUrl,
+        error: error instanceof Error ? error.message : String(error),
+      });
       rememberArtworkFailure(sourceUrl);
       return null;
     })

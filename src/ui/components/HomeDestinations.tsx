@@ -112,8 +112,8 @@ export function HomeDestinations({
                * proportionally a third as heavy and the icon reads as wire. Scaling the stroke
                * with the size is what keeps the weight looking constant.
                */
-              strokeWidth={2.25}
-              className="pointer-events-none absolute -left-3 top-1/2 -translate-y-1/2 text-red-400 transition-colors group-hover/dest:text-red-800"
+              strokeWidth={1.85}
+              className="pointer-events-none absolute -left-3 top-1/2 -translate-y-1/2 text-gray-300 transition-colors group-hover/dest:text-red-400"
               aria-hidden="true"
             />
 

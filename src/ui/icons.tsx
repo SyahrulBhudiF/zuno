@@ -66,6 +66,7 @@ export { Microphone2Icon as LyricsActiveIcon } from "@solar-icons/react/bold/mic
 export { FolderIcon } from "@solar-icons/react/linear/folder";
 export { FolderOpenIcon } from "@solar-icons/react/linear/folder-open";
 export { AddFolderIcon as FolderAddIcon } from "@solar-icons/react/linear/add-folder";
+export { GalleryIcon as ImageIcon } from "@solar-icons/react/linear/gallery";
 export { DocumentTextIcon as LogFileIcon } from "@solar-icons/react/linear/document-text";
 
 /* ── Navigation & chrome ───────────────────────────────────────────── */

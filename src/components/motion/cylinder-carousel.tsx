@@ -12,10 +12,12 @@ import {
 } from "motion/react";
 import {
   Children,
+  type FocusEvent as ReactFocusEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type WheelEvent as ReactWheelEvent,
@@ -67,7 +69,11 @@ export interface CylinderCarouselProps {
   autoRotateSpeed?: number;
   defaultIndex?: number;
   onIndexChange?: (index: number) => void;
-  /** Stage height in px. Defaults to `itemSize`. */
+  /**
+   * Maximum stage height in px. The stage takes the lesser of this and what the row actually
+   * needs, so a narrow container does not leave a band of dead space under smaller cards.
+   * Defaults to the row's own height.
+   */
   height?: number;
   className?: string;
 }
@@ -162,7 +168,8 @@ function CarouselBall({
 
   return (
     <motion.div
-      className="absolute top-1/2 left-1/2"
+      data-ball-index={index}
+      className="absolute top-1/2 left-1/2 overflow-y-visible"
       style={{
         x,
         y,
@@ -202,28 +209,42 @@ export function CylinderCarousel({
 
   const stageRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
-  useEffect(() => {
+  // Layout effect, not effect: an effect measures after paint, so the first frame laid out at
+  // the 800px fallback below and then visibly jumped to the real width.
+  useLayoutEffect(() => {
     const el = stageRef.current;
     if (!el) return;
+    setWidth(el.clientWidth);
     const ro = new ResizeObserver(([entry]) => {
       setWidth(entry.contentRect.width);
     });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  // Sized so `visibleItems` balls sit fully in frame and the next one out on
-  // each side straddles the container edge, half visible.
   const stageWidth = width || 800;
   const halfWidth = stageWidth / 2;
-  const edgeOffset = (visibleItems + 1) / 2;
+
+  /*
+   * `visibleItems` is a ceiling, not a fixed count.
+   *
+   * Held fixed, a narrow stage divides the same number of slots into a smaller width and the
+   * fit rule shrinks every card to keep them apart — so the window that has least room shows
+   * the most cards, at a size where the title is unreadable. Dropping slots instead keeps the
+   * cards legible and lets the row show fewer of them, which is the trade a shelf wants.
+   */
+  const minSlotPx = itemSize * itemAspect * 0.62;
+  const slots = Math.max(3, Math.min(visibleItems, Math.floor(stageWidth / minSlotPx) || 3));
+  // Sized so `slots` balls sit fully in frame and the next one out on
+  // each side straddles the container edge, half visible.
+  const edgeOffset = (slots + 1) / 2;
 
   // Fit: the resting row's diameters may take at most ~66% of the stage — the
   // rest is air between balls plus the half-visible ball on each edge.
   // `itemSize` only caps the result.
   const convex = variant === "convex";
   let scaleSum = 0;
-  for (let i = 0; i < visibleItems; i++) {
-    const t = Math.abs(i - (visibleItems - 1) / 2) / edgeOffset;
+  for (let i = 0; i < slots; i++) {
+    const t = Math.abs(i - (slots - 1) / 2) / edgeOffset;
     scaleSum += convex
       ? 1 - (1 - minScale) * t
       : minScale + (1 - minScale) * t;
@@ -232,7 +253,7 @@ export function CylinderCarousel({
   // is allowed to grow until *it* fills the budget rather than until a square row would.
   const size = Math.min(itemSize, (stageWidth * 1) / (scaleSum * itemAspect));
 
-  const gap = stageWidth / (visibleItems + 1);
+  const gap = stageWidth / (slots + 1);
   const arc = arcProp ?? size * 0.35;
 
   // Perspective constants. The ball one slot past the frame edge sits at wall
@@ -249,7 +270,6 @@ export function CylinderCarousel({
   // pointer velocity to a soft spring so the roll glides on and settles free.
   const scroll = useMotionValue(defaultIndex);
   const indexRef = useRef(defaultIndex);
-  const [, setActiveIndex] = useState(defaultIndex);
   const glideRef = useRef<AnimationPlaybackControls | null>(null);
   const draggingRef = useRef(false);
   const hoverRef = useRef(false);
@@ -258,9 +278,14 @@ export function CylinderCarousel({
     if (count === 0) return;
     const unsub = scroll.on("change", (v) => {
       const idx = ((Math.round(v) % count) + count) % count;
+      /*
+       * No state here. This used to also set an `activeIndex` nothing read, so every card the
+       * row passed re-rendered the carousel and rebuilt all N balls' props — mid-drag, for a
+       * value with no consumer. Everything on screen is driven by motion values, which write
+       * to the DOM without React.
+       */
       if (idx !== indexRef.current) {
         indexRef.current = idx;
-        setActiveIndex(idx);
         onIndexChange?.(idx);
       }
     });
@@ -371,13 +396,56 @@ export function CylinderCarousel({
     [scroll, glideTo],
   );
 
+  /** Rolls to `index` the short way round, since the row wraps in both directions. */
+  const rollToIndex = useCallback(
+    (index: number) => {
+      if (count === 0) return;
+      const current = scroll.get();
+      let offset = index - current;
+      offset -= Math.round(offset / count) * count;
+      if (Math.abs(offset) < 0.01) return;
+      glideTo(current + offset, 0);
+    },
+    [count, scroll, glideTo],
+  );
+
+  /*
+   * Tab lands on cards that are off-stage — they are positioned by transform, so they are
+   * still in the tab order wherever the roll has left them. Without this the focus ring goes
+   * somewhere invisible and the keyboard user is navigating a row they cannot see.
+   */
+  const onFocusCapture = useCallback(
+    (e: ReactFocusEvent<HTMLDivElement>) => {
+      const target = e.target as HTMLElement | null;
+      /*
+       * Keyboard focus only. Chromium focuses a card on pointer press — including the right
+       * button — so without this a right-click rolled the row out from under the cursor and
+       * left the context menu pointing at nothing. `:focus-visible` is exactly the "focus that
+       * arrived by keyboard" distinction, so the browser makes the call rather than a guess.
+       */
+      if (!target?.matches?.(":focus-visible")) return;
+      const ball = target.closest("[data-ball-index]");
+      if (!ball) return;
+      const index = Number(ball.getAttribute("data-ball-index"));
+      if (Number.isFinite(index)) rollToIndex(index);
+    },
+    [rollToIndex],
+  );
+
   const wheelSettleRef = useRef<number | undefined>(undefined);
   const onWheel = useCallback(
     (e: ReactWheelEvent) => {
+      /*
+       * Horizontal intent only. This used to fall back to `deltaY`, so a plain mouse wheel
+       * over the shelf rolled the shelf instead of scrolling the page — and since the row sits
+       * mid-page, the wheel could not get past it. A trackpad swipe and shift+wheel are the
+       * two gestures that actually mean "sideways"; everything else belongs to the page.
+       */
+      const horizontal = e.shiftKey ? e.deltaY : e.deltaX;
+      if (Math.abs(horizontal) <= Math.abs(e.deltaY) && !e.shiftKey) return;
+
       stopGlide();
-      const delta =
-        Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-      scroll.set(scroll.get() + delta / gap);
+      scroll.set(scroll.get() + horizontal / gap);
       if (wheelSettleRef.current) window.clearTimeout(wheelSettleRef.current);
       wheelSettleRef.current = window.setTimeout(
         () => settle(scroll.getVelocity()),
@@ -386,6 +454,9 @@ export function CylinderCarousel({
     },
     [scroll, gap, settle, stopGlide],
   );
+
+  // A settle scheduled by the last wheel tick would otherwise fire into an unmounted carousel.
+  useEffect(() => () => window.clearTimeout(wheelSettleRef.current), []);
 
   useEffect(() => {
     if (!autoRotate || reduce || count === 0) return;
@@ -403,7 +474,8 @@ export function CylinderCarousel({
     return () => cancelAnimationFrame(raf);
   }, [autoRotate, autoRotateSpeed, reduce, count, scroll]);
 
-  const stageHeight = height ?? size;
+  // `size + arc` is what the row occupies: the tallest card plus the curve it rides on.
+  const stageHeight = Math.min(height ?? Number.POSITIVE_INFINITY, size + arc);
 
   return (
       <div
@@ -421,6 +493,7 @@ export function CylinderCarousel({
             rollBy(-1);
           }
         }}
+        onFocusCapture={onFocusCapture}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -436,7 +509,7 @@ export function CylinderCarousel({
           // clip-path, not overflow: it also clips the GPU-composited balls
           "relative w-full touch-none select-none outline-none [clip-path:inset(0)]",
           "cursor-grab active:cursor-grabbing",
-          "focus-visible:ring-2 focus-visible:ring-foreground/20",
+          "focus-visible:ring-2 focus-visible:ring-foreground/20 overflow-y-visible",
           className,
         )}
         style={{ height: stageHeight }}
