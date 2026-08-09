@@ -3797,6 +3797,15 @@ fn native_audio_drop_standby(
     state.send(audio::Command::DropStandby).map_err(cache_error)
 }
 
+/// Abandons the active deck's load without touching a standby that may already hold the next
+/// track. See `Command::DropActive`.
+#[tauri::command]
+fn native_audio_drop_active(
+    state: tauri::State<'_, audio::NativeAudio>,
+) -> Result<(), CommandError> {
+    state.send(audio::Command::DropActive).map_err(cache_error)
+}
+
 #[tauri::command]
 async fn fetch_youtube_music_audio(video_id: String) -> Result<AudioPayload, CommandError> {
     let started_at = Instant::now();
@@ -4702,6 +4711,7 @@ pub fn run() {
             native_audio_transition,
             native_audio_has_standby,
             native_audio_drop_standby,
+            native_audio_drop_active,
             native_audio_set_equalizer,
             media_server_release,
             proxy_http_request,

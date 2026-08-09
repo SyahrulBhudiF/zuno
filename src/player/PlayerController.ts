@@ -4,6 +4,7 @@ import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } 
 import { isPrematureEnd } from "./prematureEnd";
 import { AudioEngine } from "./AudioEngine";
 import { Queue } from "./Queue";
+import { NavigationCoalescer } from "./navigationCoalescer";
 import { recordPlay } from "./playHistory";
 import { computeQueueWindow } from "./queueWindow";
 import { getOfflineTrack, isTrackDownloaded } from "./offlineStore";
@@ -190,7 +191,8 @@ export class PlayerController {
   private sleepTimerId: number | null = null;
   /** Fade the last few seconds, so sleep does not end on an abrupt cut. */
   private sleepFadeId: number | null = null;
-  private navigationRequest: Promise<void> = Promise.resolve();
+  /** Coalesces a burst of skip forward/back clicks — see `NavigationCoalescer`. */
+  private readonly navigationCoalescer = new NavigationCoalescer();
   private playbackOrderMode: PlaybackOrderMode = "in-order";
   private shuffleEnabled = false;
   private isPlaylistMode = false;
@@ -381,6 +383,10 @@ export class PlayerController {
       this.audioEngine.stop();
       this.audioEngine.silenceCompetingPlayback();
     }
+    // Captured before the reset below: this is the only place that still knows whether a track
+    // was already loaded, and `warmNextTrack` below needs that to tell a cold start apart from
+    // an ordinary skip.
+    const hadLoadedTrack = this.loadedTrackId !== null;
     this.loadedTrackId = null;
     this.pendingSeekTime = null;
     this.setState({ status: "loading", error: null });
@@ -463,16 +469,20 @@ export class PlayerController {
         void this.primeRadioQueue(track, requestId);
       }
       /*
-       * Warm the next track *while* this one loads, not after.
+       * Warm the next track *while* this one loads, not after — but only once something is
+       * already loaded.
        *
        * Resolution costs the better part of a second, and starting only once this track had
        * finished meant a skip inside the first second always lost the race — which is exactly
        * how someone skips through a queue looking for something. Both are network-bound and
-       * independent, so they overlap for free. The call at the end of `ensureTrackLoaded`
-       * stays as the catch-up for anything this one could not see yet, and no-ops when the
-       * slot is already filled.
+       * independent, so they overlap for free — *when* there is already a track holding the
+       * deck. On a cold start there is nothing playing yet to hide the cost behind, so this
+       * would instead double up on the same per-client resolve walk and JS evaluator that
+       * `ensureTrackLoaded` below is about to use for this track, measured as roughly doubling
+       * first-track latency. The call at the end of `ensureTrackLoaded` still fires once this
+       * track actually lands, so a cold start is one warm behind rather than zero.
        */
-      this.warmNextTrack();
+      if (hadLoadedTrack) this.warmNextTrack();
       await this.ensureTrackLoaded(track);
       if (requestId !== this.playTrackRequestId) return false;
 
@@ -570,7 +580,7 @@ export class PlayerController {
 
   async skipToNext(): Promise<void> {
     this.cancelLoadingPlayback();
-    return this.queueNavigation(() => this.skipToNextNow());
+    return this.runNavigation(() => this.skipToNextNow());
   }
 
   getPlaybackOrderMode(): PlaybackOrderMode {
@@ -1738,7 +1748,7 @@ export class PlayerController {
 
   async skipToPrevious(): Promise<void> {
     this.cancelLoadingPlayback();
-    return this.queueNavigation(() => this.skipToPreviousNow());
+    return this.runNavigation(() => this.skipToPreviousNow());
   }
 
   private async skipToPreviousNow(): Promise<void> {
@@ -1768,10 +1778,15 @@ export class PlayerController {
     }
   }
 
-  private queueNavigation(operation: () => Promise<void>): Promise<void> {
-    const request = this.navigationRequest.then(operation, operation);
-    this.navigationRequest = request.catch(() => undefined);
-    return request;
+  /**
+   * Runs a navigation step through the coalescer.
+   *
+   * `skipToNextNow`/`skipToPreviousNow` call `queue.next`/`queue.prev` as their first step, so a
+   * collapsed follow-up always lands on wherever a burst actually left the queue pointer rather
+   * than replaying a stale target.
+   */
+  private runNavigation(operation: () => Promise<void>): Promise<void> {
+    return this.navigationCoalescer.run(operation);
   }
 
   private shouldResumeAfterNavigation(): boolean {
@@ -1782,7 +1797,9 @@ export class PlayerController {
     if (this.state.status !== "loading") return;
 
     this.playTrackRequestId += 1;
-    this.audioEngine.stop();
+    // Not `stop()`: that tears down the standby deck too, which is exactly what is not supposed
+    // to happen here — see `abandonActiveLoad`.
+    this.audioEngine.abandonActiveLoad();
     this.loadedTrackId = null;
     this.pendingSeekTime = null;
   }

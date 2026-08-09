@@ -534,6 +534,33 @@ export class AudioEngine {
     this.claimPlayback();
   }
 
+  /**
+   * Abandons whatever is mid-load on the active deck, without disturbing a standby that might
+   * already hold (or be mid-decode for) the next track.
+   *
+   * The narrow alternative to `stop()` for a skip that lands before the previous load finished:
+   * the listener is leaving the track that was loading, not the one preloading behind it.
+   * `stop()`'s blanket teardown cleared both — Rust's `Command::Stop` clears every deck, and the
+   * IFrame `discardStandby()` invalidates the standby's cued video the same way — which is why a
+   * preload never survived a skip that arrived mid-load.
+   */
+  abandonActiveLoad(): void {
+    this.loadRequestId += 1;
+    this.cancelFade();
+    this.rejectStateWaiters(new Error("Playback was abandoned."));
+
+    if (this.rustTrackId) {
+      this.rustTrackId = null;
+      void rustAudio.dropActive().catch((error: unknown) => {
+        rustAudio.warn("AudioEngine rust dropActive failed", error);
+      });
+    }
+    this.iframeFallbackActive = false;
+    this.releaseNativeAudio();
+    this.player?.stopVideo();
+    if (!this.audio) this.currentVideoId = null;
+  }
+
   dispose(): void {
     this.stop();
     this.player?.destroy();
