@@ -529,12 +529,14 @@ export class YouTubeMusicDataSource extends DataSource {
           fetch: tauriFetch,
           retrieve_player: false,
           generate_session_locally: false,
+          retrieve_innertube_config: false,
         });
 
         return Innertube.create({
           fetch: tauriFetch,
           retrieve_player: true,
           generate_session_locally: false,
+          retrieve_innertube_config: false,
           visitor_data: bootstrap.session.context.client.visitorData,
           client_type: ClientType.MUSIC,
         });
