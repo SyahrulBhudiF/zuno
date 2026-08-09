@@ -43,6 +43,7 @@ mod macos_media;
 mod windows_media;
 
 mod audio;
+mod process_memory;
 mod discord_rpc;
 mod equalizer;
 mod opus_source;
@@ -4720,6 +4721,7 @@ pub fn run() {
             local_audio_read_tags,
             local_audio_artwork,
             read_image_file,
+            process_memory::app_memory_report,
             local_audio_write_tags,
             local_audio_watch,
             local_audio_unwatch,
