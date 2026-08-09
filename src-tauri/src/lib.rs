@@ -45,6 +45,7 @@ mod windows_media;
 mod linux_media;
 
 mod audio;
+mod process_memory;
 mod discord_rpc;
 mod equalizer;
 mod opus_source;
@@ -3798,6 +3799,15 @@ fn native_audio_drop_standby(
     state.send(audio::Command::DropStandby).map_err(cache_error)
 }
 
+/// Abandons the active deck's load without touching a standby that may already hold the next
+/// track. See `Command::DropActive`.
+#[tauri::command]
+fn native_audio_drop_active(
+    state: tauri::State<'_, audio::NativeAudio>,
+) -> Result<(), CommandError> {
+    state.send(audio::Command::DropActive).map_err(cache_error)
+}
+
 #[tauri::command]
 async fn fetch_youtube_music_audio(video_id: String) -> Result<AudioPayload, CommandError> {
     let started_at = Instant::now();
@@ -4343,15 +4353,33 @@ async fn proxy_http_request(
         }
     }
 
-    eprintln!("[internal][tauri][debug] proxy_http_request headers:");
-    for (key, value) in &input.headers {
-        let normalized_key = key.to_ascii_lowercase();
-        let safe_value = if normalized_key == "authorization" || normalized_key == "cookie" {
-            "[redacted]"
-        } else {
-            value
-        };
-        eprintln!("  {}: {}", key, safe_value);
+    /*
+     * One line, not one call per header.
+     *
+     * This used to `eprintln!` every header separately — 10-15 calls per request, each through
+     * the macro that sanitizes, writes to stderr *and* takes a mutex to append to the log file
+     * on disk. A search-heavy session (or a track load, which alone fires several proxied
+     * requests) turned this into hundreds of synchronous disk writes for a debug dump the line
+     * above it already summarizes the count of. Joining first pays that cost once per request
+     * instead of once per header, with the same redaction.
+     */
+    if !input.headers.is_empty() {
+        let header_summary = input
+            .headers
+            .iter()
+            .map(|(key, value)| {
+                let normalized_key = key.to_ascii_lowercase();
+                let safe_value = if normalized_key == "authorization" || normalized_key == "cookie"
+                {
+                    "[redacted]"
+                } else {
+                    value.as_str()
+                };
+                format!("{key}={safe_value}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!("[internal][tauri][debug] proxy_http_request headers: {header_summary}");
     }
     let method = reqwest::Method::from_bytes(input.method.as_bytes()).map_err(|error| {
         eprintln!(
@@ -4705,6 +4733,7 @@ pub fn run() {
             native_audio_transition,
             native_audio_has_standby,
             native_audio_drop_standby,
+            native_audio_drop_active,
             native_audio_set_equalizer,
             media_server_release,
             proxy_http_request,
@@ -4724,6 +4753,7 @@ pub fn run() {
             local_audio_read_tags,
             local_audio_artwork,
             read_image_file,
+            process_memory::app_memory_report,
             local_audio_write_tags,
             local_audio_watch,
             local_audio_unwatch,

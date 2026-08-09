@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { logInternalInfo } from "./logging";
 
 /**
@@ -50,11 +51,25 @@ const peak = {
   jsHeapUsedMb: 0,
   domNodes: 0,
   images: 0,
+  commitMb: 0,
 };
+
+interface ProcessMemory {
+  pid: number;
+  name: string;
+  workingSetMb: number;
+  commitMb: number;
+}
+
+interface AppMemoryReport {
+  totalWorkingSetMb: number;
+  totalCommitMb: number;
+  processes: ProcessMemory[];
+}
 
 let firstJsHeapUsedMb: number | null = null;
 
-function sampleMemory(): void {
+async function sampleMemory(): Promise<void> {
   const heap = readJsHeap();
   const jsHeapUsedMb = heap ? toMb(heap.usedJSHeapSize) : null;
   /*
@@ -74,6 +89,21 @@ function sampleMemory(): void {
   }
   peak.domNodes = Math.max(peak.domNodes, domNodes);
   peak.images = Math.max(peak.images, images);
+
+  /*
+   * The whole process tree, not just this renderer.
+   *
+   * A WebView2 app is a browser process, a GPU process, a renderer per window and utility
+   * processes. Every number above this line describes one of them — and on this app the GPU
+   * process has been carrying several times the renderer's memory, entirely unseen.
+   *
+   * Commit rather than working set is what `totalCommitMb` and the peak track: working set is
+   * how much physical RAM the OS currently allows, so it falls whenever anything trims it and
+   * says nothing about what is held.
+   */
+  const processes = await invoke<AppMemoryReport>("app_memory_report").catch(() => null);
+  if (processes) peak.commitMb = Math.max(peak.commitMb, processes.totalCommitMb);
+  const biggest = processes?.processes[0];
 
   logInternalInfo("memory.sample", {
     jsHeapUsedMb,
@@ -97,19 +127,27 @@ function sampleMemory(): void {
       ? Math.round((jsHeapUsedMb - firstJsHeapUsedMb) * 10) / 10
       : null,
     sinceStartMin: Math.round((performance.now() / 60_000) * 10) / 10,
+    totalCommitMb: processes?.totalCommitMb ?? null,
+    totalWorkingSetMb: processes?.totalWorkingSetMb ?? null,
+    peakCommitMb: processes ? peak.commitMb : null,
+    // Named so the log says which process to chase rather than only that something grew.
+    biggestProcess: biggest ? `${biggest.name}#${biggest.pid}` : null,
+    biggestProcessCommitMb: biggest?.commitMb ?? null,
+    processCommitMb: processes?.processes.map((item) =>
+      `${item.name}#${item.pid}:${item.commitMb}`).join(" ") ?? null,
   });
 }
 
 export function startMemoryReport(): void {
-  sampleMemory();
-  window.setInterval(sampleMemory, SAMPLE_INTERVAL_MS);
+  void sampleMemory();
+  window.setInterval(() => void sampleMemory(), SAMPLE_INTERVAL_MS);
   /*
    * Also on the way out of a page. Navigation is when a leak shows itself — anything the old
    * view failed to release is still held while the new one builds — and it is precisely what a
    * fixed interval misses.
    */
-  window.addEventListener("pagehide", sampleMemory);
+  window.addEventListener("pagehide", () => void sampleMemory());
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") sampleMemory();
+    if (document.visibilityState === "hidden") void sampleMemory();
   });
 }

@@ -192,9 +192,9 @@ export { shallowEqual } from "../internal/shallowEqual";
 /**
  * Subscribes to a slice of a store instead of the whole thing.
  *
- * The player state is one object, so `usePlayerState` re-renders its consumer on any change
+ * The player state is one object, so subscribing to the whole thing re-renders on any change
  * to any field — dragging the volume slider used to re-render the entire application,
- * because the root subscribes to the same object as the volume control does.
+ * because the root subscribed to the same object as the volume control did.
  *
  * The cache is what makes an object-returning selector legal here: `useSyncExternalStore`
  * compares snapshots with `Object.is` and calls `getSnapshot` more than once per render, so
@@ -233,12 +233,9 @@ function useStoreSelector<S, T>(
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-export function usePlayerState() {
-  return useSyncExternalStore(subscribeToPlayer, getPlayerState, getPlayerState);
-}
-
 /**
- * Prefer this over `usePlayerState` in anything that reads one or two fields.
+ * Prefer this over subscribing to the whole player state in anything that reads one or two
+ * fields.
  *
  * Pass `shallowEqual` when the selector returns an object; the default `Object.is` is right
  * for the common case of selecting a single field or a derived boolean.

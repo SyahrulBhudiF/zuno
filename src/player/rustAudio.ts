@@ -134,6 +134,11 @@ export function dropStandby(): Promise<void> {
   return invoke("native_audio_drop_standby");
 }
 
+/** Stops and clears the active deck only. See `Command::DropActive` on the Rust side. */
+export function dropActive(): Promise<void> {
+  return invoke("native_audio_drop_active");
+}
+
 /**
  * Drops the audio bodies the local media server is holding.
  *

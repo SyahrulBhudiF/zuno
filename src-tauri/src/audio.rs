@@ -259,6 +259,14 @@ pub(crate) enum Command {
         reply: Sender<bool>,
     },
     DropStandby,
+    /// Stops and clears the active deck only, leaving the standby deck untouched.
+    ///
+    /// The narrow counterpart to `DropStandby`, and the one a cancelled *load* needs: `Stop`
+    /// clears both decks, which is right for an actual stop but wrong for a skip that lands
+    /// mid-load — it discarded whatever the standby was decoding for the track the skip was
+    /// heading towards, so a preload could never survive a second click arriving before the
+    /// first one finished.
+    DropActive,
 }
 
 /// The handle held as Tauri state. Cheap to clone, trivially `Send + Sync`.
@@ -579,6 +587,13 @@ impl Engine {
             Command::DropStandby => {
                 let standby = self.standby();
                 self.decks[standby].clear();
+            }
+            Command::DropActive => {
+                // A fade reads the active deck's volume every tick; cancel it first, or the
+                // next tick would ramp a deck that was just cleared.
+                self.cancel_fade();
+                self.decks[self.active].clear();
+                self.playing = false;
             }
         }
         false

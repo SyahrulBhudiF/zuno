@@ -191,6 +191,15 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 zuno
 GDK_BACKEND=x11 zuno
 ```
 
+> [!TIP]
+> **An EGL error on launch.** Preload the system Wayland client library:
+>
+> ```bash
+> LD_PRELOAD=/usr/lib/libwayland-client.so ~/Downloads/zuno*.AppImage
+> ```
+>
+> In Gear Lever, add `LD_PRELOAD=/usr/lib/libwayland-client.so` to Zuno's environment variables.
+
 Open the app log from **Settings → Library → Application log** for anything else, and attach
 it to an issue. The desktop environment, display server and distro all help a lot for Linux
 bugs. The log also lives at `~/.local/share/com.zuno.desktop/logs/current.log`.

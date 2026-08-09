@@ -423,6 +423,13 @@ export class YouTubeMusicDataSource extends DataSource {
       on_behalf_of_user: this.musicOnBehalfOfUser ?? undefined,
       retrieve_player: retrievePlayer,
       generate_session_locally: true,
+      /*
+       * This app never reads the cold-config/experiment-flag data this fetches — proven by
+       * `refreshMusicClientMetadata` deleting it outright right after client creation — and the
+       * request 401s unconditionally for every client type here regardless. Retrieving it was
+       * a POST that always failed, on every client, on every session.
+       */
+      retrieve_innertube_config: false,
     } as const;
   }
 
@@ -522,12 +529,14 @@ export class YouTubeMusicDataSource extends DataSource {
           fetch: tauriFetch,
           retrieve_player: false,
           generate_session_locally: false,
+          retrieve_innertube_config: false,
         });
 
         return Innertube.create({
           fetch: tauriFetch,
           retrieve_player: true,
           generate_session_locally: false,
+          retrieve_innertube_config: false,
           visitor_data: bootstrap.session.context.client.visitorData,
           client_type: ClientType.MUSIC,
         });
@@ -592,7 +601,6 @@ export class YouTubeMusicDataSource extends DataSource {
       if (client.session.context.client.mainAppWebInfo) {
         client.session.context.client.mainAppWebInfo.graftUrl = "https://music.youtube.com";
       }
-      delete client.session.context.client.configInfo;
       if (apiKey) client.session.api_key = apiKey;
 
       logInternalInfo("YouTubeMusicDataSource.refreshMusicClientMetadata success", {
