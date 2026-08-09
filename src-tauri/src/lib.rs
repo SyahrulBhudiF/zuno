@@ -4351,15 +4351,33 @@ async fn proxy_http_request(
         }
     }
 
-    eprintln!("[internal][tauri][debug] proxy_http_request headers:");
-    for (key, value) in &input.headers {
-        let normalized_key = key.to_ascii_lowercase();
-        let safe_value = if normalized_key == "authorization" || normalized_key == "cookie" {
-            "[redacted]"
-        } else {
-            value
-        };
-        eprintln!("  {}: {}", key, safe_value);
+    /*
+     * One line, not one call per header.
+     *
+     * This used to `eprintln!` every header separately — 10-15 calls per request, each through
+     * the macro that sanitizes, writes to stderr *and* takes a mutex to append to the log file
+     * on disk. A search-heavy session (or a track load, which alone fires several proxied
+     * requests) turned this into hundreds of synchronous disk writes for a debug dump the line
+     * above it already summarizes the count of. Joining first pays that cost once per request
+     * instead of once per header, with the same redaction.
+     */
+    if !input.headers.is_empty() {
+        let header_summary = input
+            .headers
+            .iter()
+            .map(|(key, value)| {
+                let normalized_key = key.to_ascii_lowercase();
+                let safe_value = if normalized_key == "authorization" || normalized_key == "cookie"
+                {
+                    "[redacted]"
+                } else {
+                    value.as_str()
+                };
+                format!("{key}={safe_value}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!("[internal][tauri][debug] proxy_http_request headers: {header_summary}");
     }
     let method = reqwest::Method::from_bytes(input.method.as_bytes()).map_err(|error| {
         eprintln!(
