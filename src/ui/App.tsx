@@ -45,6 +45,7 @@ import { TitleBar } from "./components/TitleBar";
 import { PlayerBar } from "./components/player/PlayerBar";
 import { QueuePanel } from "./components/player/QueuePanel";
 import { useQueuePanelCollapsed } from "./settings/queuePanel";
+import { useNativeWindowControls } from "./settings/windowControls";
 
 /** Wide enough for a 44px cover plus breathing room, matching the sidebar rail's feel. */
 const COLLAPSED_QUEUE_WIDTH = 62;
@@ -362,6 +363,7 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(62);
   const [queuePanelWidth, setQueuePanelWidth] = useState(340);
   const isQueuePanelCollapsed = useQueuePanelCollapsed();
+  const nativeWindowControls = useNativeWindowControls();
   const [loadingScreenState, setLoadingScreenState] = useState<"visible" | "leaving" | "hidden">("visible");
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(() =>
     readLocalOnboardingComplete() ? true : null
@@ -1974,8 +1976,15 @@ useEffect(() => {
       drawn into nothing and clipped. The specular line along the top edge is the same cue
       the picks cards and the mini player use, which is what makes the whole app read as one
       material rather than three separately-styled surfaces.
+
+      Both drop out under OS native decorations: the WM already draws a real frame above the
+      webview there, so this edge would just be a stray line under the OS title bar.
     */}
-    <div className="relative flex h-screen flex-col overflow-hidden rounded-[var(--window-radius)] border border-border ring-1 ring-inset ring-[var(--window-edge)]">
+    <div
+      className={`relative flex h-screen flex-col overflow-hidden rounded-[var(--window-radius)] ${
+        nativeWindowControls ? "" : "border border-border ring-1 ring-inset ring-[var(--window-edge)]"
+      }`}
+    >
  {/*    {!paperPcMode && <StarField />}
     <span
       className="pointer-events-none absolute inset-x-0 top-0 z-50 h-px bg-linear-to-r from-transparent via-[var(--window-edge-highlight)] to-transparent"

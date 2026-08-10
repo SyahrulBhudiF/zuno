@@ -7,6 +7,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { Switch } from "@/components/motion/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/motion/tabs";
 import { RangeSlider } from "@/components/motion/range-slider";
 import {
   EQUALIZER_BANDS_HZ,
@@ -124,8 +125,10 @@ import {
   useToolbarItemVisible,
 } from "../settings/toolbarItems";
 import {
+  setForceWindowControls,
   setNativeWindowControls,
   setWindowsStyleWindowControls,
+  useForceWindowControls,
   useNativeWindowControls,
   useWindowsStyleWindowControls,
 } from "../settings/windowControls";
@@ -189,7 +192,7 @@ import {
   setLastFmScrobblingEnabled,
   useLastFmScrobblingEnabled,
 } from "../settings/lastfm";
-import { isLinux } from "../platform";
+import { isLinux, isTilingWindowManager, subscribeTilingWindowManager } from "../platform";
 import { GITHUB_NEW_ISSUE_URL, GITHUB_REPOSITORY_URL } from "../links";
 import { AccountAvatar, AccountSwitcher } from "../components/AccountSwitcher";
 import {
@@ -568,6 +571,8 @@ function SettingsCardHeader({
 /** Quiet outbound links in the page header. */
 type SettingsTab = "about" | "appearance" | "playback" | "system" | "shortcuts" | "window";
 
+type WindowControlStyle = "macos" | "windows" | "native";
+
 const SETTINGS_TABS: Array<{
   id: SettingsTab;
   label: string;
@@ -667,6 +672,27 @@ export function SettingsPage({
   const compactPlayerBar = useCompactPlayerBar();
   const windowsStyleWindowControls = useWindowsStyleWindowControls();
   const nativeWindowControls = useNativeWindowControls();
+  const forceWindowControls = useForceWindowControls();
+  const tilingWindowManager = useSyncExternalStore(
+    subscribeTilingWindowManager,
+    isTilingWindowManager,
+    () => false,
+  );
+  // "Native" and "Windows-style" used to be two separate switches, one of which only meant
+  // anything when the other was off. Collapsing them into one three-way pick removes the
+  // combination that did nothing (native + windows-style both on).
+  const windowControlStyle: WindowControlStyle = nativeWindowControls
+    ? "native"
+    : windowsStyleWindowControls ? "windows" : "macos";
+  const handleWindowControlStyleChange = (style: WindowControlStyle) => {
+    const goingNative = style === "native";
+    if (goingNative !== nativeWindowControls) {
+      setNativeWindowControls(goingNative);
+      // GTK decorations don't reliably flip live on Linux, so this style needs a fresh window.
+      if (isLinux) void relaunch().catch(() => window.location.reload());
+    }
+    if (!goingNative) setWindowsStyleWindowControls(style === "windows");
+  };
   const mainWindowGeometryPersistenceEnabled = useMainWindowGeometryPersistenceEnabled();
   const minimizeToTray = useMinimizeToTray();
   const linuxMediaSession = useLinuxMediaSession();
@@ -1947,27 +1973,40 @@ export function SettingsPage({
               </button>
             </div>
 
-            <SettingToggle
-              title="Windows-style controls"
-              description="Use minimize, maximize, and close buttons with square edges."
-              checked={windowsStyleWindowControls}
-              disabled={nativeWindowControls}
-              onCheckedChange={setWindowsStyleWindowControls}
-            />
-
-            <SettingToggle
-              title="Use OS native controls"
+            <SettingRow
+              title="Window controls"
               description={isLinux
-                ? "Let the operating system draw the window frame and title bar. The app restarts to apply this on Linux."
-                : "Let the operating system draw the window frame and title bar."}
-              checked={nativeWindowControls}
-              onCheckedChange={(checked) => {
-                setNativeWindowControls(checked);
-                if (isLinux) {
-                  void relaunch().catch(() => window.location.reload());
-                }
-              }}
-            />
+                ? "How minimize, maximize and close are drawn. Switching OS native restarts the app."
+                : "How minimize, maximize and close are drawn."}
+            >
+              {(labelId) => (
+                <div role="group" aria-labelledby={labelId}>
+                  <Tabs
+                    value={windowControlStyle}
+                    onValueChange={(value) =>
+                      handleWindowControlStyleChange(value as WindowControlStyle)}
+                    variant="segment"
+                  >
+                    <TabsList>
+                      <TabsTrigger value="macos">macOS</TabsTrigger>
+                      <TabsTrigger value="windows">Windows</TabsTrigger>
+                      <TabsTrigger value="native">OS native</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                </div>
+              )}
+            </SettingRow>
+
+            {/* Only reachable when it does something: hidden once native chrome takes over,
+                and off tiling compositors the buttons already show without this. */}
+            {isLinux && tilingWindowManager && windowControlStyle !== "native" && (
+              <SettingToggle
+                title="Show on this compositor"
+                description="Tiling compositors don't draw window buttons for apps, so they're hidden by default. Turn this on to show them anyway."
+                checked={forceWindowControls}
+                onCheckedChange={setForceWindowControls}
+              />
+            )}
 
             {isLinux && (
               <SettingToggle

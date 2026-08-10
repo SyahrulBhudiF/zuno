@@ -9,6 +9,7 @@ import {
 
 const WINDOWS_STYLE_STORAGE_KEY = "windows-style-window-controls";
 const NATIVE_CONTROLS_STORAGE_KEY = "native-window-controls";
+const FORCE_CONTROLS_STORAGE_KEY = "force-window-controls-on-tiling-wm";
 const CHANGE_EVENT = "window-controls-change";
 
 function readBooleanSetting(key: string) {
@@ -40,6 +41,13 @@ function readNativeWindowControls() {
   return readLocalBooleanSetting(NATIVE_CONTROLS_STORAGE_KEY, false);
 }
 
+function readForceWindowControls() {
+  // Default off: tiling compositors hide the app-drawn buttons by default (see
+  // TitleBar's showCustomWindowControls). This is the opt-in escape hatch for anyone
+  // who still wants a close/minimize button under a tiling WM.
+  return readBooleanSetting(FORCE_CONTROLS_STORAGE_KEY);
+}
+
 function emitWindowControlsChange() {
   window.dispatchEvent(new Event(CHANGE_EVENT));
 }
@@ -51,6 +59,10 @@ export function setWindowsStyleWindowControls(enabled: boolean) {
 export function setNativeWindowControls(enabled: boolean) {
   writeBooleanSetting(NATIVE_CONTROLS_STORAGE_KEY, enabled);
   void applyNativeWindowControls(enabled);
+}
+
+export function setForceWindowControls(enabled: boolean) {
+  writeBooleanSetting(FORCE_CONTROLS_STORAGE_KEY, enabled);
 }
 
 export async function applyNativeWindowControls(enabled = readNativeWindowControls()) {
@@ -74,6 +86,7 @@ export async function hydrateWindowControlSettings() {
       CHANGE_EVENT,
       () => applyNativeWindowControls(),
     ),
+    hydrateLocalBooleanSetting(FORCE_CONTROLS_STORAGE_KEY, false, CHANGE_EVENT),
   ]);
 }
 
@@ -83,4 +96,8 @@ export function useWindowsStyleWindowControls() {
 
 export function useNativeWindowControls() {
   return useSyncExternalStore(subscribe, readNativeWindowControls, () => false);
+}
+
+export function useForceWindowControls() {
+  return useSyncExternalStore(subscribe, readForceWindowControls, () => false);
 }
