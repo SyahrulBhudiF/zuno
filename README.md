@@ -33,9 +33,9 @@
 
 ## About
 
-Zuno brings YouTube Music to the desktop as a focused application rather than a browser tab.
-There is no official YouTube Music desktop client, so the goal here is a polished one that
-feels native on each platform and stays fast with large libraries.
+Zuno brings YouTube Music to the desktop as its own application, not a browser tab. There is
+no official desktop client, so the goal is a fast, native-feeling one that holds up with large
+libraries.
 
 If you find it useful, **starring the repo** genuinely helps.
 
@@ -45,65 +45,33 @@ If you find it useful, **starring the repo** genuinely helps.
 
 <table>
   <tr>
-    <td width="50%"><b>Home — dark</b></td>
-    <td width="50%"><b>Home — light</b></td>
+    <td width="50%"><b>Synced lyrics</b></td>
+    <td width="50%"><b>Artist page</b></td>
   </tr>
   <tr>
-    <td><img src="assets/img/zuno-d1-1.2.PNG" alt="Zuno home view in dark theme" /></td>
-    <td><img src="assets/img/zuno-l4-1.2.PNG" alt="Zuno home view in light theme" /></td>
+    <td><img src="assets/img/zuno-d-1.2.PNG" alt="Synced lyrics following the current line" /></td>
+    <td><img src="assets/img/zuno-d4-1.2.PNG" alt="An artist page showing popular songs and releases" /></td>
   </tr>
   <tr>
-    <td colspan="2"><sub>The "Made for you" carousel, quick destinations and recently played. The carousel can be hidden from Settings.</sub></td>
-  </tr>
-</table>
-
-<table>
-  <tr>
-    <td width="50%"><b>Lyrics — dark</b></td>
-    <td width="50%"><b>Lyrics — light</b></td>
-  </tr>
-  <tr>
-    <td><img src="assets/img/zuno-d-1.2.PNG" alt="Synced lyrics in dark theme, following the current line" /></td>
-    <td><img src="assets/img/zuno-l2-1.2.PNG" alt="Synced lyrics in light theme, in the two-column layout" /></td>
-  </tr>
-  <tr>
-    <td colspan="2"><sub>Lines fade with distance from the one playing. Click any line to seek, nudge the timing if a match is a little off, and see which source the words came from.</sub></td>
+    <td><sub>Click a line to seek, nudge the timing if a match is off, and see which source the words came from.</sub></td>
+    <td><sub>Popular tracks and every release, filtered by albums, singles or EPs.</sub></td>
   </tr>
 </table>
 
 <table>
   <tr>
-    <td width="50%"><b>Artist — dark</b></td>
-    <td width="50%"><b>Artist — light</b></td>
+    <td width="50%"><b>Queue</b></td>
+    <td width="50%"><b>Library</b></td>
   </tr>
   <tr>
-    <td><img src="assets/img/zuno-d4-1.2.PNG" alt="An artist page in dark theme, showing popular songs and releases" /></td>
-    <td><img src="assets/img/zuno-l3-1.2.PNG" alt="An artist page in light theme, with the queue panel open" /></td>
-  </tr>
-  <tr>
-    <td colspan="2"><sub>Popular tracks and every release, filtered by albums, singles or EPs — with subscribe and shuffle in reach.</sub></td>
-  </tr>
-</table>
-
-<table>
-  <tr>
-    <td width="50%"><b>Queue — dark</b></td>
-    <td width="50%"><b>Library — light</b></td>
-  </tr>
-  <tr>
-    <td><img src="assets/img/zuno-d3-1.2.PNG" alt="The queue panel open beside the home view in dark theme" /></td>
+    <td><img src="assets/img/zuno-d3-1.2.PNG" alt="The queue panel open beside the home view" /></td>
     <td><img src="assets/img/zuno-l5-1.2.PNG" alt="The library songs list, with explicit badges and the now-playing meter" /></td>
   </tr>
   <tr>
-    <td colspan="2"><sub>The queue separates what you added by hand from what came next on its own. The library marks what is liked, downloaded and explicit at a glance.</sub></td>
+    <td><sub>Separates what you added by hand from what came next on its own.</sub></td>
+    <td><sub>Marks what is liked, downloaded and explicit at a glance.</sub></td>
   </tr>
 </table>
-
-<p align="center">
-  <img src="assets/img/zuno-l-1.2.PNG" alt="Search open over an artist page" width="860" />
-  <br />
-  <sub>Search is one keystroke away — Ctrl+Space from anywhere, across artists, songs, playlists and albums.</sub>
-</p>
 
 <p align="center">
   <img src="assets/img/zuno-set-1.2.PNG" alt="Zuno settings, showing the library and lyrics options" width="860" />
@@ -117,14 +85,15 @@ If you find it useful, **starring the repo** genuinely helps.
 
 | Feature | Description |
 |---|---|
+| **Search** | Ctrl+Space from anywhere, across artists, songs, playlists and albums |
 | **Multiple tabs** | Each tab keeps its own queue, volume and player state — start an album in one, browse in another, and the first keeps playing |
 | **Offline downloads** | Save a song, a selection, or a whole album or playlist, with its own quality setting and a size cap you control |
 | **Mini player** | A morphing capsule that appears when you tab away; drag it anywhere, hover to expand |
-| **Synced lyrics** | Line-by-line lyrics that follow the song — not available on the official web client. Click a line to jump to it, nudge the timing when a match is slightly off, and pick which source is tried first |
-| **Lyrics translation** | Show a translation under each line, in any of twenty languages, with an adjustable text size |
-| **Like & dislike** | Rate from the row, the player or the right-click menu; ratings sync to your YouTube Music account |
+| **Synced lyrics** | Line-by-line lyrics that follow the song, unlike the official web client. Click a line to jump to it, nudge the timing if a match is off, and pick which source is tried first |
+| **Lyrics translation** | A translation under each line, in any of twenty languages, with an adjustable text size |
+| **Like & dislike** | Rate from the row, the player or the right-click menu — ratings sync to your YouTube Music account |
 | **Batch actions** | Shift/ctrl-select rows, then queue, download, add to a playlist or remove them together |
-| **Queue control** | Collapses to an artwork rail — end the queue here, build a queue from here, shuffle, clear |
+| **Queue control** | Collapses to an artwork-only rail; end the queue at a track, generate more from it, shuffle or clear what's next |
 | **Recommendations** | Personalised suggestions plus a "surprise me" shuffle — hide the carousel if you would rather open on your library |
 | **Browse** | Explore, charts, moods and genres, and podcasts, with mood chips you can drill into |
 | **Local files** | Folders from your own machine sit alongside your library, with a tag editor for fixing metadata |
@@ -153,17 +122,18 @@ yay -S zuno     # or: paru -S zuno
 
 ## Platform support
 
-- **Windows** — primary supported platform.
-- **macOS** — supported.
-- **Linux** — supported.
+- **Windows** — primary target; the most tested of the three.
+- **macOS** — supported; the build is unsigned (see below).
+- **Linux** — supported across major distros; runs on your system's WebKitGTK and GStreamer.
 
 ### Linux notes
 
-Install the `.deb` or `.rpm`, or `zuno` from the AUR on Arch. These use your system's
-WebKitGTK and GStreamer, which is what playback runs through.
+Install the `.deb` or `.rpm`, or `zuno` from the AUR on Arch. All three run on your system's
+WebKitGTK (rendering) and GStreamer (playback) rather than bundling their own.
 
-**No sound, or "YouTube player error 5".** Playback decodes through GStreamer, and most
-distros do not install the codecs YouTube needs by default:
+#### No sound, or "YouTube player error 5"
+
+Most distros don't install the codecs YouTube needs by default:
 
 ```bash
 # Debian, Ubuntu, Mint
@@ -182,8 +152,10 @@ Confirm they registered:
 gst-inspect-1.0 | grep -E 'avdec_aac|avdec_h264'
 ```
 
-**A blank grey window.** A WebKitGTK rendering problem under Wayland, most often on Nvidia.
-Launch with one of:
+#### A blank grey window
+
+A WebKitGTK rendering problem under Wayland, most often on Nvidia. Launch from a terminal
+with one of:
 
 ```bash
 WEBKIT_DISABLE_DMABUF_RENDERER=1 zuno
@@ -191,26 +163,40 @@ WEBKIT_DISABLE_COMPOSITING_MODE=1 zuno
 GDK_BACKEND=x11 zuno
 ```
 
-> [!TIP]
-> **An EGL error on launch.** Preload the system Wayland client library:
->
-> ```bash
-> LD_PRELOAD=/usr/lib/libwayland-client.so ~/Downloads/zuno*.AppImage
-> ```
->
-> In Gear Lever, add `LD_PRELOAD=/usr/lib/libwayland-client.so` to Zuno's environment variables.
+Launching from an app menu instead? Add the same variable to the `Exec` line of
+`zuno.desktop` (typically `/usr/share/applications/zuno.desktop`, or
+`~/.local/share/applications/zuno.desktop` for a user install):
 
-Open the app log from **Settings → Library → Application log** for anything else, and attach
-it to an issue. The desktop environment, display server and distro all help a lot for Linux
-bugs. The log also lives at `~/.local/share/com.zuno.desktop/logs/current.log`.
+```
+Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 zuno
+```
+
+#### An EGL error on launch
+
+Preload the system Wayland client library:
+
+```bash
+LD_PRELOAD=/usr/lib/libwayland-client.so ~/Downloads/zuno*.AppImage
+```
+
+In Gear Lever, add `LD_PRELOAD=/usr/lib/libwayland-client.so` to Zuno's environment variables.
+
+#### Anything else
+
+Open **Settings → Library → Application log**, reproduce the problem, and attach the log to
+an issue along with your desktop environment, display server (X11 or Wayland) and distro —
+those three narrow down a Linux bug faster than anything else. The log also lives at
+`~/.local/share/com.zuno.desktop/logs/current.log`.
 
 ### macOS notes
 
-**"Apple is not able to verify that it is free from malware."** The macOS builds are not
-signed with an Apple Developer ID, so Gatekeeper blocks them on first launch. This is not a
-malware finding — it means the binary is unsigned. Drag Zuno to Applications, then either:
+#### "Apple is not able to verify that it is free from malware"
 
-- Open **System Settings → Privacy & Security**, scroll to the message about Zuno, and click
+The macOS builds aren't signed with an Apple Developer ID, so Gatekeeper blocks them on first
+launch. This isn't a malware finding — it means the binary is unsigned. Drag Zuno to
+Applications, then either:
+
+- open **System Settings → Privacy & Security**, scroll to the message about Zuno, and click
   **Open Anyway**, or
 - clear the quarantine flag yourself:
 
@@ -218,13 +204,13 @@ malware finding — it means the binary is unsigned. Drag Zuno to Applications, 
 xattr -dr com.apple.quarantine /Applications/Zuno.app
 ```
 
-Build from source if you would rather not trust a prebuilt binary.
+Build from source instead if you'd rather not trust a prebuilt, unsigned binary.
 
-macOS may also show a Keychain prompt. Zuno stores one encryption key in its own Keychain entry,
-and your YouTube Music session is encrypted with that key before being written to the app
-data directory. Choosing **Always Allow** avoids repeated prompts.
+#### A Keychain prompt on sign-in
 
-If you do not intend to sign in to YouTube Music, you can decline it.
+Zuno stores one encryption key in its own Keychain entry and encrypts your YouTube Music
+session with it before writing anything to the app data directory. Choose **Always Allow** to
+avoid repeated prompts — or **Deny** if you don't intend to sign in to YouTube Music.
 
 <br />
 
