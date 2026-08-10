@@ -19,6 +19,7 @@ import {
 import { MusicTabs } from "./MusicTabs";
 import type { Tab } from "../types/tab";
 import {
+  useForceWindowControls,
   useNativeWindowControls,
   useWindowsStyleWindowControls,
 } from "../settings/windowControls";
@@ -88,15 +89,18 @@ export function TitleBar({
   const [isAccountPanelOpen, setIsAccountPanelOpen] = useState(false);
   const nativeWindowControls = useNativeWindowControls();
   const windowsStyleWindowControls = useWindowsStyleWindowControls();
+  const forceWindowControls = useForceWindowControls();
   // On Linux, window management belongs to the compositor. Tiling compositors (niri, sway,
   // hyprland, …) have no minimize at all and draw nothing, so app buttons would be dead
   // weight; desktops like GNOME/KDE get the custom buttons so close/minimize stay reachable.
+  // "Show window controls" in settings overrides this for anyone who wants the buttons anyway.
   const tilingWindowManager = useSyncExternalStore(
     subscribeTilingWindowManager,
     isTilingWindowManager,
     () => false,
   );
-  const showCustomWindowControls = !nativeWindowControls && (!isLinux || !tilingWindowManager);
+  const showCustomWindowControls = !nativeWindowControls
+    && (!isLinux || !tilingWindowManager || forceWindowControls);
   const discordEnabled = useDiscordPresenceEnabled();
   const lastFmEnabled = useLastFmScrobblingEnabled();
   const ytScrobblingEnabled = useYouTubeScrobbling();

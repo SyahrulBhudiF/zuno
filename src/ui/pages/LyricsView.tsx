@@ -9,12 +9,13 @@ import {
 } from "react";
 import { useReduceMotion } from "../settings/renderEffects";
 import { cn } from "@/lib/utils";
-import { CloseIcon, LyricsIcon, RefreshIcon } from "@/ui/icons";
+import { CloseIcon, FullScreenIcon, LyricsIcon, QuitFullScreenIcon, RefreshIcon } from "@/ui/icons";
 import type { Lyrics, LyricsSourceAttempt, LyricsSourceStatus } from "../../datasource/types";
 import { LYRICS_SOURCES } from "../../datasource/youtube/lyricsSources";
 import { FloatingPanel } from "../components/FloatingPanel";
 import { logInternalWarn } from "../../internal/logging";
 import { playerController, shallowEqual, usePlayerSelector } from "../../player/playerStore";
+import { playerUIStore, usePlayerUIState } from "../stores/playerUIStore";
 import { ArtistLinks } from "../components/ArtistLinks";
 import { TrackArtwork } from "../components/TrackArtwork";
 import { setAmbientArtwork } from "../stores/ambientArtworkStore";
@@ -77,6 +78,7 @@ export function LyricsView({ onClose }: LyricsViewProps) {
   const track = playerState.currentTrack;
   const isPlaying = playerState.status === "playing";
   const reduce = useReduceMotion();
+  const isFullscreen = usePlayerUIState().isLyricsFullscreen;
   const offset = useLyricsOffset(track?.id);
   const fontScale = useLyricsFontScale();
   const translationLang = useLyricsTranslationLang();
@@ -314,11 +316,18 @@ export function LyricsView({ onClose }: LyricsViewProps) {
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      // First Escape backs out of fullscreen, same as a video player; the second one closes
+      // the sheet. One keystroke doing both would skip past the state most listeners want.
+      if (isFullscreen) {
+        playerUIStore.setLyricsFullscreen(false);
+      } else {
+        onClose();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [onClose, isFullscreen]);
 
   const pauseFollow = () => {
     if (!isSynced || activeIndex < 0) return;
@@ -449,15 +458,27 @@ export function LyricsView({ onClose }: LyricsViewProps) {
         {isSynced && activeIndex >= 0 ? lines[activeIndex]?.text ?? "" : ""}
       </p>
 
-      <button
-        type="button"
-        className="absolute right-4 top-4 z-20 flex size-9 items-center justify-center rounded-full bg-card/60 text-muted-foreground backdrop-blur transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onClick={onClose}
-        aria-label="Close lyrics"
-        title="Close lyrics (Esc)"
-      >
-        <CloseIcon size={19} />
-      </button>
+      <div className="absolute right-4 top-4 z-20 flex items-center gap-2">
+        <button
+          type="button"
+          className="flex size-9 items-center justify-center rounded-full bg-card/60 text-muted-foreground backdrop-blur transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={() => playerUIStore.setLyricsFullscreen(!isFullscreen)}
+          aria-pressed={isFullscreen}
+          aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
+          title={isFullscreen ? "Exit full screen (Esc)" : "Full screen"}
+        >
+          {isFullscreen ? <QuitFullScreenIcon size={18} /> : <FullScreenIcon size={18} />}
+        </button>
+        <button
+          type="button"
+          className="flex size-9 items-center justify-center rounded-full bg-card/60 text-muted-foreground backdrop-blur transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={onClose}
+          aria-label="Close lyrics"
+          title={isFullscreen ? "Close lyrics" : "Close lyrics (Esc)"}
+        >
+          <CloseIcon size={19} />
+        </button>
+      </div>
 
       <div className="relative flex min-h-0 flex-1 flex-col @4xl/lyrics:flex-row">
         {/* Wide enough for two columns: the song gets a poster, the lyrics get the rest. */}

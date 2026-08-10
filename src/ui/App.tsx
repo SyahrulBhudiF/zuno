@@ -41,10 +41,12 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { VolumeSyncBridge } from "./components/player/VolumeSyncBridge";
 import { PlaylistContextMenuProvider } from "./components/PlaylistContextMenu";
 import { ArtistNavigationProvider } from "./components/ArtistLinks";
+import { cn } from "@/lib/utils";
 import { TitleBar } from "./components/TitleBar";
 import { PlayerBar } from "./components/player/PlayerBar";
 import { QueuePanel } from "./components/player/QueuePanel";
 import { useQueuePanelCollapsed } from "./settings/queuePanel";
+import { useNativeWindowControls } from "./settings/windowControls";
 
 /** Wide enough for a 44px cover plus breathing room, matching the sidebar rail's feel. */
 const COLLAPSED_QUEUE_WIDTH = 62;
@@ -344,6 +346,18 @@ export default function App() {
     };
   }, []);
 
+  // Full-screen lyrics is real OS fullscreen, not just a wider layout — the whole point is
+  // the window chrome getting out of the way too.
+  useEffect(() => {
+    void getCurrentWindow()
+      .setFullscreen(playerUIState.isLyricsFullscreen)
+      .catch((error) => {
+        logInternalWarn("App.syncLyricsFullscreen failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }, [playerUIState.isLyricsFullscreen]);
+
   const [tabs, setTabs] = useState<Tab[]>(
     () => restoredSession?.tabs.map(stripNavigationHistory) ?? [{ id: "1", view: "home" }],
   );
@@ -362,12 +376,12 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(62);
   const [queuePanelWidth, setQueuePanelWidth] = useState(340);
   const isQueuePanelCollapsed = useQueuePanelCollapsed();
+  const nativeWindowControls = useNativeWindowControls();
   const [loadingScreenState, setLoadingScreenState] = useState<"visible" | "leaving" | "hidden">("visible");
   const [onboardingComplete, setOnboardingComplete] = useState<boolean | null>(() =>
     readLocalOnboardingComplete() ? true : null
   );
   const [onboardingStep, setOnboardingStep] = useState<OnboardingStep | null>(null);
-  const [showQueueMounted, setShowQueueMounted] = useState(false);
   const [onboardingFirstTabId, setOnboardingFirstTabId] = useState(activeTabId);
   const [onboardingSecondTabId, setOnboardingSecondTabId] = useState<string | null>(null);
   const [, setOnboardingSearchQuery] = useState("");
@@ -821,7 +835,6 @@ export default function App() {
     sessionPersistenceDisabledRef.current = true;
     playerUIStore.setLyricsOpen(false);
     setIsSearchOpen(false);
-    setShowQueueMounted(false);
     setAvailableUpdate(null);
     setOnboardingComplete(null);
     setOnboardingStep(null);
@@ -1467,16 +1480,6 @@ export default function App() {
     setTimeout(() => setIsQueuePanelOpen(!isQueuePanelOpen), 0);
   };
 
-  useEffect(() => {
-    if (isQueuePanelOpen) {
-      // Mount the panel after commit to avoid nested update loops
-      const id = window.setTimeout(() => setShowQueueMounted(true), 0);
-      return () => window.clearTimeout(id);
-    }
-    const id = window.setTimeout(() => setShowQueueMounted(false), 200);
-    return () => window.clearTimeout(id);
-  }, [isQueuePanelOpen]);
-
   const handleKeychainNoticeContinue = () => {
     localStorage.setItem(KEYCHAIN_NOTICE_COMPLETE_KEY, "true");
     setShowKeychainNotice(false);
@@ -1974,13 +1977,23 @@ useEffect(() => {
       drawn into nothing and clipped. The specular line along the top edge is the same cue
       the picks cards and the mini player use, which is what makes the whole app read as one
       material rather than three separately-styled surfaces.
+
+      Both drop out under OS native decorations: the WM already draws a real frame above the
+      webview there, so this edge would just be a stray line under the OS title bar.
     */}
-    <div className="relative flex h-screen flex-col overflow-hidden rounded-[var(--window-radius)] border border-border ring-1 ring-inset ring-[var(--window-edge)]">
+    <div
+      className={`relative flex h-screen flex-col overflow-hidden rounded-[var(--window-radius)] ${
+        nativeWindowControls ? "" : "border border-border ring-1 ring-inset ring-[var(--window-edge)]"
+      }`}
+    >
  {/*    {!paperPcMode && <StarField />}
     <span
       className="pointer-events-none absolute inset-x-0 top-0 z-50 h-px bg-linear-to-r from-transparent via-[var(--window-edge-highlight)] to-transparent"
       aria-hidden="true"
     /> */}
+      {/* Dropped entirely in full-screen lyrics, not just visually hidden: the window is
+          real OS fullscreen at that point, so there is no frame left to drag or minimize. */}
+      {!playerUIState.isLyricsFullscreen && (
       <TitleBar
         tabs={tabs}
         activeTabId={activeTabId}
@@ -2000,9 +2013,10 @@ useEffect(() => {
         onOpenDownloads={() => handleOpenBrowse("downloads")}
         onboardingFirstTabId={onboardingStep ? onboardingFirstTabId : undefined}
       />
-      
+      )}
+
       <div className="flex min-h-0 flex-1 flex-col">
-       
+
         <Layout
           sidebarWidth={sidebarWidth}
           onSidebarWidthChange={setSidebarWidth}
@@ -2015,17 +2029,23 @@ useEffect(() => {
           onNavigateBack={handleNavigateBack}
           onNavigateForward={handleNavigateForward}
           fullBleedContent={playerUIState.isLyricsOpen}
+          hideSidebar={playerUIState.isLyricsFullscreen}
           showTransientScrollbar={
             !playerUIState.isLyricsOpen
             && (activeTab?.view === "playlist" || activeTab?.view === "album")
           }
           rightPanelWidth={isQueuePanelCollapsed ? COLLAPSED_QUEUE_WIDTH : queuePanelWidth}
           onRightPanelWidthChange={isQueuePanelCollapsed ? undefined : setQueuePanelWidth}
-          rightPanel={showQueueMounted ? (
-            <QueuePanel
-              isOpen={isQueuePanelOpen}
-              onClose={() => setIsQueuePanelOpen(false)}
-            />
+          /*
+            Bound straight to `isQueuePanelOpen`, not a delayed mirror of it: `AnimatePresence`
+            in Layout already keeps the last-rendered panel mounted for the whole exit
+            animation on its own. An extra `showQueueMounted` state used to sit between this
+            and the panel, unmounting it 200ms after close on a hardcoded guess — which meant
+            the close animation didn't start until that guess elapsed, then had to play out a
+            spring on top of it. Removing the mirror is what makes closing start immediately.
+          */
+          rightPanel={isQueuePanelOpen ? (
+            <QueuePanel onClose={() => setIsQueuePanelOpen(false)} />
           ) : undefined}
         >
 {/* <ExpandedPlayerBar 
@@ -2156,17 +2176,50 @@ useEffect(() => {
       
       <VolumeSyncBridge />
 
-      {/* Its own boundary: the player bar is the one region whose loss ends the session —
-          audio keeps playing but nothing can pause or skip it. */}
-      <ErrorBoundary label="Playback controls">
-        <PlayerBar
-          onToggleLyrics={handleToggleLyrics}
-          onToggleQueue={handleToggleQueue}
-          isQueueOpen={isQueuePanelOpen}
-          onConnectionRestored={handleConnectionRestored}
-          handlePlayerBarClick={handlePlayerBarClick}
-        />
-      </ErrorBoundary>
+      {/*
+        Fullscreen lyrics: the bar becomes a bottom overlay instead of a row that permanently
+        eats height, hidden until the pointer reaches the bottom edge — same reveal-on-hover
+        contract as a fullscreen video player's controls. `group/immersive-playerbar` is a
+        different name than PlayerBar's own `group/playerbar` (used internally for its icon
+        fade-in), so nesting them here doesn't make PlayerBar's hover styling fire early.
+      */}
+      <div
+        className={cn(
+          "group/immersive-playerbar",
+          playerUIState.isLyricsFullscreen && "absolute inset-x-0 bottom-0 z-40",
+        )}
+      >
+        {playerUIState.isLyricsFullscreen && (
+          /*
+           * Translating the bar away moves its hitbox with it, so there is nothing left under
+           * the pointer to hover — this stand-in strip is what the reveal actually triggers
+           * on. Kept to the literal screen edge (8px) rather than a comfortable target size:
+           * this sits above the lyrics footer's own buttons (offset controls, source panel),
+           * so anything taller would eat clicks meant for them before the bar is revealed. A
+           * mouse run to the physical bottom of the window hits it regardless of how thin it
+           * is — that's the same trick fullscreen video controls rely on.
+           */
+          <div className="absolute inset-x-0 bottom-0 h-2" aria-hidden="true" />
+        )}
+        <div
+          className={cn(
+            playerUIState.isLyricsFullscreen &&
+              "translate-y-full transition-transform duration-300 ease-out group-hover/immersive-playerbar:translate-y-0 group-focus-within/immersive-playerbar:translate-y-0",
+          )}
+        >
+          {/* Its own boundary: the player bar is the one region whose loss ends the session —
+              audio keeps playing but nothing can pause or skip it. */}
+          <ErrorBoundary label="Playback controls">
+            <PlayerBar
+              onToggleLyrics={handleToggleLyrics}
+              onToggleQueue={handleToggleQueue}
+              isQueueOpen={isQueuePanelOpen}
+              onConnectionRestored={handleConnectionRestored}
+              handlePlayerBarClick={handlePlayerBarClick}
+            />
+          </ErrorBoundary>
+        </div>
+      </div>
       <SearchOverlay
         isOpen={isSearchOpen && activeTab?.view !== "settings"}
         activeTabId={activeTabId}

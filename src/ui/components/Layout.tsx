@@ -20,6 +20,7 @@ interface LayoutProps {
   onNavigateBack: () => void;
   onNavigateForward: () => void;
   fullBleedContent?: boolean;
+  hideSidebar?: boolean;
   showTransientScrollbar?: boolean;
   rightPanel?: ReactNode;
   rightPanelWidth?: number;
@@ -43,6 +44,7 @@ export function Layout({
   onNavigateBack,
   onNavigateForward,
   fullBleedContent = false,
+  hideSidebar = false,
   showTransientScrollbar = false,
   rightPanel,
   rightPanelWidth = 340,
@@ -198,12 +200,14 @@ export function Layout({
      
 
       <div className="relative flex min-h-0 min-w-0 flex-1">
-        <Sidebar
-          width={sidebarWidth}
-          onWidthChange={onSidebarWidthChange}
-          onNavigateAlbum={onNavigateAlbum}
-          onNavigatePlaylist={onNavigatePlaylist}
-        />
+        {!hideSidebar && (
+          <Sidebar
+            width={sidebarWidth}
+            onWidthChange={onSidebarWidthChange}
+            onNavigateAlbum={onNavigateAlbum}
+            onNavigatePlaylist={onNavigatePlaylist}
+          />
+        )}
         {/* No backdrop-blur: `bg-background` is fully opaque, so a backdrop filter here costs a
             composited layer and a blur pass to render something nothing can see through. */}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 bg-background rounded-tl-lg">
@@ -360,10 +364,35 @@ export function Layout({
                   initial={{ width: 0, opacity: 0 }}
                   animate={{ width: rightPanelWidth, opacity: 1 }}
                   exit={{ width: 0, opacity: 0 }}
-                  transition={{ type: "spring", stiffness: 420, damping: 40 }}
+                  /*
+                   * A tween, not a spring, and `width` gets its own shorter one than `opacity`.
+                   *
+                   * `width` is a layout property — every frame Framer emits for it costs a real
+                   * synchronous browser layout, not a compositor-only step like `x` or
+                   * `opacity` would. A spring has no fixed end time; it keeps emitting
+                   * low-amplitude correction frames well past the point it looks finished,
+                   * which was still paying for a layout pass on each one. A tween has a hard
+                   * stop at `duration`, so the frame count — and the reflow cost — is bounded
+                   * and known. Opacity gets a hair longer so the fade reads as settling into
+                   * the now-correctly-sized box rather than racing to beat it there.
+                   */
+                  transition={{
+                    width: { duration: 0.22, ease: [0.16, 1, 0.3, 1] },
+                    opacity: { duration: 0.16, ease: "easeOut" },
+                  }}
                   className="relative min-h-0 shrink-0 overflow-hidden bg-card"
                 >
-                  {rightPanel}
+                  {/*
+                    Pinned to the target width, not 100%: this box's *wrapper* is what's
+                    animating. If the queue list tracked that width instead, every row's flex
+                    layout and text truncation would recompute on every animation frame — for a
+                    25+ row queue that's the actual cost behind a "laggy" close. Fixed width
+                    means the wrapper's shrinking `overflow-hidden` clip is the only thing that
+                    changes per frame; the panel's own layout is computed once.
+                  */}
+                  <div className="h-full" style={{ width: rightPanelWidth }}>
+                    {rightPanel}
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>
