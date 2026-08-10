@@ -18,8 +18,9 @@ import {
   playerController,
   shallowEqual,
   usePlayerSelector,
-  usePlayerSession,
+  usePlayerSessionSelector,
 } from "../../../player/playerStore";
+import type { PlayerSession } from "../../../player/PlayerController";
 import {
   toggleQueuePanelCollapsed,
   useQueuePanelCollapsed,
@@ -29,8 +30,6 @@ import { TrackArtwork } from "../TrackArtwork";
 import { SquareAltArrowLeftIcon, SquareAltArrowRightIcon } from "@solar-icons/react/linear";
 
 interface QueuePanelProps {
-  /** Open/close animation now lives in Layout's AnimatePresence wrapper. */
-  isOpen?: boolean;
   onClose: () => void;
 }
 
@@ -246,6 +245,35 @@ const QueueRow = memo(function QueueRow({
   );
 });
 
+const EMPTY_QUEUE: Track[] = [];
+
+/*
+ * `exportSession()` rebuilds the queue window with `.slice()` on every player emit — including
+ * ones that never touch the queue, like a volume drag firing dozens of times a gesture — so a
+ * plain read of `session.queue` gets a new array identity far more often than the queue itself
+ * changes. Comparing by track identity (not the wrapping array) is what lets
+ * `usePlayerSessionSelector` hand back the previous, still-equal snapshot on those emits.
+ */
+function selectQueueSlice(session: PlayerSession | null) {
+  return {
+    queue: session?.queue ?? EMPTY_QUEUE,
+    queueIndex: session?.queueIndex ?? -1,
+    manualQueueLength: session?.manualQueueLength ?? 0,
+    stopAfterQueueIndex: session?.stopAfterQueueIndex ?? null,
+  };
+}
+
+function queueSliceEqual(
+  a: ReturnType<typeof selectQueueSlice>,
+  b: ReturnType<typeof selectQueueSlice>,
+) {
+  return a.queueIndex === b.queueIndex
+    && a.manualQueueLength === b.manualQueueLength
+    && a.stopAfterQueueIndex === b.stopAfterQueueIndex
+    && a.queue.length === b.queue.length
+    && a.queue.every((track, index) => track === b.queue[index]);
+}
+
 export function QueuePanel({ onClose }: QueuePanelProps) {
   const panelRef = useRef<HTMLElement>(null);
   const draggedElementRef = useRef<HTMLElement | null>(null);
@@ -273,18 +301,16 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
   dropTargetRef.current = dropTarget;
 
   const collapsed = useQueuePanelCollapsed();
-  const playerSession = usePlayerSession();
+  const { queue, queueIndex, manualQueueLength, stopAfterQueueIndex } = usePlayerSessionSelector(
+    selectQueueSlice,
+    queueSliceEqual,
+  );
   const playerState = usePlayerSelector(
     (player) => ({ currentTrack: player.currentTrack, status: player.status }),
     shallowEqual,
   );
   const currentTrack = playerState.currentTrack;
   const isPlaying = playerState.status === "playing";
-
-  const queue = playerSession?.queue ?? [];
-  const queueIndex = playerSession?.queueIndex ?? -1;
-  const manualQueueLength = playerSession?.manualQueueLength ?? 0;
-  const stopAfterQueueIndex = playerSession?.stopAfterQueueIndex ?? null;
   // Generating hits the network, so the row it was started from shows it is working.
   const [generatingIndex, setGeneratingIndex] = useState<number | null>(null);
   /* null = idle, string = the draft name being edited. */

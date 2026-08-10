@@ -367,7 +367,17 @@ export function Layout({
                   transition={{ type: "spring", stiffness: 420, damping: 40 }}
                   className="relative min-h-0 shrink-0 overflow-hidden bg-card"
                 >
-                  {rightPanel}
+                  {/*
+                    Pinned to the target width, not 100%: this box's *wrapper* is what's
+                    animating. If the queue list tracked that width instead, every row's flex
+                    layout and text truncation would recompute on every animation frame — for a
+                    25+ row queue that's the actual cost behind a "laggy" close. Fixed width
+                    means the wrapper's shrinking `overflow-hidden` clip is the only thing that
+                    changes per frame; the panel's own layout is computed once.
+                  */}
+                  <div className="h-full" style={{ width: rightPanelWidth }}>
+                    {rightPanel}
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>

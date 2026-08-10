@@ -1,7 +1,7 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import { YouTubeMusicDataSource } from "../datasource/youtube/YouTubeMusicDataSource";
 import { LibraryController } from "./LibraryController";
-import { PlayerController, type PlayerState } from "./PlayerController";
+import { PlayerController, type PlayerSession, type PlayerState } from "./PlayerController";
 import { SearchController } from "./SearchController";
 import { TabManager } from "./TabManager";
 import { loadAppSession } from "./appSession";
@@ -249,6 +249,22 @@ export function usePlayerSelector<T>(
 
 export function usePlayerSession() {
   return useSyncExternalStore(subscribeToPlayer, getPlayerSession, getPlayerSession);
+}
+
+/**
+ * A slice of the session, cached the same way `usePlayerSelector` caches player state.
+ *
+ * `exportSession()` rebuilds the queue window with `.slice()` on every export — a fresh array
+ * even when the tracks in it have not changed — and every player emit triggers one, including
+ * ones with nothing to do with the queue (a volume drag fires dozens per gesture). Plain
+ * `usePlayerSession` has no caching, so a component reading `.queue` off it recomputes and
+ * re-renders on all of those. Route queue-only reads through here instead.
+ */
+export function usePlayerSessionSelector<T>(
+  select: (session: PlayerSession | null) => T,
+  isEqual?: (a: T, b: T) => boolean,
+): T {
+  return useStoreSelector(subscribeToPlayer, getPlayerSession, select, isEqual);
 }
 
 export function useLibraryState() {

@@ -381,7 +381,6 @@ export default function App() {
     readLocalOnboardingComplete() ? true : null
   );
   const [onboardingStep, setOnboardingStep] = useState<OnboardingStep | null>(null);
-  const [showQueueMounted, setShowQueueMounted] = useState(false);
   const [onboardingFirstTabId, setOnboardingFirstTabId] = useState(activeTabId);
   const [onboardingSecondTabId, setOnboardingSecondTabId] = useState<string | null>(null);
   const [, setOnboardingSearchQuery] = useState("");
@@ -835,7 +834,6 @@ export default function App() {
     sessionPersistenceDisabledRef.current = true;
     playerUIStore.setLyricsOpen(false);
     setIsSearchOpen(false);
-    setShowQueueMounted(false);
     setAvailableUpdate(null);
     setOnboardingComplete(null);
     setOnboardingStep(null);
@@ -1481,16 +1479,6 @@ export default function App() {
     setTimeout(() => setIsQueuePanelOpen(!isQueuePanelOpen), 0);
   };
 
-  useEffect(() => {
-    if (isQueuePanelOpen) {
-      // Mount the panel after commit to avoid nested update loops
-      const id = window.setTimeout(() => setShowQueueMounted(true), 0);
-      return () => window.clearTimeout(id);
-    }
-    const id = window.setTimeout(() => setShowQueueMounted(false), 200);
-    return () => window.clearTimeout(id);
-  }, [isQueuePanelOpen]);
-
   const handleKeychainNoticeContinue = () => {
     localStorage.setItem(KEYCHAIN_NOTICE_COMPLETE_KEY, "true");
     setShowKeychainNotice(false);
@@ -2047,11 +2035,16 @@ useEffect(() => {
           }
           rightPanelWidth={isQueuePanelCollapsed ? COLLAPSED_QUEUE_WIDTH : queuePanelWidth}
           onRightPanelWidthChange={isQueuePanelCollapsed ? undefined : setQueuePanelWidth}
-          rightPanel={showQueueMounted ? (
-            <QueuePanel
-              isOpen={isQueuePanelOpen}
-              onClose={() => setIsQueuePanelOpen(false)}
-            />
+          /*
+            Bound straight to `isQueuePanelOpen`, not a delayed mirror of it: `AnimatePresence`
+            in Layout already keeps the last-rendered panel mounted for the whole exit
+            animation on its own. An extra `showQueueMounted` state used to sit between this
+            and the panel, unmounting it 200ms after close on a hardcoded guess — which meant
+            the close animation didn't start until that guess elapsed, then had to play out a
+            spring on top of it. Removing the mirror is what makes closing start immediately.
+          */
+          rightPanel={isQueuePanelOpen ? (
+            <QueuePanel onClose={() => setIsQueuePanelOpen(false)} />
           ) : undefined}
         >
 {/* <ExpandedPlayerBar 
