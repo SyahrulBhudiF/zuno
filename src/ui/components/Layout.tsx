@@ -364,7 +364,22 @@ export function Layout({
                   initial={{ width: 0, opacity: 0 }}
                   animate={{ width: rightPanelWidth, opacity: 1 }}
                   exit={{ width: 0, opacity: 0 }}
-                  transition={{ type: "spring", stiffness: 420, damping: 40 }}
+                  /*
+                   * A tween, not a spring, and `width` gets its own shorter one than `opacity`.
+                   *
+                   * `width` is a layout property — every frame Framer emits for it costs a real
+                   * synchronous browser layout, not a compositor-only step like `x` or
+                   * `opacity` would. A spring has no fixed end time; it keeps emitting
+                   * low-amplitude correction frames well past the point it looks finished,
+                   * which was still paying for a layout pass on each one. A tween has a hard
+                   * stop at `duration`, so the frame count — and the reflow cost — is bounded
+                   * and known. Opacity gets a hair longer so the fade reads as settling into
+                   * the now-correctly-sized box rather than racing to beat it there.
+                   */
+                  transition={{
+                    width: { duration: 0.22, ease: [0.16, 1, 0.3, 1] },
+                    opacity: { duration: 0.16, ease: "easeOut" },
+                  }}
                   className="relative min-h-0 shrink-0 overflow-hidden bg-card"
                 >
                   {/*

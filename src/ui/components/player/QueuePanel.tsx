@@ -35,6 +35,8 @@ interface QueuePanelProps {
 
 /** Pointer travel before a press becomes a drag rather than a click. */
 const DRAG_SLOP_PX = 6;
+/** Auto-generated tail rows rendered before "Show more" is needed. */
+const AUTOMATIC_PAGE_SIZE = 30;
 
 const ICON_BUTTON =
   "flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -49,6 +51,15 @@ interface QueueEntry {
   /** 1-based position among upcoming tracks, for display. */
   position: number;
   section: QueueSection;
+  /**
+   * React key. Deliberately not `absoluteIndex`: every entry's absolute index shifts by one
+   * the moment the current track advances, which used to give every row in the panel a new
+   * key on every single track change — React read that as "all of these are different rows"
+   * and remounted the entire list each time a song ended, throwing away images already
+   * decoded and any hover/focus state. `track.id` is stable across that shift; the counter
+   * only kicks in for the same track queued twice, which `track.id` alone can't disambiguate.
+   */
+  key: string;
 }
 
 /** Sums across the sections in place; spreading them into one array copied every upcoming track. */
@@ -274,6 +285,46 @@ function queueSliceEqual(
     && a.queue.every((track, index) => track === b.queue[index]);
 }
 
+/**
+ * Reveals more of the auto-generated tail, a page at a time.
+ *
+ * Collapsed has no room for "Show 30 more", so it shrinks to a plain "+N" chip — the count
+ * still reads on its own, and the full sentence is one tooltip away.
+ */
+function ShowMoreQueueButton({
+  collapsed,
+  remaining,
+  onClick,
+}: {
+  collapsed: boolean;
+  remaining: number;
+  onClick: () => void;
+}) {
+  const label = `Show ${Math.min(AUTOMATIC_PAGE_SIZE, remaining)} more`;
+  const button = (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={collapsed ? label : undefined}
+      className={cn(
+        "shrink-0 rounded-full text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        collapsed
+          ? "mx-auto flex size-7 items-center justify-center text-sm"
+          : "mt-0.5 px-3 py-1.5 text-left text-xs font-medium",
+      )}
+    >
+      {collapsed ? "+" : label}
+    </button>
+  );
+  return collapsed ? (
+    <Tooltip side="left" content={label}>
+      {button}
+    </Tooltip>
+  ) : (
+    button
+  );
+}
+
 export function QueuePanel({ onClose }: QueuePanelProps) {
   const panelRef = useRef<HTMLElement>(null);
   const draggedElementRef = useRef<HTMLElement | null>(null);
@@ -316,6 +367,16 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
   /* null = idle, string = the draft name being edited. */
   const [saveDraft, setSaveDraft] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  /*
+   * The auto-generated tail can run up to 100 tracks (`PERSISTED_QUEUE_AHEAD`), and rendering
+   * every one of them the moment the panel opens is exactly the "shows all songs at once" cost
+   * — a hundred rows of artwork, truncated titles and hover affordances nobody is looking at
+   * yet. Manual picks stay uncapped: that section is a handful of tracks by nature, not a
+   * generated tail. "Show more" over a virtualiser: reordering drags read live DOM nodes
+   * (`querySelectorAll("[data-queue-index]")`, `elementsFromPoint`), and a virtualiser that
+   * only mounts what's on screen would have nothing to find a drop target on below the fold.
+   */
+  const [visibleAutomaticCount, setVisibleAutomaticCount] = useState(AUTOMATIC_PAGE_SIZE);
 
   /*
    * One flat pass over the upcoming tracks, tagged with everything a row needs. The old panel
@@ -327,13 +388,21 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
     const start = Math.max(queueIndex + 1, 0);
     const manualEntries: QueueEntry[] = [];
     const automaticEntries: QueueEntry[] = [];
+    // How many times each track id has been seen so far, so the same song queued twice still
+    // gets two distinct keys.
+    const seen = new Map<string, number>();
 
     for (let offset = 0; start + offset < queue.length; offset += 1) {
+      const track = queue[start + offset];
+      const occurrence = seen.get(track.id) ?? 0;
+      seen.set(track.id, occurrence + 1);
+
       const entry: QueueEntry = {
-        track: queue[start + offset],
+        track,
         absoluteIndex: start + offset,
         position: offset + 1,
         section: offset < manualQueueLength ? "manual" : "automatic",
+        key: occurrence === 0 ? track.id : `${track.id}:${occurrence}`,
       };
       (entry.section === "manual" ? manualEntries : automaticEntries).push(entry);
     }
@@ -543,7 +612,7 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
   const renderRows = (entries: QueueEntry[]) =>
     entries.map((entry) => (
       <QueueRow
-        key={`${entry.track.id}:${entry.absoluteIndex}`}
+        key={entry.key}
         entry={entry}
         collapsed={collapsed}
         isDragged={draggedIndex === entry.absoluteIndex}
@@ -781,7 +850,15 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
           {automatic.length > 0 && (
             <>
               {manual.length > 0 && sectionLabel("Up next", automatic.length)}
-              {renderRows(automatic)}
+              {renderRows(automatic.slice(0, visibleAutomaticCount))}
+              {automatic.length > visibleAutomaticCount && (
+                <ShowMoreQueueButton
+                  collapsed={collapsed}
+                  remaining={automatic.length - visibleAutomaticCount}
+                  onClick={() =>
+                    setVisibleAutomaticCount((count) => count + AUTOMATIC_PAGE_SIZE)}
+                />
+              )}
             </>
           )}
         </div>
