@@ -20,6 +20,7 @@ interface LayoutProps {
   onNavigateBack: () => void;
   onNavigateForward: () => void;
   fullBleedContent?: boolean;
+  hideSidebar?: boolean;
   showTransientScrollbar?: boolean;
   rightPanel?: ReactNode;
   rightPanelWidth?: number;
@@ -43,6 +44,7 @@ export function Layout({
   onNavigateBack,
   onNavigateForward,
   fullBleedContent = false,
+  hideSidebar = false,
   showTransientScrollbar = false,
   rightPanel,
   rightPanelWidth = 340,
@@ -198,12 +200,14 @@ export function Layout({
      
 
       <div className="relative flex min-h-0 min-w-0 flex-1">
-        <Sidebar
-          width={sidebarWidth}
-          onWidthChange={onSidebarWidthChange}
-          onNavigateAlbum={onNavigateAlbum}
-          onNavigatePlaylist={onNavigatePlaylist}
-        />
+        {!hideSidebar && (
+          <Sidebar
+            width={sidebarWidth}
+            onWidthChange={onSidebarWidthChange}
+            onNavigateAlbum={onNavigateAlbum}
+            onNavigatePlaylist={onNavigatePlaylist}
+          />
+        )}
         {/* No backdrop-blur: `bg-background` is fully opaque, so a backdrop filter here costs a
             composited layer and a blur pass to render something nothing can see through. */}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pt-3 bg-background rounded-tl-lg">

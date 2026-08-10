@@ -345,6 +345,18 @@ export default function App() {
     };
   }, []);
 
+  // Full-screen lyrics is real OS fullscreen, not just a wider layout — the whole point is
+  // the window chrome getting out of the way too.
+  useEffect(() => {
+    void getCurrentWindow()
+      .setFullscreen(playerUIState.isLyricsFullscreen)
+      .catch((error) => {
+        logInternalWarn("App.syncLyricsFullscreen failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }, [playerUIState.isLyricsFullscreen]);
+
   const [tabs, setTabs] = useState<Tab[]>(
     () => restoredSession?.tabs.map(stripNavigationHistory) ?? [{ id: "1", view: "home" }],
   );
@@ -1990,6 +2002,9 @@ useEffect(() => {
       className="pointer-events-none absolute inset-x-0 top-0 z-50 h-px bg-linear-to-r from-transparent via-[var(--window-edge-highlight)] to-transparent"
       aria-hidden="true"
     /> */}
+      {/* Dropped entirely in full-screen lyrics, not just visually hidden: the window is
+          real OS fullscreen at that point, so there is no frame left to drag or minimize. */}
+      {!playerUIState.isLyricsFullscreen && (
       <TitleBar
         tabs={tabs}
         activeTabId={activeTabId}
@@ -2009,9 +2024,10 @@ useEffect(() => {
         onOpenDownloads={() => handleOpenBrowse("downloads")}
         onboardingFirstTabId={onboardingStep ? onboardingFirstTabId : undefined}
       />
-      
+      )}
+
       <div className="flex min-h-0 flex-1 flex-col">
-       
+
         <Layout
           sidebarWidth={sidebarWidth}
           onSidebarWidthChange={setSidebarWidth}
@@ -2024,6 +2040,7 @@ useEffect(() => {
           onNavigateBack={handleNavigateBack}
           onNavigateForward={handleNavigateForward}
           fullBleedContent={playerUIState.isLyricsOpen}
+          hideSidebar={playerUIState.isLyricsFullscreen}
           showTransientScrollbar={
             !playerUIState.isLyricsOpen
             && (activeTab?.view === "playlist" || activeTab?.view === "album")

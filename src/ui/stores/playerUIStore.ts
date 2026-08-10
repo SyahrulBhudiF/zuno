@@ -5,6 +5,7 @@ export interface PlayerUIState {
   isDraggingVolume: boolean;
   showAlbumArt: boolean;
   isLyricsOpen: boolean;
+  isLyricsFullscreen: boolean;
   isQueueOpen: boolean;
 }
 
@@ -16,6 +17,7 @@ class PlayerUIStore {
     isDraggingVolume: false,
     showAlbumArt: true,
     isLyricsOpen: false,
+    isLyricsFullscreen: false,
     isQueueOpen: false,
   };
   private listeners = new Set<Listener>();
@@ -53,11 +55,17 @@ class PlayerUIStore {
   }
 
   setLyricsOpen(isLyricsOpen: boolean) {
-    this.setState({ isLyricsOpen });
+    // Leaving the lyrics view leaves fullscreen with it — there is nothing left to be
+    // fullscreen about, and the window would otherwise get stuck edge-to-edge.
+    this.setState(isLyricsOpen ? { isLyricsOpen } : { isLyricsOpen, isLyricsFullscreen: false });
   }
 
   toggleLyrics() {
-    this.setState({ isLyricsOpen: !this.state.isLyricsOpen });
+    this.setLyricsOpen(!this.state.isLyricsOpen);
+  }
+
+  setLyricsFullscreen(isLyricsFullscreen: boolean) {
+    this.setState({ isLyricsFullscreen });
   }
 
   setQueueOpen(isQueueOpen: boolean) {

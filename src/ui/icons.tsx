@@ -83,6 +83,8 @@ export { ListIcon } from "@solar-icons/react/linear/list";
 export { SortIcon } from "@solar-icons/react/linear/sort";
 export { CloseCircleIcon as CloseIcon } from "@solar-icons/react/linear/close-circle";
 export { CloseCircleIcon as CloseActiveIcon } from "@solar-icons/react/bold/close-circle";
+export { FullScreenIcon } from "@solar-icons/react/linear/full-screen";
+export { QuitFullScreenIcon } from "@solar-icons/react/linear/quit-full-screen";
 export { AddCircleIcon as PlusIcon } from "@solar-icons/react/linear/add-circle";
 export { CheckCircleIcon as CheckIcon } from "@solar-icons/react/linear/check-circle";
 export { CheckCircleIcon as CheckActiveIcon } from "@solar-icons/react/bold/check-circle";
