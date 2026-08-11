@@ -315,10 +315,10 @@ export function ArtistView({
          * step, and looped back to the first candidate forever once they had all failed.
          *
          * preferProxy: an artist portrait is a googleusercontent URL far more often than not,
-         * and those routinely refuse the webview's own referer — walking the direct ladder first
-         * meant this one avatar could still be mid-resolution when you switched away, so it took
-         * two visits to actually see it: one to kick the walk off, another after it had finished
-         * in the background regardless of whether this component was still around to see it.
+         * and those routinely refuse the webview's own referer. The direct ladder stays as a
+         * live fallback either way — this only starts the Rust proxy racing it immediately
+         * instead of waiting for the (likely) direct failures first, so switching away mid
+         * resolution no longer meant the avatar was still mid-walk whenever you came back.
          */
         artworkSlot={
           <TrackArtwork

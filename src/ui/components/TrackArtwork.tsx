@@ -33,18 +33,20 @@ interface TrackArtworkProps {
   loading?: "eager" | "lazy";
   retryOnError?: boolean;
   /**
-   * Skips the direct-URL ladder and goes straight to the Rust proxy.
+   * Starts the Rust proxy fetch immediately instead of waiting for the direct-URL ladder to be
+   * exhausted first — a race, not a replacement.
    *
-   * For a source that's effectively guaranteed to need it anyway — `googleusercontent` artist
-   * portraits refuse the webview's referer far more often than they accept it — walking every
-   * direct candidate first (each a real network round trip that has to fail before the next one
-   * even starts) turns a single avatar into the slowest thing on the page, and worse, into
-   * something that can still be mid-walk if the view unmounts before it finishes: the proxy
-   * fetch itself keeps running and caches its result regardless, so the *next* mount pays
-   * nothing, but this one shows the placeholder for however long the walk had left. One flag
-   * rather than fixing the ladder's speed: everything else on the ladder resolves directly far
-   * more often than not, and racing the proxy against it there would trade a rare slow cover for
-   * a proxy request on every fast one.
+   * For a source that needs the proxy more often than not — `googleusercontent` artist portraits
+   * refuse the webview's referer far more often than they accept it — waiting for every direct
+   * candidate to fail first (each a real network round trip) before even starting the proxy
+   * meant a mount could still be mid-walk when the view unmounted: the proxy fetch keeps running
+   * and caches its result regardless, so the *next* mount paid nothing, but this one sat on the
+   * placeholder for however long the walk had left.
+   *
+   * Deliberately still a race and not a straight swap to proxy-only: the direct ladder stays in
+   * play as a live fallback. A proxy-only first cut of this traded that away — one network hiccup
+   * on the single remaining path and there was nothing left to fall back to, which is a worse
+   * failure mode than the slow walk it replaced.
    */
   preferProxy?: boolean;
   /**
@@ -91,10 +93,10 @@ export function TrackArtwork({
     if (!artworkUrl?.trim()) return [];
     const cached = cacheKey ? getResolvedArtworkUrl(cacheKey) : undefined;
     if (cached) return [cached];
-    // Empty candidates is what already makes embedded artwork skip straight to the proxy
-    // effect below — preferProxy asks for the exact same shortcut for a remote URL.
-    return isLocalArtwork || preferProxy ? [] : getArtworkUrlCandidates(artworkUrl, sizeBucket);
-  }, [artworkUrl, cacheKey, isLocalArtwork, preferProxy, sizeBucket]);
+    // preferProxy does not touch this ladder — it stays a live fallback even while the proxy
+    // races it below. Only truly local artwork (no URL to walk at all) skips it.
+    return isLocalArtwork ? [] : getArtworkUrlCandidates(artworkUrl, sizeBucket);
+  }, [artworkUrl, cacheKey, isLocalArtwork, sizeBucket]);
   const [artworkIndex, setArtworkIndex] = useState(0);
   const [retryCount, setRetryCount] = useState(0);
   const [proxiedArtworkUrl, setProxiedArtworkUrl] = useState<string | null>(null);
@@ -156,9 +158,14 @@ export function TrackArtwork({
   }, [baseArtworkUrl]);
 
   useEffect(() => {
-    if (!artworkUrl || !cacheKey || artworkIndex < artworkCandidates.length || proxiedArtworkUrl) {
-      return;
-    }
+    if (!artworkUrl || !cacheKey || proxiedArtworkUrl) return;
+    /*
+     * Ordinarily waits for the direct ladder to be exhausted — starting a proxy fetch nothing
+     * may end up needing is wasted work for the common cover that resolves directly. preferProxy
+     * is the one opt-in exception: for a source expected to need it anyway, waiting out however
+     * many direct candidates are left is exactly the delay this flag exists to skip.
+     */
+    if (!preferProxy && artworkIndex < artworkCandidates.length) return;
     // Every candidate already failed for this source once; re-walking earns the same 404s.
     if (hasArtworkFailed(cacheKey)) {
       // The one branch in this component that used to leave nothing behind: a mount landing
@@ -210,7 +217,17 @@ export function TrackArtwork({
     return () => {
       active = false;
     };
-  }, [artworkCandidates.length, artworkIndex, artworkUrl, cacheKey, isLocalArtwork, isLocalImage, sizeBucket, proxiedArtworkUrl]);
+  }, [
+    artworkCandidates.length,
+    artworkIndex,
+    artworkUrl,
+    cacheKey,
+    isLocalArtwork,
+    isLocalImage,
+    preferProxy,
+    sizeBucket,
+    proxiedArtworkUrl,
+  ]);
 
   return (
     <span
