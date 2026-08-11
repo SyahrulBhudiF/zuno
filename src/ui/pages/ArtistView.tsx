@@ -88,9 +88,24 @@ export function ArtistView({
   const { openPlaylistPicker, openTrackMenu } = useTrackContextMenu();
   const { openPlaylistMenu, openAlbumMenu } = usePlaylistContextMenu();
   const { currentTrackId, isPlaying, isLoading: isPlayerLoading } = useNowPlaying();
-  const [page, setPage] = useState<ArtistPage | null>(null);
+  /*
+   * Seeded from the remembered page, not always null.
+   *
+   * `useEffect` runs after the first paint, so setting this from inside the effect (as the
+   * artist-change branch below still needs to, for switching artists without unmounting) left a
+   * remount's very first frame — the one right after switching tabs back — rendering with
+   * nothing, before the effect caught it up a moment later. Whether that flash was visible
+   * depended on timing against the browser's paint, which is exactly an intermittent "sometimes
+   * shows, sometimes doesn't". Seeding here means a remounted, already-viewed artist has the
+   * right data on the very first render, flash or race no longer possible.
+   */
+  const [page, setPage] = useState<ArtistPage | null>(
+    () => (artist ? artistPageMemory.get(artist.id) ?? null : null),
+  );
   const [showAllSongs, setShowAllSongs] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(
+    () => !(artist && artistPageMemory.has(artist.id)),
+  );
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<ReleaseFilter>("all");
   const [isSubscribing, setIsSubscribing] = useState(false);
@@ -298,6 +313,12 @@ export function ArtistView({
          * refetching the image through Tauri and painting the bytes, which is what rescues a
          * url the webview refuses to load directly — the hand-rolled <img> here had no such
          * step, and looped back to the first candidate forever once they had all failed.
+         *
+         * preferProxy: an artist portrait is a googleusercontent URL far more often than not,
+         * and those routinely refuse the webview's own referer — walking the direct ladder first
+         * meant this one avatar could still be mid-resolution when you switched away, so it took
+         * two visits to actually see it: one to kick the walk off, another after it had finished
+         * in the background regardless of whether this component was still around to see it.
          */
         artworkSlot={
           <TrackArtwork
@@ -307,6 +328,7 @@ export function ArtistView({
             iconSize={72}
             variant="artist"
             loading="eager"
+            preferProxy
           />
         }
         actionsDisabled={isLoading || Boolean(error) || !page?.allSongs.length}

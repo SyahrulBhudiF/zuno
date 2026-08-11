@@ -32,6 +32,21 @@ interface TrackArtworkProps {
   loading?: "eager" | "lazy";
   retryOnError?: boolean;
   /**
+   * Skips the direct-URL ladder and goes straight to the Rust proxy.
+   *
+   * For a source that's effectively guaranteed to need it anyway — `googleusercontent` artist
+   * portraits refuse the webview's referer far more often than they accept it — walking every
+   * direct candidate first (each a real network round trip that has to fail before the next one
+   * even starts) turns a single avatar into the slowest thing on the page, and worse, into
+   * something that can still be mid-walk if the view unmounts before it finishes: the proxy
+   * fetch itself keeps running and caches its result regardless, so the *next* mount pays
+   * nothing, but this one shows the placeholder for however long the walk had left. One flag
+   * rather than fixing the ladder's speed: everything else on the ladder resolves directly far
+   * more often than not, and racing the proxy against it there would trade a rare slow cover for
+   * a proxy request on every fast one.
+   */
+  preferProxy?: boolean;
+  /**
    * Rendered width in CSS pixels, matching the `size-*` class on `className`.
    *
    * Sets which size variant is requested. Without it the original, full-size image is loaded:
@@ -47,6 +62,7 @@ export function TrackArtwork({
   className,
   iconSize = 24,
   loading = "lazy",
+  preferProxy = false,
   retryOnError = false,
   size,
   variant = "track",
@@ -74,8 +90,10 @@ export function TrackArtwork({
     if (!artworkUrl?.trim()) return [];
     const cached = cacheKey ? getResolvedArtworkUrl(cacheKey) : undefined;
     if (cached) return [cached];
-    return isLocalArtwork ? [] : getArtworkUrlCandidates(artworkUrl, sizeBucket);
-  }, [artworkUrl, cacheKey, isLocalArtwork, sizeBucket]);
+    // Empty candidates is what already makes embedded artwork skip straight to the proxy
+    // effect below — preferProxy asks for the exact same shortcut for a remote URL.
+    return isLocalArtwork || preferProxy ? [] : getArtworkUrlCandidates(artworkUrl, sizeBucket);
+  }, [artworkUrl, cacheKey, isLocalArtwork, preferProxy, sizeBucket]);
   const [artworkIndex, setArtworkIndex] = useState(0);
   const [retryCount, setRetryCount] = useState(0);
   const [proxiedArtworkUrl, setProxiedArtworkUrl] = useState<string | null>(null);
