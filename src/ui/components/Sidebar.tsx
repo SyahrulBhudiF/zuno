@@ -493,6 +493,16 @@ export function Sidebar({
   const filterInputRef = useRef<HTMLInputElement | null>(null);
   const [draggedItem, setDraggedItem] = useState<{ id: string; type: LibraryView } | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; type: LibraryView; insertAfter: boolean } | null>(null);
+  /*
+   * Read inside the window listener instead of closing over the `dropTarget` state — see
+   * QueuePanel's identical ref for why: with the state itself in the effect's deps, every
+   * drop-target change during a drag (near-continuous while crossing rows) tore the three
+   * window listeners down and rebuilt them, rather than the effect running once per drag.
+   */
+  const dropTargetRef = useRef(dropTarget);
+  dropTargetRef.current = dropTarget;
+  const playlistOrderRef = useRef(playlistOrder);
+  playlistOrderRef.current = playlistOrder;
   const localPlaylists = useSyncExternalStore(
     subscribeToLocalPlaylists,
     getLocalPlaylistItems,
@@ -938,30 +948,35 @@ export function Sidebar({
       }
 
       const bounds = targetElement.getBoundingClientRect();
-      setDropTarget({
-        id: targetId,
-        type: targetType,
-        insertAfter: event.clientY >= bounds.top + bounds.height / 2,
-      });
+      const insertAfter = event.clientY >= bounds.top + bounds.height / 2;
+      // Same target as last frame: skip the state write. A drag holds mostly still over one
+      // row between boundary crossings, and each write was a re-render plus (see below) a
+      // teardown/rebuild of these very listeners.
+      const current = dropTargetRef.current;
+      if (current?.id === targetId && current.type === targetType && current.insertAfter === insertAfter) {
+        return;
+      }
+      setDropTarget({ id: targetId, type: targetType, insertAfter });
     };
 
     const handlePointerUp = (event: PointerEvent) => {
       const drag = pointerDragRef.current;
       if (!drag || event.pointerId !== drag.pointerId) return;
 
-      if (drag.isDragging && dropTarget && dropTarget.type === drag.itemType && dropTarget.id !== drag.itemId) {
+      const drop = dropTargetRef.current;
+      if (drag.isDragging && drop && drop.type === drag.itemType && drop.id !== drag.itemId) {
         const currentIds =
           drag.itemType === "playlists" ? playlistsRef.current : albumsRef.current;
         const nextOrder = reorderIds(
           currentIds,
           drag.itemId,
-          dropTarget.id,
-          dropTarget.insertAfter,
+          drop.id,
+          drop.insertAfter,
         );
 
         if (drag.itemType === "playlists") {
           const nextPlaylistOrder = mergeVisibleOrderWithStoredOrder(
-            playlistOrder,
+            playlistOrderRef.current,
             nextOrder,
           );
           setPlaylistOrder(nextPlaylistOrder);
@@ -1005,7 +1020,7 @@ export function Sidebar({
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
     };
-  }, [dropTarget, playlistOrder]);
+  }, []);
 
   const totalLibraryCount = libraryView === "albums" ? albums.length : playlists.length;
   const activeSortLabel =
