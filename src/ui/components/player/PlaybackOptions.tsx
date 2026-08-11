@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { cn } from "@/lib/utils";
+import { cn, formatMinutesSeconds } from "@/lib/utils";
 import { Tooltip } from "@/components/motion/tooltip";
 import { ClockIcon, SpeedIcon } from "@/ui/icons";
 import { playerController } from "../../../player/playerStore";
@@ -11,12 +11,8 @@ const SPEEDS = [0.75, 1, 1.25, 1.5, 2] as const;
 /** Sleep durations, plus "end of track" which is handled separately. */
 const SLEEP_MINUTES = [15, 30, 45, 60, 90] as const;
 
-function formatCountdown(remainingMs: number): string {
-  const totalSeconds = Math.ceil(remainingMs / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
+// Ceil, not floor: a countdown showing 0:00 while a second is still running reads as stuck.
+const formatCountdown = (remainingMs: number) => formatMinutesSeconds(Math.ceil(remainingMs / 1000));
 
 /**
  * Playback speed and sleep timer, behind one control.

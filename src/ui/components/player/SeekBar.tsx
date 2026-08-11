@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { shallowEqual, usePlayerSelector } from "../../../player/playerStore";
 import { playerController } from "../../../player/playerStore";
 import { playerUIStore, usePlayerUIState } from "../../stores/playerUIStore";
+import { formatMinutesSeconds } from "@/lib/utils";
 
 /*
  * Deliberately NOT beUI's RangeSlider: that component snaps to discrete steps, while
@@ -34,12 +35,7 @@ const TIME_COMMIT_THRESHOLD_S = 0.2;
 /** Poll period when playback is not advancing — see the frame loop below. */
 const IDLE_POLL_MS = 250;
 
-function formatTime(seconds: number): string {
-  if (isNaN(seconds) || !isFinite(seconds)) return "0:00";
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
-}
+const formatTime = formatMinutesSeconds;
 
 export function SeekBar() {
   const state = usePlayerSelector(
