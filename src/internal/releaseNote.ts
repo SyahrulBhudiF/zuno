@@ -13,7 +13,7 @@ import { getAppSetting, setAppSetting } from "./appSettings";
  *   **Topic** — one line, in plain language, about what changed for the listener.
  *   ...one line per topic, four or so at most...
  *
- *   Report anything broken on GitHub, or come say hello at /r/myzuno.
+ *   Report anything broken on GitHub, or come say hello at /r/ZunoMusic.
  *
  *   Thanks :)
  *
@@ -23,12 +23,13 @@ import { getAppSetting, setAppSetting } from "./appSettings";
  */
 const SEEN_VERSION_KEY = "release-note-seen-version";
 
-export const RELEASE_NOTE_BODY = `**Local files** — real tags and embedded cover art, editable from the app, artwork included.
-**Media keys** — play, pause and skip work again on macOS.
-**Lighter** — less CPU when idle, fewer GPU layers, and per-effect switches under Settings → Potato PC → Manage.
-**Library** — rebuilt page with filtering, sorting and keyboard navigation.
+export const RELEASE_NOTE_BODY = `**Lyrics** — full screen mode.
+**Linux** — native media controls from your desktop and lock screen, and a setting for native window decorations.
+**Lighter** — smoother scrolling and dragging, reduced motion support, and the mini player now matches your theme.
+**Playback** — fewer failed or stalled tracks, and the first song of a session starts sooner.
+**Fixes** — queue position, artist photos, playlist tags and YouTube channel selection all stick properly now.
 
-Report anything broken on GitHub, or come say hello at /r/myzuno.
+Report anything broken on GitHub, or come say hello at /r/ZunoMusic.
 
 Thanks :)`;
 
