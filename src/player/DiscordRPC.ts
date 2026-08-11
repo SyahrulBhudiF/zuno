@@ -65,6 +65,12 @@ function sanitizePresenceLink(value?: string): string | undefined {
   }
 }
 
+/** Identity of a presence payload for dedupe purposes — everything but `currentTime`. */
+export function presenceDedupeKey(data: DiscordPresenceData): string {
+  const { currentTime: _currentTime, ...rest } = data;
+  return JSON.stringify(rest);
+}
+
 function sanitizePresenceData(data: DiscordPresenceData): DiscordPresenceData {
   return {
     title: sanitizeDiscordText(data.title),
@@ -94,6 +100,18 @@ export class DiscordRpcService {
   }
 
   /**
+   * The last payload actually sent, everything but `currentTime`.
+   *
+   * `PlayerController.emit()` fires on every state change — a queue reorder, a rate change, a
+   * sleep timer — most of which leave the track and play state untouched. Discord runs its own
+   * clock off the timestamps `discord_rpc.rs` derives from `currentTime`, so it never needed
+   * repolling either; comparing on everything else and always excluding `currentTime` is what
+   * turns those into no-ops instead of a fresh IPC round trip (and a jittered progress bar) on
+   * every unrelated change.
+   */
+  private static lastSentKey: string | null = null;
+
+  /**
    * Initialize Discord RPC
    * The actual connection happens on the Rust backend
    */
@@ -114,6 +132,7 @@ export class DiscordRpcService {
 
     try {
       await invoke("discord_rpc_clear");
+      this.lastSentKey = null;
       logInternalDebug("Discord.setEnabled cleared presence", {});
     } catch (error) {
       logInternalWarn("Discord.setEnabled.clearFailed", error as Record<string, unknown>);
@@ -129,8 +148,11 @@ export class DiscordRpcService {
       return;
     }
 
+    const safeData = sanitizePresenceData(data);
+    const nextKey = presenceDedupeKey(safeData);
+    if (nextKey === this.lastSentKey) return;
+
     try {
-      const safeData = sanitizePresenceData(data);
       logInternalDebug("Discord.updatePresence", {
         title: safeData.title,
         artist: safeData.artist,
@@ -151,6 +173,7 @@ export class DiscordRpcService {
         isPlaying: safeData.isPlaying,
       });
 
+      this.lastSentKey = nextKey;
       logInternalDebug("Discord.updatePresence.success", {});
     } catch (error) {
       logInternalWarn("Discord.updatePresence.failed", error as Record<string, unknown>);
@@ -167,6 +190,9 @@ export class DiscordRpcService {
     try {
       logInternalDebug("Discord.clearPresence", {});
       await invoke("discord_rpc_clear");
+      // The next real track has to go out even if it matches whatever was showing before
+      // the clear.
+      this.lastSentKey = null;
       logInternalDebug("Discord.clearPresence.success", {});
     } catch (error) {
       logInternalWarn("Discord.clearPresence.failed", error as Record<string, unknown>);
