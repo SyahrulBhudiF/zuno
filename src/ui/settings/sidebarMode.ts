@@ -9,24 +9,24 @@ import {
  * How much room the library rail takes.
  *
  * - `collapsed` — artwork only, permanently. Maximum space for the content column.
- * - `expanded` — names and owners always visible.
- * - `hover` — collapsed until pointed at, then expanded. The default: it keeps the width of
- *   `collapsed` while still letting you read the list without committing a click to it.
+ * - `expanded` — names and owners always visible. The default.
+ * - `hover` — collapsed until pointed at, then expanded. Keeps the width of `collapsed` while
+ *   still letting you read the list without committing a click to it.
  */
 export type SidebarMode = "collapsed" | "expanded" | "hover";
 
 const STORAGE_KEY = "sidebar-mode";
 const CHANGE_EVENT = "sidebar-mode-change";
-const DEFAULT_MODE: SidebarMode = "hover";
+const DEFAULT_MODE: SidebarMode = "expanded";
 
 /** Rail width when collapsed. Wide enough for a 40px tile plus its padding. */
 export const SIDEBAR_COLLAPSED_WIDTH = 62;
 export const SIDEBAR_EXPANDED_WIDTH = 240;
 
 export const SIDEBAR_MODES: ReadonlyArray<{ value: SidebarMode; label: string; hint: string }> = [
+  { value: "expanded", label: "Always expanded", hint: "Names always visible" },
   { value: "hover", label: "Expand on hover", hint: "Collapsed until you point at it" },
   { value: "collapsed", label: "Always collapsed", hint: "Artwork only" },
-  { value: "expanded", label: "Always expanded", hint: "Names always visible" },
 ];
 
 function isSidebarMode(value: unknown): value is SidebarMode {
