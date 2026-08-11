@@ -125,6 +125,23 @@ function getMinter(): Promise<CachedMinter> {
 }
 
 /**
+ * Runs the BotGuard challenge ahead of the first play, off the critical path.
+ *
+ * `attest()` is the ~3s half of first-play latency — a fixed Google-side cost, paid once and
+ * cached for `getMinter`'s TTL regardless of when it runs. Calling this while the app is
+ * otherwise idle (after the library loads) means the first `mintPoToken` call finds the minter
+ * already warm instead of blocking playback on it. Errors are swallowed: a failed pre-attest
+ * just leaves `mintPoToken` to try again, exactly as if this had never been called.
+ */
+export function warmPoToken(): void {
+  void getMinter().catch((error) => {
+    logInternalWarn("poToken.warm failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
+/**
  * Mints a PO token bound to `contentBinding` — a visitor ID for session tokens, a video ID for
  * per-content ones.
  *

@@ -61,6 +61,13 @@ export abstract class DataSource {
   getSearchSuggestions?(query: string, onUpdate?: (suggestions: string[]) => void): Promise<string[]>;
   getStreamData?(track: Track): Promise<StreamData>;
   /**
+   * Pre-pays whatever first-play latency can be paid before there is a play — e.g. warming a
+   * lazily-created client or a slow one-time attestation. Fire-and-forget: called when the
+   * source is otherwise idle, never awaited, and a failure must silently leave the ordinary
+   * lazy path to cover it on the first real request.
+   */
+  warmPlayback?(): void;
+  /**
    * Reports plays to the provider's own listening history.
    *
    * Optional and best-effort on both sides: a source that has no such concept simply omits

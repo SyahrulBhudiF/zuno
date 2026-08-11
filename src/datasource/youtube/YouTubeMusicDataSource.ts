@@ -13,7 +13,7 @@ import { ClientType, Innertube, Platform, Types, YTNodes } from "youtubei.js";
 import { getAppSetting, removeAppSetting, setAppSetting } from "../../internal/appSettings";
 import { clearCache, getCachedJson, setCachedJson } from "../../internal/cache";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../../internal/logging";
-import { mintPoToken } from "./poToken";
+import { mintPoToken, warmPoToken } from "./poToken";
 import { AuthExpiredError, DataSource, type StreamData } from "../DataSource";
 import type {
   AccountOption,
@@ -551,6 +551,28 @@ export class YouTubeMusicDataSource extends DataSource {
     }
 
     return this.downloadClientPromise;
+  }
+
+  /**
+   * Pre-creates the download client and pre-runs the BotGuard attestation, off the critical
+   * path.
+   *
+   * Both are otherwise paid in full the instant someone presses play for the first time in a
+   * session: `getDownloadClient` re-fetches assets `getMusicClient` already warmed (its own
+   * session, its own player script) because it deliberately cannot share that client's identity
+   * — see the comment above — and `warmPoToken` is the ~3s BotGuard challenge. Together they
+   * were the first play's entire 6+ seconds. Calling this once the library has already loaded
+   * moves that cost into idle time instead of the moment someone is waiting on sound; both calls
+   * are independently memoized, so a second call (or the ordinary lazy path beating this to it)
+   * costs nothing extra.
+   */
+  warmPlayback(): void {
+    void this.getDownloadClient().catch((error) => {
+      logInternalWarn("YouTubeMusicDataSource.warmPlayback download client failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    warmPoToken();
   }
 
   /**
@@ -3118,6 +3140,10 @@ export class YouTubeMusicDataSource extends DataSource {
       onBehalfOfUser: this.musicOnBehalfOfUser,
       accountName: this.musicAccountName,
     });
+
+    // The library is the last thing the app was already fetching for the user; whatever
+    // bandwidth/CPU first play would otherwise need is free from here until they press play.
+    this.warmPlayback();
 
     return {
       account: {
