@@ -56,6 +56,22 @@ function getArtistUrl(artist: Artist): string {
 /** How many of the artist's songs the Popular shelf shows before it is expanded. */
 const POPULAR_PREVIEW_COUNT = 6;
 
+/*
+ * Last-resolved page per artist, for this session only.
+ *
+ * Only the active tab's view is mounted (see App.tsx), so switching tabs away from an artist and
+ * back is a full unmount/remount — and `getArtist` is async even on a cache hit. Without this,
+ * every remount reset `page` to null and repainted the header from the nav-prop `artist` alone,
+ * which for the common case — arriving via ArtistLinks on a track/album row — is an
+ * `{id, name}` stub with no artworkUrl at all: the avatar dropped to its placeholder every time
+ * you came back, however briefly. Seeding from here instead means a remount of an artist you've
+ * already viewed repaints instantly while the background refresh below catches it up.
+ *
+ * ponytail: unbounded for the session — an ArtistPage is small and even a long session visiting
+ * hundreds of artists is a non-issue; add an eviction if that stops being true.
+ */
+const artistPageMemory = new Map<string, ArtistPage>();
+
 export function ArtistView({
   artist,
   playerController,
@@ -92,19 +108,27 @@ export function ArtistView({
   useEffect(() => {
     if (!artist) return;
     let active = true;
-    setPage(null);
-    setIsLoading(true);
+    // Whatever this artist last resolved to, if anything — shown immediately while the fetch
+    // below refreshes it, rather than dropping back to the artwork-less nav stub.
+    const remembered = artistPageMemory.get(artist.id) ?? null;
+    setPage(remembered);
+    setIsLoading(!remembered);
     setError(null);
     setFilter("all");
     setShowAllSongs(false);
     void libraryController.getArtist(artist.id, (updated) => {
-      if (active) setPage(updated);
+      if (!active) return;
+      setPage(updated);
+      artistPageMemory.set(artist.id, updated);
     })
       .then((result) => {
-        if (active) setPage(result);
+        if (!active) return;
+        setPage(result);
+        artistPageMemory.set(artist.id, result);
       })
       .catch(() => {
-        if (active) setError("Unable to load this artist.");
+        // A remembered page is still good to show; only a cold load has nothing to fall back to.
+        if (active && !remembered) setError("Unable to load this artist.");
       })
       .finally(() => {
         if (active) setIsLoading(false);
