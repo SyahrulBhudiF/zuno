@@ -348,6 +348,15 @@ const SELECTED_ACCOUNT_STORAGE_KEY = "youtube-music:selected-account";
 // v7: artist pictures come from named header fields now — foreground, then thumbnail, then the
 // channel avatar — so anything cached under the older shape-and-crop rules has to go.
 const ARTIST_CACHE_VERSION = "v9";
+/**
+ * How long a background artist refresh is skipped after a recent one.
+ *
+ * `getArtist`'s cache-hit path unconditionally queued a full refetch — every section, every
+ * artwork lookup — on every call, so switching to an artist tab and back a few times inside a
+ * minute repeated the entire fetch that many times for data that had not gone anywhere. Not a
+ * hard cache: a revisit past this window still refreshes, same as before.
+ */
+const ARTIST_REFRESH_COOLDOWN_MS = 60_000;
 const ARTIST_SUBSCRIPTION_OVERRIDE_MS = 60_000;
 const PLAYLIST_PAGE_SESSION_TTL_MS = 10 * 60_000;
 const PLAYLIST_TRACK_CACHE_VERSION = "v6";
@@ -403,6 +412,8 @@ export class YouTubeMusicDataSource extends DataSource {
   private readonly searchRefreshPromises = new Map<string, Promise<Track[]>>();
   private readonly mixedSearchRefreshPromises = new Map<string, Promise<SearchResults>>();
   private readonly artistRefreshPromises = new Map<string, Promise<ArtistPage>>();
+  /** See `ARTIST_REFRESH_COOLDOWN_MS`. */
+  private readonly artistRefreshedAt = new Map<string, number>();
   private readonly suggestionRefreshPromises = new Map<string, Promise<string[]>>();
   private readonly recommendationRefreshPromises = new Map<string, Promise<Track[]>>();
   private readonly lyricsRefreshPromises = new Map<string, Promise<Lyrics>>();
@@ -3386,18 +3397,21 @@ export class YouTubeMusicDataSource extends DataSource {
     const cacheKey = this.getArtistCacheKey(artistId);
     const cached = await getCachedJson<ArtistPage>(cacheKey);
     if (cached) {
-      globalThis.setTimeout(() => {
-        void this.refreshArtist(artistId, cacheKey)
-          .then(({ changed, value }) => {
-            if (changed) onUpdate?.(value);
-          })
-          .catch((error) => {
-            logInternalWarn("YouTubeMusicDataSource.getArtist background refresh failed", {
-              artistId,
-              error: error instanceof Error ? error.message : String(error),
+      const refreshedAt = this.artistRefreshedAt.get(artistId) ?? 0;
+      if (Date.now() - refreshedAt >= ARTIST_REFRESH_COOLDOWN_MS) {
+        globalThis.setTimeout(() => {
+          void this.refreshArtist(artistId, cacheKey)
+            .then(({ changed, value }) => {
+              if (changed) onUpdate?.(value);
+            })
+            .catch((error) => {
+              logInternalWarn("YouTubeMusicDataSource.getArtist background refresh failed", {
+                artistId,
+                error: error instanceof Error ? error.message : String(error),
+              });
             });
-          });
-      }, 0);
+        }, 0);
+      }
       return cached;
     }
     return (await this.refreshArtist(artistId, cacheKey)).value;
@@ -3479,6 +3493,10 @@ export class YouTubeMusicDataSource extends DataSource {
   ): Promise<{ changed: boolean; value: ArtistPage }> {
     let refresh = this.artistRefreshPromises.get(artistId);
     if (!refresh) {
+      // Stamped at the start, not after: the cooldown is about not *starting* another of these
+      // too soon, and a slow fetch should not leave the window open for a second one to begin
+      // while the first is still in flight.
+      this.artistRefreshedAt.set(artistId, Date.now());
       refresh = this.fetchArtistFresh(artistId).finally(() => {
         this.artistRefreshPromises.delete(artistId);
       });

@@ -10,6 +10,7 @@ import {
   rememberResolvedArtworkUrl,
   resolveArtworkThroughProxy,
 } from "../../internal/artworkCache";
+import { logInternalDebug } from "../../internal/logging";
 import { tauriFetch } from "../../datasource/youtube/tauriFetch";
 import { LOCAL_ARTWORK_PREFIX, LOCAL_IMAGE_PREFIX } from "../../player/localPlaylists";
 
@@ -159,7 +160,14 @@ export function TrackArtwork({
       return;
     }
     // Every candidate already failed for this source once; re-walking earns the same 404s.
-    if (hasArtworkFailed(cacheKey)) return;
+    if (hasArtworkFailed(cacheKey)) {
+      // The one branch in this component that used to leave nothing behind: a mount landing
+      // inside another mount's failure window sat on the fallback icon for up to
+      // FAILURE_TTL_MS with no sign anywhere of why. Debug, not warn — the failure itself was
+      // already logged by whichever attempt actually made the request.
+      logInternalDebug("TrackArtwork withheld, source recently failed", { cacheKey, variant });
+      return;
+    }
 
     let active = true;
 
