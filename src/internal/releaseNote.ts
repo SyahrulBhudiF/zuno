@@ -23,10 +23,11 @@ import { getAppSetting, setAppSetting } from "./appSettings";
  */
 const SEEN_VERSION_KEY = "release-note-seen-version";
 
-export const RELEASE_NOTE_BODY = `**Linux** — native media controls: play, pause and skip from your desktop's media keys and lock screen.
-**Playback** — fewer failed or stalled tracks, especially right after a skip.
-**Faster start** — the first song of a session begins playing sooner.
-**Fixes** — queue position, artist photos and YouTube channel selection all stick properly now.
+export const RELEASE_NOTE_BODY = `**Lyrics** — full screen mode.
+**Linux** — native media controls from your desktop and lock screen, and a setting for native window decorations.
+**Lighter** — smoother scrolling and dragging, reduced motion support, and the mini player now matches your theme.
+**Playback** — fewer failed or stalled tracks, and the first song of a session starts sooner.
+**Fixes** — queue position, artist photos, playlist tags and YouTube channel selection all stick properly now.
 
 Report anything broken on GitHub, or come say hello at /r/ZunoMusic.
 
