@@ -11,6 +11,7 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
  */
 import { ClientType, Innertube, Platform, Types, YTNodes } from "youtubei.js";
 import { getAppSetting, removeAppSetting, setAppSetting } from "../../internal/appSettings";
+import { createSerialQueue } from "../../internal/asyncQueue";
 import { clearCache, getCachedJson, setCachedJson } from "../../internal/cache";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../../internal/logging";
 import { mintPoToken } from "./poToken";
@@ -358,6 +359,8 @@ export class YouTubeMusicDataSource extends DataSource {
   private musicClientPromise: Promise<Innertube> | null = null;
   private webClientPromise: Promise<Innertube> | null = null;
   private downloadClientPromise: Promise<Innertube> | null = null;
+  /** See `withDownloadLock`. */
+  private readonly downloadQueue = createSerialQueue();
   /*
    * An accessor rather than a field, so the ~30 readers of `this.musicCookie` observe the
    * rotations the proxy folds in instead of the value captured at sign-in. Both sides of the
@@ -577,6 +580,24 @@ export class YouTubeMusicDataSource extends DataSource {
     client.session.po_token = poToken;
     if (client.session.player) client.session.player.po_token = poToken;
     return poToken;
+  }
+
+  /**
+   * Runs one download-client resolve at a time.
+   *
+   * `attestForTrack` and `format.decipher` both read and write the *same* download client's
+   * `session.player.po_token` — a single mutable field, not a parameter, because that is the
+   * only place youtubei.js keeps it. `ensureTrackLoaded` deliberately resolves the next track
+   * while the current one still loads, so without this two resolves interleave: one mints and
+   * writes its token, the other's decipher call reads it back before its own attest runs again,
+   * and that track's URL goes out bound to a different video. googlevideo serves such a URL's
+   * first ~1 MiB and 403s the rest — see `fill_media_buffer chunk 1 failed` in the logs.
+   *
+   * A plain queue, not a broader lock: only resolves against the download client need this, so
+   * music/web fallbacks and everything else on the data source run exactly as before.
+   */
+  private withDownloadLock<T>(fn: () => Promise<T>): Promise<T> {
+    return this.downloadQueue(fn);
   }
 
   private async getClient(label: ClientLabel): Promise<Innertube> {
@@ -5352,74 +5373,95 @@ export class YouTubeMusicDataSource extends DataSource {
      */
     for (const label of clientOrder) {
       try {
-        const yt = await this.getClient(label);
-        // Only the download client is attested; music and web are fallbacks whose URLs are
-        // gated at 1 MiB regardless, and minting for them would just be wasted work.
-        const poToken =
-          label === "download" ? await this.attestForTrack(yt, track.id) : undefined;
-        const info = await yt.getBasicInfo(track.id, poToken ? { po_token: poToken } : undefined);
-        /*
-         * MP4 preferred, any audio accepted.
-         *
-         * Filtering to audio/mp4 alone is why some songs refused to download while playing
-         * perfectly: YouTube serves Opus-in-WebM as the *only* audio for a large share of
-         * tracks, and playback never noticed because it goes through the iframe player rather
-         * than this resolver. The offline store serves files back with their recorded mime
-         * type and the webview decodes WebM natively, so there is nothing to gain by
-         * insisting on MP4 — only tracks to lose.
-         */
-        const audioFormats = (info.streaming_data?.adaptive_formats ?? []).filter(
-          (candidate: any) => typeof candidate.mime_type === "string"
-            && candidate.mime_type.startsWith("audio/"),
-        );
-        const mp4Formats = audioFormats.filter(
-          (candidate: any) => candidate.mime_type.includes("audio/mp4"),
-        );
-        /*
-         * "Best available" has to mean it. The MP4 preference used to be applied before the
-         * quality ranking, so `high` never saw the Opus tier — on a typical track that pinned
-         * it to itag 140 at ~128 kbps while itag 251 sat there at ~160, higher bitrate *and*
-         * better per bit. `low` and `normal` keep preferring MP4: they are picking a small file
-         * and AAC is the safer container to hand a media element.
-         */
-        const candidates = quality === "high" || mp4Formats.length === 0
-          ? audioFormats
-          : mp4Formats;
-        const format = selectFormatForQuality(candidates as Array<{ bitrate?: number }>, quality) as
-          | (typeof candidates)[number]
-          | undefined;
-        if (!format) {
-          // Names what was actually on offer, so a future failure is diagnosable from the log
-          // instead of needing another round trip.
-          const offered = (info.streaming_data?.adaptive_formats ?? [])
-            .map((candidate: any) => candidate.mime_type)
-            .filter(Boolean)
-            .slice(0, 8);
-          throw new Error(
-            `YouTube returned no playable audio format. Offered: ${offered.join(", ") || "none"}`,
+        const resolveWithClient = async (): Promise<void> => {
+          const yt = await this.getClient(label);
+          // Only the download client is attested; music and web are fallbacks whose URLs are
+          // gated at 1 MiB regardless, and minting for them would just be wasted work.
+          const poToken =
+            label === "download" ? await this.attestForTrack(yt, track.id) : undefined;
+          const info = await yt.getBasicInfo(track.id, poToken ? { po_token: poToken } : undefined);
+          /*
+           * MP4 preferred, any audio accepted.
+           *
+           * Filtering to audio/mp4 alone is why some songs refused to download while playing
+           * perfectly: YouTube serves Opus-in-WebM as the *only* audio for a large share of
+           * tracks, and playback never noticed because it goes through the iframe player rather
+           * than this resolver. The offline store serves files back with their recorded mime
+           * type and the webview decodes WebM natively, so there is nothing to gain by
+           * insisting on MP4 — only tracks to lose.
+           */
+          const audioFormats = (info.streaming_data?.adaptive_formats ?? []).filter(
+            (candidate: any) => typeof candidate.mime_type === "string"
+              && candidate.mime_type.startsWith("audio/"),
           );
-        }
+          const mp4Formats = audioFormats.filter(
+            (candidate: any) => candidate.mime_type.includes("audio/mp4"),
+          );
+          /*
+           * "Best available" has to mean it. The MP4 preference used to be applied before the
+           * quality ranking, so `high` never saw the Opus tier — on a typical track that pinned
+           * it to itag 140 at ~128 kbps while itag 251 sat there at ~160, higher bitrate *and*
+           * better per bit. `low` and `normal` keep preferring MP4: they are picking a small file
+           * and AAC is the safer container to hand a media element.
+           */
+          const candidates = quality === "high" || mp4Formats.length === 0
+            ? audioFormats
+            : mp4Formats;
+          const format = selectFormatForQuality(candidates as Array<{ bitrate?: number }>, quality) as
+            | (typeof candidates)[number]
+            | undefined;
+          if (!format) {
+            // Names what was actually on offer, so a future failure is diagnosable from the log
+            // instead of needing another round trip.
+            const offered = (info.streaming_data?.adaptive_formats ?? [])
+              .map((candidate: any) => candidate.mime_type)
+              .filter(Boolean)
+              .slice(0, 8);
+            throw new Error(
+              `YouTube returned no playable audio format. Offered: ${offered.join(", ") || "none"}`,
+            );
+          }
 
-        /*
-         * Unconditionally deciphered, unlike the getStreamingData path above. These formats come
-         * raw off getBasicInfo and nothing has touched them yet, so a plain `format.url` here
-         * still carries an untransformed throttling `n` and no `pot`. Taking it as-is is why
-         * downloads 403'd while playback — which goes through getStreamingData — worked.
-         */
-        streamUrl = this.withSessionClientVersion(await format.decipher(yt.session.player), yt);
-        if (!streamUrl) {
-          throw new Error("YouTube returned an empty MP4 audio URL.");
-        }
+          /*
+           * Unconditionally deciphered, unlike the getStreamingData path above. These formats
+           * come raw off getBasicInfo and nothing has touched them yet, so a plain `format.url`
+           * here still carries an untransformed throttling `n` and no `pot`. Taking it as-is is
+           * why downloads 403'd while playback — which goes through getStreamingData — worked.
+           *
+           * Locked end-to-end for the download client (see withDownloadLock): `decipher` reads
+           * `yt.session.player.po_token`, the same mutable field `attestForTrack` above just
+           * wrote — the only place youtubei.js keeps it, with no parameter to pass it through
+           * instead. Without the lock, a concurrent resolve for another track (routine: the next
+           * track warms while this one is still loading) can mint and overwrite that field in
+           * the gap, and this track's URL goes out stamped with a token bound to a different
+           * video. googlevideo serves such a URL's first ~1 MiB — the same grace an unattested
+           * request gets — then refuses the rest.
+           */
+          const decipheredUrl = this.withSessionClientVersion(
+            await format.decipher(yt.session.player),
+            yt,
+          );
+          if (!decipheredUrl) {
+            throw new Error("YouTube returned an empty MP4 audio URL.");
+          }
 
-        streamMimeType = (format as any).mime_type ?? "audio/mp4";
-        logInternalInfo("YouTubeMusicDataSource.getStreamData format selected", {
-          trackId: track.id,
-          client: label,
-          quality,
-          itag: (format as any).itag ?? null,
-          mimeType: streamMimeType,
-          bitrate: (format as any).bitrate ?? null,
-        });
+          streamUrl = decipheredUrl;
+          streamMimeType = (format as any).mime_type ?? "audio/mp4";
+          logInternalInfo("YouTubeMusicDataSource.getStreamData format selected", {
+            trackId: track.id,
+            client: label,
+            quality,
+            itag: (format as any).itag ?? null,
+            mimeType: streamMimeType,
+            bitrate: (format as any).bitrate ?? null,
+          });
+        };
+
+        if (label === "download") {
+          await this.withDownloadLock(resolveWithClient);
+        } else {
+          await resolveWithClient();
+        }
         break;
       } catch (error) {
         logInternalWarn("YouTubeMusicDataSource.getStreamData client failed", {
