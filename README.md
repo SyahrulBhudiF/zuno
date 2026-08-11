@@ -294,3 +294,9 @@ integration only.
 - [YouTube Terms of Service](https://www.youtube.com/static?template=terms)
 - [YouTube API Services Terms of Service](https://developers.google.com/youtube/terms/api-services-terms-of-service)
 - [YouTube API Services Developer Policies](https://developers.google.com/youtube/terms/developer-policies)
+
+## Thanks to our contributors
+
+<a href="https://github.com/noFAYZ/zuno/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=noFAYZ/zuno" />
+</a>
