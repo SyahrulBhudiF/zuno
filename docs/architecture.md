@@ -452,8 +452,8 @@ API and runs each in its own process with a 30 s timeout. `npm run verify` is bo
 has a `#[cfg(test)]` module in `lib.rs` — 14 tests (`cargo test`). There is no component/DOM test harness.
 
 **Repo layout beyond the app:** `landing/` is a separate Vite site for the product page,
-`packaging/` holds the AUR PKGBUILD and the Flatpak manifest, `manifests/` holds the winget
-submission. Workflows: `ci.yml`, `release.yml`, `aur.yml`, `flatpak.yml`.
+`packaging/` holds the AUR PKGBUILD, `manifests/` holds the winget submission. Workflows:
+`ci.yml`, `release.yml`, `aur.yml`.
 
 **Security posture:**
 

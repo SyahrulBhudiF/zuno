@@ -271,6 +271,7 @@ function selectQueueSlice(session: PlayerSession | null) {
     queueIndex: session?.queueIndex ?? -1,
     manualQueueLength: session?.manualQueueLength ?? 0,
     stopAfterQueueIndex: session?.stopAfterQueueIndex ?? null,
+    queueWindowStart: session?.queueWindowStart ?? 0,
   };
 }
 
@@ -281,6 +282,7 @@ function queueSliceEqual(
   return a.queueIndex === b.queueIndex
     && a.manualQueueLength === b.manualQueueLength
     && a.stopAfterQueueIndex === b.stopAfterQueueIndex
+    && a.queueWindowStart === b.queueWindowStart
     && a.queue.length === b.queue.length
     && a.queue.every((track, index) => track === b.queue[index]);
 }
@@ -352,10 +354,13 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
   dropTargetRef.current = dropTarget;
 
   const collapsed = useQueuePanelCollapsed();
-  const { queue, queueIndex, manualQueueLength, stopAfterQueueIndex } = usePlayerSessionSelector(
-    selectQueueSlice,
-    queueSliceEqual,
-  );
+  const { queue, queueIndex, manualQueueLength, stopAfterQueueIndex, queueWindowStart } =
+    usePlayerSessionSelector(selectQueueSlice, queueSliceEqual);
+  // `stopAfterQueueIndex` comes off the session window-relative, like `queueIndex`; rebased once
+  // here so every comparison against `entry.absoluteIndex` (already absolute) lines up.
+  const stopAfterAbsoluteIndex = stopAfterQueueIndex === null
+    ? null
+    : stopAfterQueueIndex + queueWindowStart;
   const playerState = usePlayerSelector(
     (player) => ({ currentTrack: player.currentTrack, status: player.status }),
     shallowEqual,
@@ -399,7 +404,7 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
 
       const entry: QueueEntry = {
         track,
-        absoluteIndex: start + offset,
+        absoluteIndex: queueWindowStart + start + offset,
         position: offset + 1,
         section: offset < manualQueueLength ? "manual" : "automatic",
         key: occurrence === 0 ? track.id : `${track.id}:${occurrence}`,
@@ -408,7 +413,7 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
     }
 
     return { manual: manualEntries, automatic: automaticEntries };
-  }, [manualQueueLength, queue, queueIndex]);
+  }, [manualQueueLength, queue, queueIndex, queueWindowStart]);
 
   const upcomingCount = manual.length + automatic.length;
   /*
@@ -616,7 +621,7 @@ export function QueuePanel({ onClose }: QueuePanelProps) {
         entry={entry}
         collapsed={collapsed}
         isDragged={draggedIndex === entry.absoluteIndex}
-        isStopAfter={stopAfterQueueIndex === entry.absoluteIndex}
+        isStopAfter={stopAfterAbsoluteIndex === entry.absoluteIndex}
         isGenerating={generatingIndex === entry.absoluteIndex}
         dropEdge={
           dropTarget?.index === entry.absoluteIndex

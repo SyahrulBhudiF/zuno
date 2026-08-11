@@ -76,6 +76,13 @@ export interface PlayerSession {
   manualQueueLength?: number;
   /** Index into `queue` after which playback stops, or null. Deliberately not persisted. */
   stopAfterQueueIndex?: number | null;
+  /**
+   * How far `queue` is offset from the live, unwindowed queue the controller's index-taking
+   * methods (`playQueueTrackAt`, `removeFromQueueAt`, ...) operate on. Deliberately not
+   * persisted-meaningful: after a restore the live queue *is* the persisted slice, so the
+   * offset resets to 0.
+   */
+  queueWindowStart?: number;
   status: "playing" | "paused" | "idle";
   positionSec: number;
   volume: number;
@@ -236,7 +243,7 @@ export class PlayerController {
   /** See `queueWindow.ts` — the slice, and the indices rebased onto it. */
   private exportQueueWindow(): Pick<
     PlayerSession,
-    "queue" | "queueIndex" | "manualQueueLength" | "stopAfterQueueIndex"
+    "queue" | "queueIndex" | "manualQueueLength" | "stopAfterQueueIndex" | "queueWindowStart"
   > {
     const all = this.queue.all;
     const window = computeQueueWindow(
@@ -250,6 +257,7 @@ export class PlayerController {
       queueIndex: window.queueIndex,
       manualQueueLength: this.queue.queuedManually,
       stopAfterQueueIndex: window.stopAfterQueueIndex,
+      queueWindowStart: window.from,
     };
   }
 

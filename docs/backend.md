@@ -435,9 +435,9 @@ Defense in depth that *is* in place:
 fallback if the Releases redirect is unavailable. macOS skips the plugin entirely
 (`internal/updateChecker.ts` uses the GitHub Releases API and only links to the download page).
 
-Linux packaging lives outside `src-tauri/`: `packaging/aur/` (PKGBUILD + `.SRCINFO`),
-`packaging/flatpak/` (manifest, desktop entry, metainfo), and `manifests/` for winget — each with a
-release workflow under `.github/workflows/`.
+Linux packaging lives outside `src-tauri/`: `packaging/aur/` (PKGBUILD + `.SRCINFO`) and
+`manifests/` for winget — each with a release workflow under `.github/workflows/`. No longer
+published to Flatpak.
 
 ---
 
