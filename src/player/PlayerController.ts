@@ -1807,6 +1807,7 @@ export class PlayerController {
   suspendForTabSwitch(): void {
     this.isTabActive = false;
     this.syncTransitionTicker();
+    this.syncScrobbleTicker();
     if (this.state.status === "playing") {
       this.audioEngine.suspend();
     }
@@ -1815,6 +1816,7 @@ export class PlayerController {
   async resumeFromTabSwitch(): Promise<void> {
     this.isTabActive = true;
     this.syncTransitionTicker();
+    this.syncScrobbleTicker();
     if (this.state.status !== "playing" || !this.state.currentTrack) return;
 
     try {
@@ -1831,6 +1833,7 @@ export class PlayerController {
     this.flushPlaybackSettings();
     this.isTabActive = false;
     this.syncTransitionTicker();
+    this.syncScrobbleTicker();
     this.audioEngine.setOnEnded(null);
     this.audioEngine.dispose();
     this.listeners.clear();
