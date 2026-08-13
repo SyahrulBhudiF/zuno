@@ -57,6 +57,8 @@ export { MusicNoteIcon as MusicNoteActiveIcon } from "@solar-icons/react/bold/mu
 export { PlaylistIcon } from "@solar-icons/react/linear/playlist";
 export { PlaylistIcon as PlaylistActiveIcon } from "@solar-icons/react/bold/playlist";
 export { PlaylistMinimalisticIcon as PlaylistAddIcon } from "@solar-icons/react/linear/playlist-minimalistic";
+export { EyeIcon } from "@solar-icons/react/linear/eye";
+export { EyeClosedIcon } from "@solar-icons/react/linear/eye-closed";
 export { VinylIcon as AlbumIcon } from "@solar-icons/react/linear/vinyl";
 export { VinylIcon as AlbumActiveIcon } from "@solar-icons/react/bold/vinyl";
 export { Microphone2Icon as LyricsIcon } from "@solar-icons/react/linear/microphone-2";

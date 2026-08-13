@@ -9,13 +9,14 @@ import {
 } from "react";
 import { cn } from "@/lib/utils";
 import { Loader } from "@/components/motion/loader";
-import { BookmarkActiveIcon, BookmarkIcon, CheckIcon, CopyIcon, DownloadIcon, ImageIcon, PencilIcon, TrashIcon } from "@/ui/icons";
+import { BookmarkActiveIcon, BookmarkIcon, CheckIcon, CopyIcon, DownloadIcon, EyeClosedIcon, EyeIcon, ImageIcon, PencilIcon, TrashIcon } from "@/ui/icons";
 import type { Album, Playlist } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
 import { isLocalPlaylist, LOCAL_IMAGE_PREFIX, setLocalPlaylistArtwork } from "../../player/localPlaylists";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { forgetArtworkSource } from "../../internal/artworkCache";
 import { exportPlaylist } from "../../player/playlistTransfer";
+import { hidePlaylist, unhidePlaylist, useHiddenPlaylistIds } from "../settings/hiddenPlaylists";
 import {
   PlaylistContext,
   type PlaylistContextMenuValue,
@@ -149,6 +150,15 @@ export function PlaylistContextMenuProvider({
   const isSaved = album
     ? libraryController.isAlbumSaved(album.id) || Boolean(album.playlistId && libraryController.isAlbumSaved(album.playlistId))
     : false;
+
+  const hiddenPlaylistIds = useHiddenPlaylistIds();
+  const isHiddenPlaylist = Boolean(playlist && hiddenPlaylistIds.includes(playlist.id));
+  const toggleHiddenPlaylist = () => {
+    if (!playlist) return;
+    if (isHiddenPlaylist) unhidePlaylist(playlist.id);
+    else hidePlaylist(playlist.id);
+    setPosition(null);
+  };
 
   const isLocalPlaylistMenu = playlist ? isLocalPlaylist(playlist) : false;
   // Liked Songs is a system list: it has no name of its own and cannot be removed.
@@ -391,6 +401,17 @@ export function PlaylistContextMenuProvider({
             >
               <CopyIcon size={18} />
               <span>Copy playlist URL</span>
+            </button>
+          )}
+          {playlist && (
+            <button
+              type="button"
+              role="menuitem"
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              onClick={toggleHiddenPlaylist}
+            >
+              {isHiddenPlaylist ? <EyeIcon size={18} /> : <EyeClosedIcon size={18} />}
+              <span>{isHiddenPlaylist ? "Unhide from library" : "Hide from library"}</span>
             </button>
           )}
           {canEditPlaylist && (

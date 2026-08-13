@@ -10,7 +10,7 @@ import {
 } from "react";
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
-import { CloseIcon, SearchIcon } from "@/ui/icons";
+import { CloseIcon, EyeClosedIcon, EyeIcon, SearchIcon } from "@/ui/icons";
 import {
   Select,
   SelectContent,
@@ -32,6 +32,7 @@ import { usePlaylistContextMenu } from "../components/PlaylistContextMenu";
 import { useNowPlaying } from "../hooks/useNowPlaying";
 import { useTrackSelection } from "../hooks/useTrackSelection";
 import { isLikedSongsId, likedSongsCover } from "../likedSongsArtwork";
+import { useHiddenPlaylistIds } from "../settings/hiddenPlaylists";
 
 type LibraryTab = "songs" | "albums" | "artists" | "playlists";
 
@@ -199,6 +200,21 @@ export function LibraryPage({
     );
   }, [activeSort, library?.playlists, localPlaylists, normalizedQuery]);
 
+  /*
+   * A display filter, not a second data source: `playlists` above stays the full sorted list,
+   * so a hidden playlist keeps its place in that order the moment "show hidden" reveals it
+   * again, rather than jumping to wherever it would fall in a filtered-then-reappended list.
+   */
+  const hiddenPlaylistIds = useHiddenPlaylistIds();
+  const hiddenPlaylistIdSet = useMemo(() => new Set(hiddenPlaylistIds), [hiddenPlaylistIds]);
+  const [showHiddenPlaylists, setShowHiddenPlaylists] = useState(false);
+  const visiblePlaylists = useMemo(
+    () => playlists.filter((item) => !hiddenPlaylistIdSet.has(item.id)),
+    [playlists, hiddenPlaylistIdSet],
+  );
+  const hiddenPlaylistCount = playlists.length - visiblePlaylists.length;
+  const displayedPlaylists = showHiddenPlaylists ? playlists : visiblePlaylists;
+
   const allArtists = useMemo(() => {
     const byId = new Map<string, Artist>();
     /*
@@ -293,7 +309,7 @@ export function LibraryPage({
     songs: songs.length,
     albums: albums.length,
     artists: artists.length,
-    playlists: playlists.length,
+    playlists: visiblePlaylists.length,
   };
 
   if (!library) {
@@ -500,21 +516,43 @@ export function LibraryPage({
         playlists.length === 0 ? (
           <EmptyState noun="playlists" query={query.trim()} onClearQuery={() => setQuery("")} />
         ) : (
-          <div className={GRID}>
-            {playlists.map((playlist) => (
-              <AlbumCard
-                key={playlist.id}
-                artworkUrl={
-                  isLikedSongsId(playlist.id, playlist.kind)
-                    ? likedSongsCover
-                    : playlist.artworkUrl
-                }
-                title={playlist.title}
-                subtitle={playlist.owner}
-                onClick={() => onOpenPlaylist(playlist)}
-                onContextMenu={(event) => openPlaylistMenu(event, playlist)}
-              />
-            ))}
+          <div className="flex flex-col gap-3">
+            {hiddenPlaylistCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowHiddenPlaylists((current) => !current)}
+                className="flex w-fit items-center gap-1.5 rounded-full bg-card/70 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {showHiddenPlaylists ? <EyeClosedIcon size={14} /> : <EyeIcon size={14} />}
+                {showHiddenPlaylists ? "Hide the hidden playlists" : `Show ${hiddenPlaylistCount} hidden`}
+              </button>
+            )}
+            {displayedPlaylists.length === 0 ? (
+              <p className="px-2 py-16 text-center text-sm text-muted-foreground">
+                All your playlists are hidden.
+              </p>
+            ) : (
+              <div className={GRID}>
+                {displayedPlaylists.map((playlist) => (
+                  <div
+                    key={playlist.id}
+                    className={hiddenPlaylistIdSet.has(playlist.id) ? "opacity-40" : undefined}
+                  >
+                    <AlbumCard
+                      artworkUrl={
+                        isLikedSongsId(playlist.id, playlist.kind)
+                          ? likedSongsCover
+                          : playlist.artworkUrl
+                      }
+                      title={playlist.title}
+                      subtitle={playlist.owner}
+                      onClick={() => onOpenPlaylist(playlist)}
+                      onContextMenu={(event) => openPlaylistMenu(event, playlist)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )
       )}
