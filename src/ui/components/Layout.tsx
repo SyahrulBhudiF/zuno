@@ -1,4 +1,4 @@
-import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { SearchBar } from "./SearchBar";
@@ -25,6 +25,14 @@ interface LayoutProps {
   rightPanel?: ReactNode;
   rightPanelWidth?: number;
   onRightPanelWidthChange?: (width: number) => void;
+  /**
+   * Identifies which page is currently in the scroll root — the same string `App` keys the page
+   * content on. `children` swap out under one persistent scroll container (see `pageContentRef`
+   * below), so without this the container's native `scrollTop` just carries over verbatim from
+   * whatever page was there before: switching tabs looked like they shared a scroll position,
+   * because they were, briefly, the same DOM node's position.
+   */
+  scrollKey?: string;
 }
 
 const SCROLLBAR_HIDE_DELAY_MS = 760;
@@ -48,9 +56,33 @@ export function Layout({
   showTransientScrollbar = false,
   rightPanel,
   rightPanelWidth = 340,
+  scrollKey,
 }: LayoutProps) {
   const ambientArtwork = useAmbientArtwork();
   const pageContentRef = useRef<HTMLDivElement>(null);
+  /** One entry per `scrollKey` ever visited this session. Ephemeral on purpose — a browser tab
+   *  does not persist scroll across a reload either, and it would go stale against content that
+   *  changed since. */
+  const scrollPositionsRef = useRef(new Map<string, number>());
+
+  /*
+   * Restores the incoming page's own position, and — in the same effect, via its cleanup —
+   * banks the outgoing page's position before its content is replaced.
+   *
+   * `useLayoutEffect`, not `useEffect`: it runs after the new `children` have committed to the
+   * DOM but before the browser paints, so the restored offset is what the user sees first
+   * rather than a visible snap from 0 up to it.
+   */
+  useLayoutEffect(() => {
+    const node = pageContentRef.current;
+    if (!node || !scrollKey) return;
+
+    node.scrollTop = scrollPositionsRef.current.get(scrollKey) ?? 0;
+
+    return () => {
+      scrollPositionsRef.current.set(scrollKey, node.scrollTop);
+    };
+  }, [scrollKey]);
   const rightPanelRef = useRef<HTMLDivElement>(null);
   const scrollHideTimerRef = useRef<number | null>(null);
   const scrollDragOffsetRef = useRef<number | null>(null);

@@ -2036,6 +2036,7 @@ useEffect(() => {
           }
           rightPanelWidth={isQueuePanelCollapsed ? COLLAPSED_QUEUE_WIDTH : queuePanelWidth}
           onRightPanelWidthChange={isQueuePanelCollapsed ? undefined : setQueuePanelWidth}
+          scrollKey={activeViewKey}
           /*
             Bound straight to `isQueuePanelOpen`, not a delayed mirror of it: `AnimatePresence`
             in Layout already keeps the last-rendered panel mounted for the whole exit
