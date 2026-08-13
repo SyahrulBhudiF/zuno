@@ -4599,6 +4599,20 @@ pub fn run() {
     let mut context = tauri::generate_context!();
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
+        /*
+         * First among plugins, per the plugin's own docs — it is the one deciding whether this
+         * process gets to keep running at all, so everything else registering a window, a tray
+         * icon or a background task first would be work thrown away the instant a second launch
+         * turns out to be redundant.
+         *
+         * The callback runs in the *original* process when a second launch is attempted; a
+         * second launch's own `main` never reaches this builder at all, since the plugin exits
+         * it immediately. Reuses the tray's own "bring to front" — a second launch is exactly
+         * that, wherever it came from.
+         */
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main_window(app);
+        }))
         .manage(CacheLock(Mutex::new(())))
         .manage(AppSettingsLock(Mutex::new(())))
         .manage(YoutubeCookieJar(Mutex::new(CookieJarState::default())))
