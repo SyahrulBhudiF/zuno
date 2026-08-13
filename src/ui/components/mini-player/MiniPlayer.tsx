@@ -201,8 +201,23 @@ export default function MiniPlayer() {
 
     let cancelled = false;
     let frame = 0;
+    /*
+     * The capsule's width is CSS-transitioned (see its `transition-[...width...]` class), so a
+     * single hover fires this ResizeObserver many times, not once. Each firing used to kick off
+     * its own `await outerPosition/outerSize/setSize/outerPosition/setPosition` chain with no
+     * serialisation between them — overlapping calls could each read the window's geometry
+     * before an earlier, still in-flight call had finished writing its own, recentring off a
+     * stale snapshot. That race is what "moonwalked" the window left on every hover.
+     *
+     * Fixed by coalescing instead of overlapping: a resize while a write is already in flight
+     * only records the latest width and returns, and the in-flight call picks it up as its next
+     * step. At most one geometry read/write round-trip runs at a time, and a burst of
+     * intermediate widths collapses to whichever was still current once the previous step lands.
+     */
+    let pendingWidth: number | null = null;
+    let applying = false;
 
-    const applyWidth = async (cssWidth: number) => {
+    const applyWidthOnce = async (cssWidth: number) => {
       const targetWidth = Math.min(
         EXPANDED_WIDTH + WINDOW_PADDING * 2,
         Math.ceil(cssWidth) + WINDOW_PADDING * 2,
@@ -241,6 +256,22 @@ export default function MiniPlayer() {
         void emit("mini-player:position-changed", savedPosition);
       } catch (_) {
         // A failed resize just keeps the previous width; never worth interrupting playback.
+      }
+    };
+
+    const applyWidth = async (cssWidth: number) => {
+      pendingWidth = cssWidth;
+      if (applying) return;
+
+      applying = true;
+      try {
+        while (!cancelled && pendingWidth !== null) {
+          const width = pendingWidth;
+          pendingWidth = null;
+          await applyWidthOnce(width);
+        }
+      } finally {
+        applying = false;
       }
     };
 
