@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
-use rodio::{Player, Source};
+use rodio::{DeviceTrait, Player, Source};
 use serde::Serialize;
 use symphonia::core::io::MediaSource;
 use tauri::{AppHandle, Emitter};
@@ -248,6 +248,13 @@ pub(crate) enum Command {
         muted: bool,
     },
     Rate(f32),
+    /// Reopens the stream on a different device, `None` for the OS default. Both decks are lost
+    /// with the old stream — the caller reloads whatever was playing, the same way a track
+    /// recovers from a dead connection elsewhere in this pipeline.
+    SetOutputDevice {
+        id: Option<String>,
+        reply: Sender<Result<(), String>>,
+    },
     Transition {
         track_id: String,
         fade_ms: u64,
@@ -273,11 +280,14 @@ pub(crate) enum Command {
 pub(crate) struct NativeAudio {
     sender: Mutex<Option<Sender<Command>>>,
     app: AppHandle,
+    /// Which device the next lazy thread start should open. Only consulted at startup — a
+    /// change after that goes through `Command::SetOutputDevice` instead, via `set_output_device`.
+    pending_device: Mutex<Option<String>>,
 }
 
 impl NativeAudio {
     pub(crate) fn new(app: AppHandle) -> Self {
-        Self { sender: Mutex::new(None), app }
+        Self { sender: Mutex::new(None), app, pending_device: Mutex::new(None) }
     }
 
     /**
@@ -297,9 +307,14 @@ impl NativeAudio {
             let (tx, rx) = mpsc::channel();
             let (ready_tx, ready_rx) = mpsc::channel();
             let app = self.app.clone();
+            let device = self
+                .pending_device
+                .lock()
+                .map_err(|_| "native audio lock poisoned".to_string())?
+                .clone();
             std::thread::Builder::new()
                 .name("zuno-audio".into())
-                .spawn(move || run(app, rx, ready_tx))
+                .spawn(move || run(app, rx, ready_tx, device))
                 .map_err(|error| format!("audio thread failed to start: {error}"))?;
 
             ready_rx
@@ -313,6 +328,109 @@ impl NativeAudio {
             .send(command)
             .map_err(|_| "audio thread is gone".to_string())
     }
+
+    /**
+     * Sets which output device the engine writes to, `None` for the OS default.
+     *
+     * Before the thread exists this only records the preference for the next lazy start — it
+     * does not claim a device handle early, the same laziness `send` documents above. Once the
+     * thread is running, `pending_device` is never looked at again, so a change from here on
+     * hot-swaps the live stream instead.
+     */
+    pub(crate) fn set_output_device(&self, id: Option<String>) -> Result<(), String> {
+        let sender = self
+            .sender
+            .lock()
+            .map_err(|_| "native audio lock poisoned".to_string())?
+            .clone();
+
+        let Some(sender) = sender else {
+            *self
+                .pending_device
+                .lock()
+                .map_err(|_| "native audio lock poisoned".to_string())? = id;
+            return Ok(());
+        };
+
+        let (tx, rx) = mpsc::channel();
+        sender
+            .send(Command::SetOutputDevice { id, reply: tx })
+            .map_err(|_| "audio thread is gone".to_string())?;
+        rx.recv().map_err(|_| "audio thread dropped the request".to_string())?
+    }
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AudioOutputDevice {
+    /// `DeviceId::to_string()` — opaque, and the only part of this that round-trips through
+    /// `open_device_sink`. A device's name is not guaranteed unique or stable across a
+    /// reconnect on every backend; its id is what cpal documents as surviving both.
+    id: String,
+    name: String,
+    is_default: bool,
+}
+
+/**
+ * Enumerates cpal output devices.
+ *
+ * Pure enumeration, not routed through the audio thread — it never opens a device, so an
+ * IFrame-only user never pays for one just to see the dropdown, and it works before the thread
+ * has ever started.
+ */
+pub(crate) fn list_output_devices() -> Result<Vec<AudioOutputDevice>, String> {
+    use rodio::cpal::traits::HostTrait;
+
+    let host = rodio::cpal::default_host();
+    let default_id = host.default_output_device().and_then(|device| device.id().ok());
+    let devices = host
+        .output_devices()
+        .map_err(|error| format!("failed to list audio output devices: {error}"))?;
+
+    Ok(devices
+        .filter_map(|device| {
+            let id = device.id().ok()?;
+            let name = device.description().ok()?.name().to_string();
+            let is_default = default_id.as_ref() == Some(&id);
+            Some(AudioOutputDevice { id: id.to_string(), name, is_default })
+        })
+        .collect())
+}
+
+/**
+ * Opens the sink for `id`, or the OS default when `id` is `None`.
+ *
+ * A device id that no longer resolves — unplugged, a saved choice from a machine that changed
+ * underneath it — falls back to the default rather than refusing outright. The alternative is a
+ * stored preference from weeks ago turning into silence the user has to notice and go fix in
+ * settings, which is a worse failure than picking a device for them.
+ */
+fn open_device_sink(id: Option<&str>) -> Result<MixerDeviceSink, String> {
+    let device = id.and_then(|id| {
+        let device = find_output_device(id);
+        if device.is_none() {
+            eprintln!(
+                "[internal][tauri][warn] native_audio output device not found, using default id={}",
+                id
+            );
+        }
+        device
+    });
+
+    match device {
+        Some(device) => DeviceSinkBuilder::from_device(device)
+            .and_then(DeviceSinkBuilder::open_stream)
+            .map_err(|error| format!("failed to open audio output device: {error}")),
+        None => DeviceSinkBuilder::open_default_sink()
+            .map_err(|error| format!("no audio output device: {error}")),
+    }
+}
+
+fn find_output_device(id: &str) -> Option<rodio::Device> {
+    use rodio::cpal::traits::HostTrait;
+
+    let id: rodio::cpal::DeviceId = id.parse().ok()?;
+    rodio::cpal::default_host().device_by_id(&id)
 }
 
 /// Sends a command and waits for its reply, mapping a dead thread to an error rather than a
@@ -328,11 +446,16 @@ pub(crate) fn request<T>(
         .map_err(|_| "audio thread dropped the request".to_string())
 }
 
-fn run(app: AppHandle, rx: Receiver<Command>, ready: Sender<Result<(), String>>) {
-    let stream = match DeviceSinkBuilder::open_default_sink() {
+fn run(
+    app: AppHandle,
+    rx: Receiver<Command>,
+    ready: Sender<Result<(), String>>,
+    initial_device: Option<String>,
+) {
+    let stream = match open_device_sink(initial_device.as_deref()) {
         Ok(stream) => stream,
         Err(error) => {
-            let _ = ready.send(Err(format!("no audio output device: {error}")));
+            let _ = ready.send(Err(error));
             return;
         }
     };
@@ -595,6 +718,39 @@ impl Engine {
                 self.decks[self.active].clear();
                 self.playing = false;
             }
+            Command::SetOutputDevice { id, reply } => match open_device_sink(id.as_deref()) {
+                Ok(stream) => {
+                    let decks = [
+                        Deck {
+                            sink: Player::connect_new(stream.mixer()),
+                            track_id: None,
+                            duration_sec: 0.0,
+                            health: None,
+                        },
+                        Deck {
+                            sink: Player::connect_new(stream.mixer()),
+                            track_id: None,
+                            duration_sec: 0.0,
+                            health: None,
+                        },
+                    ];
+                    for deck in &decks {
+                        deck.sink.pause();
+                    }
+                    // Both old decks go with the old stream, so a fade referencing them would
+                    // be stale — dropped rather than settled through `cancel_fade`, which would
+                    // write a volume to a deck this is about to discard anyway.
+                    self.fade = None;
+                    self._stream = stream;
+                    self.decks = decks;
+                    self.active = 0;
+                    self.playing = false;
+                    let _ = reply.send(Ok(()));
+                }
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                }
+            },
         }
         false
     }
