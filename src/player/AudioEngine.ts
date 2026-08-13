@@ -252,6 +252,17 @@ export class AudioEngine {
   private standbyVideoId: string | null = null;
   private standbyPromise: Promise<void> | null = null;
   private standbyIdleTimerId: number | null = null;
+  /**
+   * The video id the standby deck's IFrame most recently reported unplayable (see `onError`).
+   *
+   * Without this, the crossfade ticker calls `preloadNext` with the same id every ~250ms, and a
+   * video YouTube refuses to embed — error 150/101, the video owner disallows embedded players —
+   * fails identically every time. That was thirty-odd retries of the same doomed embed inside
+   * the crossfade window before the transition finally gave up and surfaced the error. The
+   * restriction is a property of the video, not a transient hiccup, so there is no cooldown here
+   * — it just stops being retried until something else asks to preload a different track.
+   */
+  private lastFailedStandbyVideoId: string | null = null;
   private audio: HTMLAudioElement | null = null;
   private audioObjectUrl: string | null = null;
   private currentVideoId: string | null = null;
@@ -728,6 +739,7 @@ export class AudioEngine {
     if (this.useNativeAudio || this.audio) return;
     if (!videoId || videoId === this.currentVideoId) return;
     if (this.standbyVideoId === videoId || this.standbyPromise) return;
+    if (this.lastFailedStandbyVideoId === videoId) return;
 
     this.standbyPromise = this.cueStandby(videoId)
       .catch((error: unknown) => {
@@ -1290,6 +1302,9 @@ export class AudioEngine {
                 videoId: this.standbyVideoId,
                 code: event.data,
               });
+              // Read before discardStandby() clears it — that is the only copy of which video
+              // this error was actually about.
+              this.lastFailedStandbyVideoId = this.standbyVideoId;
               this.discardStandby();
               return;
             }
