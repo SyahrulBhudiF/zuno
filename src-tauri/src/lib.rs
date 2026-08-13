@@ -3808,6 +3808,24 @@ fn native_audio_drop_active(
     state.send(audio::Command::DropActive).map_err(cache_error)
 }
 
+/// Devices cpal can currently see, for the output-device picker in Settings.
+#[tauri::command]
+fn native_audio_list_output_devices() -> Result<Vec<audio::AudioOutputDevice>, CommandError> {
+    audio::list_output_devices().map_err(cache_error)
+}
+
+/// Switches the device the Rust engine plays to, by the `id` `native_audio_list_output_devices`
+/// reported. `id: None` is the OS default. See `NativeAudio::set_output_device` for what this
+/// does before playback has started versus during it — the latter clears both decks, so the
+/// frontend reloads whatever was playing.
+#[tauri::command]
+fn native_audio_set_output_device(
+    state: tauri::State<'_, audio::NativeAudio>,
+    id: Option<String>,
+) -> Result<(), CommandError> {
+    state.set_output_device(id).map_err(cache_error)
+}
+
 #[tauri::command]
 async fn fetch_youtube_music_audio(video_id: String) -> Result<AudioPayload, CommandError> {
     let started_at = Instant::now();
@@ -4735,6 +4753,8 @@ pub fn run() {
             native_audio_drop_standby,
             native_audio_drop_active,
             native_audio_set_equalizer,
+            native_audio_list_output_devices,
+            native_audio_set_output_device,
             media_server_release,
             proxy_http_request,
             load_youtube_music_cookie,

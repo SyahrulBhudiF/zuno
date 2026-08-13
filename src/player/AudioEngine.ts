@@ -71,6 +71,20 @@ declare global {
  */
 const STANDBY_IDLE_TEARDOWN_MS = 60_000;
 
+/**
+ * Crossfade ramp granularity for the IFrame engine. Matches `FADE_STEP` in `audio.rs` — 50 steps
+ * a second is well below what the ear resolves as stepping.
+ *
+ * A `setInterval`, not `requestAnimationFrame`: rAF is tied to the compositor's paint loop and
+ * stops firing outright while the window is hidden or minimized, which used to leave a track
+ * that started crossfading right before a minimize stuck at whatever volume the ramp had
+ * reached — silence or near it — until focus returned. `setInterval` keeps running in the
+ * background (browsers clamp its rate there, they do not stop it), and each tick still computes
+ * progress from real elapsed time, so a throttled run of ticks still lands on the right volume
+ * for however much wall-clock time has actually passed.
+ */
+const FADE_STEP_MS = 20;
+
 let iframeApiPromise: Promise<void> | null = null;
 const audioEngines = new Set<AudioEngine>();
 let playbackClaimId = 0;
@@ -246,7 +260,7 @@ export class AudioEngine {
    * The crossfade ramp. Held so a stop mid-transition can cancel it — a ramp that kept running
    * would set volumes on a deck that had already been torn down.
    */
-  private fadeFrameId: number | null = null;
+  private fadeIntervalId: number | null = null;
   private muted = false;
   private playbackRate = 1;
   private onEnded: (() => void) | null = null;
@@ -847,13 +861,12 @@ export class AudioEngine {
         incoming.setVolume(Math.round(targetPercent * Math.sin((progress * Math.PI) / 2)));
 
         if (progress >= 1) {
-          this.fadeFrameId = null;
+          window.clearInterval(this.fadeIntervalId!);
+          this.fadeIntervalId = null;
           resolve();
-          return;
         }
-        this.fadeFrameId = window.requestAnimationFrame(step);
       };
-      this.fadeFrameId = window.requestAnimationFrame(step);
+      this.fadeIntervalId = window.setInterval(step, FADE_STEP_MS);
     });
   }
 
@@ -922,9 +935,9 @@ export class AudioEngine {
   }
 
   private cancelFade(): void {
-    if (this.fadeFrameId !== null) {
-      window.cancelAnimationFrame(this.fadeFrameId);
-      this.fadeFrameId = null;
+    if (this.fadeIntervalId !== null) {
+      window.clearInterval(this.fadeIntervalId);
+      this.fadeIntervalId = null;
     }
   }
 
