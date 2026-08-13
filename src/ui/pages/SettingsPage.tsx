@@ -168,6 +168,13 @@ import {
   type AudioEngineMode,
 } from "../settings/audioEngine";
 import {
+  listOutputDevices,
+  setOutputDevice,
+  SYSTEM_DEFAULT_DEVICE,
+  useOutputDevice,
+  type OutputDevice,
+} from "../settings/audioOutputDevice";
+import {
   captureKeyboardShortcut,
   formatKeyboardShortcut,
   KEYBOARD_SHORTCUT_ACTIONS,
@@ -335,6 +342,61 @@ function EqualizerSettings({ engineMode }: { engineMode: AudioEngineMode }) {
         boost is held back rather than clipped — lower the preamp to hear the difference instead.
       </p>
     </div>
+  );
+}
+
+/**
+ * Which sound card the Rust engine writes to.
+ *
+ * Only the Rust engine opens one itself — the IFrame and native paths play through the webview
+ * and follow whatever the OS default routes to, same as any other browser tab.
+ */
+function OutputDeviceSetting({ engineMode }: { engineMode: AudioEngineMode }) {
+  const selected = useOutputDevice();
+  const [devices, setDevices] = useState<OutputDevice[]>([]);
+  const available = engineMode === "rust";
+
+  useEffect(() => {
+    let cancelled = false;
+    listOutputDevices()
+      .then((found) => {
+        if (!cancelled) setDevices(found);
+      })
+      // The row still works with an empty list — it just offers nothing but "System default".
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <SettingRow
+      title="Output device"
+      description="Which sound card the Rust engine plays to."
+      disabled={!available}
+    >
+      {(labelId) => (
+        <Select
+          className="w-52"
+          value={selected ?? SYSTEM_DEFAULT_DEVICE}
+          onValueChange={(value) => {
+            setOutputDevice(value === SYSTEM_DEFAULT_DEVICE ? null : value);
+          }}
+        >
+          <SelectTrigger aria-labelledby={labelId}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={SYSTEM_DEFAULT_DEVICE}>System default</SelectItem>
+            {devices.map((device) => (
+              <SelectItem key={device.id} value={device.id}>
+                {device.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    </SettingRow>
   );
 }
 
@@ -2081,6 +2143,8 @@ export function SettingsPage({
             <p className="px-1 text-xs text-muted-foreground">
               Applies from the next track.
             </p>
+
+            <OutputDeviceSetting engineMode={audioEngineMode} />
 
             <EqualizerSettings engineMode={audioEngineMode} />
 

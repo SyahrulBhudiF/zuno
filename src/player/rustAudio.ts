@@ -122,6 +122,22 @@ export function setRate(rate: number): Promise<void> {
   return invoke("native_audio_set_rate", { rate });
 }
 
+export type OutputDevice = { id: string; name: string; isDefault: boolean };
+
+/** Devices cpal can currently see. Cheap — does not open a device or touch the audio thread. */
+export function listOutputDevices(): Promise<OutputDevice[]> {
+  return invoke<OutputDevice[]>("native_audio_list_output_devices");
+}
+
+/**
+ * Switches the device the engine plays to, by the `id` `listOutputDevices` reported. `null` is
+ * the OS default. Clears whatever was loaded if the audio thread was already running — the
+ * caller reloads the current track the same way a dead stream recovers elsewhere in this file.
+ */
+export function setOutputDevice(id: string | null): Promise<void> {
+  return invoke("native_audio_set_output_device", { id });
+}
+
 export function transition(trackId: string, fadeMs: number): Promise<boolean> {
   return invoke<boolean>("native_audio_transition", { trackId, fadeMs });
 }
