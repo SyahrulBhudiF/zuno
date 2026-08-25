@@ -10,12 +10,15 @@ import { Switch } from "@/components/motion/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/motion/tabs";
 import { RangeSlider } from "@/components/motion/range-slider";
 import {
+  activeEqualizerPreset,
   EQUALIZER_BANDS_HZ,
   EQUALIZER_MAX_DB,
   EQUALIZER_PRESETS,
   isEqualizerFlat,
   setEqualizer,
+  setEqualizerEnabled,
   useEqualizer,
+  useEqualizerEnabled,
 } from "../settings/equalizer";
 import {
   MAX_CROSSFADE_SEC,
@@ -266,13 +269,18 @@ const SETTINGS_FIELD =
  * Sliders are horizontal, stacked. The usual picture of an equaliser is vertical, but that would
  * mean a second slider component built to be rotated, and the frequency and the gain read more
  * clearly written out than inferred from a bar's height.
+ *
+ * The switch is a bypass, not a reset — it never touches the stored curve, only whether Rust is
+ * currently told to apply it. See `setEqualizerEnabled`.
  */
 function EqualizerSettings({ engineMode }: { engineMode: AudioEngineMode }) {
   const equalizer = useEqualizer();
+  const enabled = useEqualizerEnabled();
   // Only the Rust engine has the samples. A track that fell back to the YouTube player plays
   // unequalised no matter what these say, which the note below is there to admit.
   const available = engineMode === "rust";
   const flat = isEqualizerFlat(equalizer);
+  const labelId = useId();
 
   const setBand = (index: number, gain: number) => {
     const bandsDb = equalizer.bandsDb.slice();
@@ -280,62 +288,78 @@ function EqualizerSettings({ engineMode }: { engineMode: AudioEngineMode }) {
     setEqualizer({ ...equalizer, bandsDb });
   };
 
-  const activePreset = EQUALIZER_PRESETS.find(
-    (preset) =>
-      preset.settings.preampDb === equalizer.preampDb
-      && preset.settings.bandsDb.every((gain, index) => gain === equalizer.bandsDb[index]),
-  );
+  const activePreset = activeEqualizerPreset(equalizer);
 
   return (
     <div className={cn("flex flex-col gap-3 pt-1", !available && "opacity-50")}>
-      <div className="flex items-baseline justify-between gap-4">
-        <span className="text-sm font-medium text-foreground">Equaliser</span>
-        <span className="text-xs text-muted-foreground">
-          {available
-            ? flat
-              ? "Off"
-              : `${equalizer.preampDb > 0 ? "+" : ""}${equalizer.preampDb} dB preamp`
-            : "Needs the Rust playback method"}
-        </span>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex flex-col gap-0.5">
+          <span id={labelId} className="text-sm font-medium text-foreground">
+            Equaliser
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {available
+              ? enabled
+                ? flat
+                  ? "Flat"
+                  : `${equalizer.preampDb > 0 ? "+" : ""}${equalizer.preampDb} dB preamp`
+                : "Off"
+              : "Needs the Rust playback method"}
+          </span>
+        </div>
+        <Switch
+          checked={enabled}
+          onCheckedChange={setEqualizerEnabled}
+          disabled={!available}
+          aria-labelledby={labelId}
+        />
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {EQUALIZER_PRESETS.map((preset) => (
-          <button
-            key={preset.name}
-            type="button"
+      {/*
+        * Dimmed, not disabled: the curve is still worth shaping while off, the same way a
+        * hardware EQ's sliders keep moving with the bypass switch flipped — it is what makes
+        * flipping it back on show the shape you already built instead of the flat one it was
+        * silently holding underneath.
+        */}
+      <div className={cn("flex flex-col gap-3", !enabled && "opacity-60")}>
+        <div className="flex flex-wrap gap-2">
+          {EQUALIZER_PRESETS.map((preset) => (
+            <button
+              key={preset.name}
+              type="button"
+              disabled={!available}
+              onClick={() => setEqualizer(preset.settings)}
+              className={cn(
+                "rounded-full px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                activePreset?.name === preset.name
+                  ? "bg-primary text-primary-foreground"
+                  : "text-foreground hover:bg-card",
+              )}
+            >
+              {preset.name}
+            </button>
+          ))}
+        </div>
+
+        <EqualizerBand
+          label="Preamp"
+          value={equalizer.preampDb}
+          disabled={!available}
+          onChange={(preampDb) => setEqualizer({ ...equalizer, preampDb })}
+        />
+
+        <div className="h-px bg-border" />
+
+        {EQUALIZER_BANDS_HZ.map((hz, index) => (
+          <EqualizerBand
+            key={hz}
+            label={hz >= 1000 ? `${hz / 1000}k` : String(hz)}
+            value={equalizer.bandsDb[index]}
             disabled={!available}
-            onClick={() => setEqualizer(preset.settings)}
-            className={cn(
-              "rounded-full px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-              activePreset?.name === preset.name
-                ? "bg-primary text-primary-foreground"
-                : "text-foreground hover:bg-card",
-            )}
-          >
-            {preset.name}
-          </button>
+            onChange={(gain) => setBand(index, gain)}
+          />
         ))}
       </div>
-
-      <EqualizerBand
-        label="Preamp"
-        value={equalizer.preampDb}
-        disabled={!available}
-        onChange={(preampDb) => setEqualizer({ ...equalizer, preampDb })}
-      />
-
-      <div className="h-px bg-border" />
-
-      {EQUALIZER_BANDS_HZ.map((hz, index) => (
-        <EqualizerBand
-          key={hz}
-          label={hz >= 1000 ? `${hz / 1000}k` : String(hz)}
-          value={equalizer.bandsDb[index]}
-          disabled={!available}
-          onChange={(gain) => setBand(index, gain)}
-        />
-      ))}
 
       <p className="px-1 text-xs text-muted-foreground">
         Applies immediately, to the track playing. A limiter sits after the bands, so a heavy

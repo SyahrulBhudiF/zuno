@@ -38,6 +38,7 @@ interface TitleBarProps {
   tabs: Tab[];
   activeTabId: string;
   playingTabId: string | null;
+  nonClosableTabId?: string | null;
   sidebarWidth: number;
   isHomeActive: boolean;
   onNavigateHome: () => void;
@@ -61,6 +62,7 @@ export function TitleBar({
   tabs,
   activeTabId,
   playingTabId,
+  nonClosableTabId,
   sidebarWidth,
   isHomeActive,
   onNavigateHome,
@@ -224,6 +226,7 @@ export function TitleBar({
         tabs={tabs}
         activeTabId={activeTabId}
         playingTabId={playingTabId}
+        nonClosableTabId={nonClosableTabId}
         onCreateTab={onCreateTab}
         onCloseTab={onCloseTab}
         onSwitchTab={onSwitchTab}

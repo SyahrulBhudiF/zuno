@@ -4,6 +4,8 @@ import { Tooltip } from "@/components/motion/tooltip";
 import { ClockIcon, SpeedIcon } from "@/ui/icons";
 import { playerController } from "../../../player/playerStore";
 import { FloatingPanel } from "../FloatingPanel";
+import { MiniEqualizer } from "./MiniEqualizer";
+import { isEqualizerFlat, useEqualizer, useEqualizerEnabled } from "../../settings/equalizer";
 
 /** Offered speeds. Wider than a podcast app needs, narrow enough to stay a single row. */
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2] as const;
@@ -15,11 +17,12 @@ const SLEEP_MINUTES = [15, 30, 45, 60, 90] as const;
 const formatCountdown = (remainingMs: number) => formatMinutesSeconds(Math.ceil(remainingMs / 1000));
 
 /**
- * Playback speed and sleep timer, behind one control.
+ * Playback speed, sleep timer and a mini equaliser, behind one control.
  *
- * They share a panel because they are the two "how this plays" settings that belong next to
- * the transport rather than buried in Settings — a sleep timer you cannot see counting down
- * is a sleep timer you do not trust.
+ * They share a panel because they are the "how this plays" settings that belong next to the
+ * transport rather than buried in Settings — a sleep timer you cannot see counting down is a
+ * sleep timer you do not trust, and an equaliser you have to leave the song for to adjust gets
+ * adjusted a lot less often than one sitting where you already are.
  */
 export function PlaybackOptions() {
   const [isOpen, setIsOpen] = useState(false);
@@ -29,6 +32,9 @@ export function PlaybackOptions() {
   );
 
   const isSleeping = remainingMs !== null;
+  const equalizer = useEqualizer();
+  const equalizerEnabled = useEqualizerEnabled();
+  const equalizerActive = equalizerEnabled && !isEqualizerFlat(equalizer);
 
   /*
    * Polled once a second rather than driven by player state: the deadline is wall-clock, so
@@ -65,7 +71,7 @@ export function PlaybackOptions() {
       triggerClassName="shrink-0"
       className="w-64"
       trigger={
-        <Tooltip content="Speed and sleep timer">
+        <Tooltip content="Speed, sleep timer and equaliser">
           <button
             type="button"
             onClick={() => setIsOpen((open) => !open)}
@@ -75,7 +81,7 @@ export function PlaybackOptions() {
             className={cn(
               "flex h-8 items-center justify-center gap-1 rounded-full px-2 text-muted-foreground transition-colors",
               "hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              (isSleeping || rate !== 1) && "text-primary",
+              (isSleeping || rate !== 1 || equalizerActive) && "text-primary",
             )}
           >
             {isSleeping ? (
@@ -151,6 +157,8 @@ export function PlaybackOptions() {
             Fades out over the last 20 seconds.
           </span>
         </div>
+
+        <MiniEqualizer />
       </div>
     </FloatingPanel>
   );

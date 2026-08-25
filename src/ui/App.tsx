@@ -1259,6 +1259,10 @@ export default function App() {
   const handleCloseTab = (tabId: string) => {
     playerUIStore.setLyricsOpen(false);
     if (tabs.length === 1) return;
+    // Settings/Library/History/Browse tabs never get a tabManager entry, so `tabs.length` above
+    // can be >1 while this is still the last actual music tab — block that too, or TabManager
+    // is left with zero tabs and every playback control throws "No active music tab."
+    if (tabManager.isOnlyTab(tabId)) return;
 
     const closedTab = tabs.find((tab) => tab.id === tabId);
     if (!closedTab) return;
@@ -2002,6 +2006,7 @@ useEffect(() => {
             ? tabManager.getActivePlayerId()
             : null
         }
+        nonClosableTabId={tabs.find((tab) => tabManager.isOnlyTab(tab.id))?.id ?? null}
         sidebarWidth={sidebarWidth}
         isHomeActive={activeTab?.view === "home"}
         onNavigateHome={handleNavigateHome}
