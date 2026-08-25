@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { SpinnerSteps } from "@/components/motion/loader";
 import { CloseIcon, SearchIcon } from "@/ui/icons";
 import { TrackRow } from "../components/TrackRow";
+import { TrackListSkeleton } from "../components/Skeleton";
 import { useNowPlaying } from "../hooks/useNowPlaying";
 import type { Album, Track } from "../../datasource/types";
 import type { LibraryController } from "../../player/LibraryController";
@@ -37,14 +37,6 @@ interface AlbumViewProps {
 
 function getTrackRenderKey(track: Track, index: number): string {
   return track.playlistItemId ?? `${track.id}:${index}`;
-}
-
-function AlbumLoadingSpinner({ label }: { label: string }) {
-  return (
-    <div className="grid place-items-center px-2 py-16 text-muted-foreground" role="status" aria-live="polite" aria-label={label}>
-      <SpinnerSteps size={18} color="currentColor" />
-    </div>
-  );
 }
 
 export function AlbumView({ album, playerController, libraryController }: AlbumViewProps) {
@@ -205,9 +197,13 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
         onAddToPlaylist={() => openPlaylistPicker(tracks[0], tracks)}
         download={{ onStart: () => queueDownloads(tracks), counts: downloadCounts }}
       />
-      {isLoading && <AlbumLoadingSpinner label="Loading songs" />}
       {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}
-      {!isLoading && !error && tracks.length > 0 && (
+      {/*
+       * The toolbar stands apart from the loading state below it: it doesn't depend on the
+       * tracks being in yet, and hiding it behind the skeleton would make every album page
+       * flash the search field in only once songs had already arrived.
+       */}
+      {!error && (isLoading || tracks.length > 0) && (
         <>
           <div
             className="flex flex-wrap items-center gap-1.5 self-start [&>button]:flex [&>button]:min-h-8 [&>button]:min-w-0 [&>button]:items-center [&>button]:justify-center [&>button]:gap-1.5 [&>button]:rounded-full [&>button]:bg-white/[0.04] [&>button]:px-3 [&>button]:text-sm [&>button]:font-medium [&>button]:text-muted-foreground [&>button]:transition-colors hover:[&>button]:bg-white/[0.08] hover:[&>button]:text-foreground focus-visible:[&>button]:outline-none focus-visible:[&>button]:ring-2 focus-visible:[&>button]:ring-ring"
@@ -243,7 +239,9 @@ export function AlbumView({ album, playerController, libraryController }: AlbumV
               )}
             </div>
           </div>
-          {visibleTracks.length === 0 && albumSearchQuery.trim() ? (
+          {isLoading ? (
+            <TrackListSkeleton label="Loading songs" />
+          ) : visibleTracks.length === 0 && albumSearchQuery.trim() ? (
             <p className="px-2 py-10 text-center text-sm text-muted-foreground">No songs match this search.</p>
           ) : (
             <div className="flex flex-col gap-0.5">

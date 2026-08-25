@@ -23,6 +23,7 @@ import { shuffleTracks } from "../../player/shuffleTracks";
 import { AlbumCard } from "../components/AlbumCard";
 import { ArtistLinks } from "../components/ArtistLinks";
 import { MediaHeader } from "../components/MediaHeader";
+import { AlbumGridSkeleton, TrackListSkeleton } from "../components/Skeleton";
 import { TrackArtwork } from "../components/TrackArtwork";
 import { TrackRow } from "../components/TrackRow";
 import { useNowPlaying } from "../hooks/useNowPlaying";
@@ -391,7 +392,30 @@ export function ArtistView({
         }
       />
 
-      {isLoading && <p className="px-2 py-10 text-center text-sm text-muted-foreground">Loading artist...</p>}
+      {/*
+       * Section headings stay in place — only the rows/cards under them are placeholders. The
+       * release-type filter is left out here rather than shown empty: it lists whichever
+       * types this artist actually has (`releaseFilters`), which is not known before `page`
+       * arrives, so there is nothing honest to render there yet.
+       */}
+      {isLoading && (
+        <div className="flex flex-col gap-8">
+          <section className="flex flex-col gap-3">
+            <h2>Popular</h2>
+            <TrackListSkeleton count={POPULAR_PREVIEW_COUNT} label="Loading top songs" />
+          </section>
+          {/*
+            Releases has no fixed preview count — unlike Popular, every release the artist has
+            is shown. `AlbumGridSkeleton`'s own default is what "Listen again"/"More
+            recommendations" on Home use for the same reason: a guess at one row, not a real
+            number to match.
+          */}
+          <section className="flex flex-col gap-3">
+            <h2>Releases</h2>
+            <AlbumGridSkeleton label="Loading releases" />
+          </section>
+        </div>
+      )}
       {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}
 
       {!isLoading && !error && page && (
