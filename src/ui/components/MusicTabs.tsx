@@ -21,6 +21,8 @@ interface MusicTabsProps {
   tabs: Tab[];
   activeTabId: string;
   playingTabId: string | null;
+  /** The one music tab left with a player behind it — closing it would crash playback. */
+  nonClosableTabId?: string | null;
   onCreateTab: () => void;
   onCloseTab: (tabId: string) => void;
   onSwitchTab: (tabId: string) => void;
@@ -32,6 +34,7 @@ export function MusicTabs({
   tabs,
   activeTabId,
   playingTabId,
+  nonClosableTabId,
   onCreateTab,
   onCloseTab,
   onSwitchTab,
@@ -125,8 +128,6 @@ export function MusicTabs({
     };
   }, [onReorderTab]);
 
-  const canCloseTabs = tabs.length > 1;
-
   return (
     <div className="flex min-w-0 items-center overflow-hidden">
       <div
@@ -138,6 +139,7 @@ export function MusicTabs({
           const isActive = activeTabId === tab.id;
           const isDropBefore = dropTarget?.tabId === tab.id && !dropTarget.insertAfter;
           const isDropAfter = dropTarget?.tabId === tab.id && dropTarget.insertAfter;
+          const canCloseTab = tabs.length > 1 && tab.id !== nonClosableTabId;
 
           return (
             <div
@@ -217,7 +219,7 @@ export function MusicTabs({
                 </span>
               </div>
 
-              {canCloseTabs && (
+              {canCloseTab && (
                 <button
                   type="button"
                   className="-mr-1 shrink-0 rounded-full p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"

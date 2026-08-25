@@ -52,6 +52,15 @@ export class TabManager {
     return this.activeId;
   }
 
+  /**
+   * True when `id` is the last music tab left. Closing it would leave no player for
+   * `getActivePlayer()` to return — callers use this to keep at least one tab open, the way a
+   * browser refuses to close its last tab rather than closing the window.
+   */
+  isOnlyTab(id: MusicTabId): boolean {
+    return this.tabs.size === 1 && this.tabs.has(id);
+  }
+
   exportSession(): TabManagerSession {
     return {
       activeId: this.activeId,
@@ -65,6 +74,12 @@ export class TabManager {
   restoreSession(session: TabManagerSession): void {
     for (const [id, playerSession] of Object.entries(session.players)) {
       this.createTab(id).player.restoreSession(playerSession);
+    }
+
+    // A session saved while every music tab was closed (see `isOnlyTab`) has no players to
+    // restore; without this the app would relaunch straight into "No active music tab."
+    if (this.tabs.size === 0) {
+      this.createTab(session.activeId ?? "1");
     }
 
     if (session.activeId && this.tabs.has(session.activeId)) {
@@ -183,7 +198,9 @@ export class TabManager {
 
   removeTab(id: MusicTabId): void {
     const tab = this.tabs.get(id);
-    if (!tab) return;
+    // Backstop: every caller is expected to check `isOnlyTab` first, but if one doesn't, refusing
+    // here is what actually keeps `getActivePlayer()` from throwing "No active music tab."
+    if (!tab || this.isOnlyTab(id)) return;
 
     tab.player.dispose();
     this.tabs.delete(id);

@@ -66,7 +66,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     return (
       <div
         role="alert"
-        className="flex h-full min-h-0 flex-col items-center justify-center gap-4 p-8 text-center"
+        className="flex h-full min-h-0 flex-col items-center justify-center gap-4 bg-background p-8 text-center"
       >
         <div className="flex flex-col gap-1.5">
           <h2 className="text-lg font-semibold text-foreground">{label} stopped working</h2>
