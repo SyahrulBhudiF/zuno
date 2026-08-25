@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CylinderCarousel } from "@/components/motion/cylinder-carousel";
 import { PlayActiveIcon } from "@/ui/icons";
 import type { Track } from "../../datasource/types";
@@ -14,6 +14,7 @@ import { HomeDestinations, type HomeDestinationHandlers } from "../components/Ho
 import { ArtistLinks } from "../components/ArtistLinks";
 import { usePlayHistory } from "../../player/playHistory";
 import { useMadeForYouVisible } from "../settings/homeSections";
+import { AlbumGridSkeleton, PickCardSkeleton, TrackRowSkeleton } from "../components/Skeleton";
 
 const FALLBACK_QUERIES = [
   "new music",
@@ -33,6 +34,16 @@ const FALLBACK_QUERIES = [
 const PICKS_ASPECT = 3 / 4;
 const PICKS_VISIBLE_ITEMS = 5;
 const PICKS_ITEM_SIZE = 250;
+/** How far the carousel shrinks its edge cards. */
+const PICKS_MIN_SCALE = 0.72;
+
+/*
+ * Skeleton slots to feed the carousel while suggestions load. Unlike the other loading counts on
+ * this page, there is no real count to match here — `topSuggestions` does not exist yet — so
+ * this is just enough for the wraparound to feel like a shelf rather than three cards rattling
+ * around an empty drum.
+ */
+const PICKS_SKELETON_COUNT = 8;
 
 /*
  * Curve depth. The default is 35% of the item size, which on cards this large lifts the
@@ -47,6 +58,16 @@ const PICKS_ARC = 68;
  * edge rather than exactly hugging the card.
  */
 const PICKS_STAGE_HEIGHT = PICKS_ITEM_SIZE + PICKS_ARC ;
+
+/*
+ * How each section is sliced from the underlying lists — named rather than left as the literal
+ * arguments to `.slice()`, so a skeleton can ask for exactly this many placeholders instead of a
+ * second, hand-picked number that only happens to agree with the real count today.
+ */
+const RECENT_COMPACT_COUNT = 6;
+const RECENT_LARGE_COUNT = 18;
+const TOP_SUGGESTIONS_COUNT = 11;
+const MORE_SUGGESTIONS_COUNT = 12;
 
 const suggestionCache = new Map<string, Track[]>();
 const suggestionLoads = new Map<string, Promise<Track[]>>();
@@ -217,11 +238,20 @@ export function HomePage({
     suggestionCacheKey,
   ]);
 
-  const compactRecent = useMemo(() => recentPlays.slice(0, 6), [recentPlays]);
-  const largeRecent = useMemo(() => recentPlays.slice(6, 24), [recentPlays]);
-  const topSuggestions = suggestions.slice(0, 11);
-  const moreSuggestions = suggestions.slice(11, 23);
-  const surpriseSuggestions = suggestions.slice(11);
+  const compactRecent = useMemo(
+    () => recentPlays.slice(0, RECENT_COMPACT_COUNT),
+    [recentPlays],
+  );
+  const largeRecent = useMemo(
+    () => recentPlays.slice(RECENT_COMPACT_COUNT, RECENT_COMPACT_COUNT + RECENT_LARGE_COUNT),
+    [recentPlays],
+  );
+  const topSuggestions = suggestions.slice(0, TOP_SUGGESTIONS_COUNT);
+  const moreSuggestions = suggestions.slice(
+    TOP_SUGGESTIONS_COUNT,
+    TOP_SUGGESTIONS_COUNT + MORE_SUGGESTIONS_COUNT,
+  );
+  const surpriseSuggestions = suggestions.slice(TOP_SUGGESTIONS_COUNT);
 
   const playTrack = (track: Track, queue: readonly Track[]) => {
     void playerController.playTrackById(track.id, queue, true);
@@ -249,53 +279,68 @@ export function HomePage({
       <div className="flex items-center justify-between gap-3">
         <h3>Made for you</h3>
       </div>
-      {isLoadingSuggestions ? (
-        <div
-          className="h-[--stage] w-full animate-pulse rounded-2xl bg-card"
-          style={{ "--stage": `${PICKS_STAGE_HEIGHT}px` } as CSSProperties}
-          aria-label="Loading suggestions"
-        />
-      ) : (
+      {/*
+        The picks ride the inside of a cylinder instead of sitting in a grid: the row recedes
+        toward the middle and grows at the edges, so a shelf of recommendations reads as
+        something you roll through rather than a wall you scan. Drag, wheel or arrow-key it.
+
+        `key` forces a fresh mount on the swap from skeleton to real cards, rather than handing
+        one live instance a whole new set of children — `CylinderCarousel` keys its slides on
+        position ("slides are positional and stable", see its own render) because it is built
+        for a fixed deck, not one that gets replaced under it; reusing the instance carried the
+        skeleton's scroll position and measurements into the real carousel. A fresh mount still
+        gets the same `ResizeObserver`-driven sizing, curve and taper — just measured for the
+        content that is actually there.
+      */}
+      <CylinderCarousel
+        key={isLoadingSuggestions ? "skeleton" : "content"}
+        itemSize={PICKS_ITEM_SIZE}
+        height={PICKS_STAGE_HEIGHT}
+        visibleItems={PICKS_VISIBLE_ITEMS}
+        itemAspect={PICKS_ASPECT}
+        arc={PICKS_ARC}
         /*
-          The picks ride the inside of a cylinder instead of sitting in a grid: the row
-          recedes toward the middle and grows at the edges, so a shelf of recommendations
-          reads as something you roll through rather than a wall you scan. Drag, wheel or
-          arrow-key it. The same DiceCard/AlbumCard children as before — only the container
-          changed — so context menus, artist links and playback all behave identically.
+          Convex, not the default concave: a shelf of picks wants its hero in the middle
+          where the eye already is. Concave puts the *largest* cards at the container edge,
+          which is exactly where they get clipped — the biggest, loudest items end up half
+          cut off while the centre of attention holds the smallest one.
         */
-        <CylinderCarousel
-          itemSize={PICKS_ITEM_SIZE}
-          height={PICKS_STAGE_HEIGHT}
-          visibleItems={PICKS_VISIBLE_ITEMS}
-          itemAspect={PICKS_ASPECT}
-          arc={PICKS_ARC}
-          minScale={0.72}
+        minScale={PICKS_MIN_SCALE}
+        variant="convex"
+        className="-mx-4 cursor-grab active:cursor-grabbing overflow-x-clip overflow-y-visible"
+      >
+        {isLoadingSuggestions ? (
+          Array.from({ length: PICKS_SKELETON_COUNT }, (_, index) => (
+            <PickCardSkeleton key={index} />
+          ))
+        ) : (
           /*
-            Convex, not the default concave: a shelf of picks wants its hero in the middle
-            where the eye already is. Concave puts the *largest* cards at the container edge,
-            which is exactly where they get clipped — the biggest, loudest items end up half
-            cut off while the centre of attention holds the smallest one.
-          */
-          variant="convex"
-          className="-mx-4 cursor-grab active:cursor-grabbing overflow-x-clip overflow-y-visible"
-        >
-          <DiceCard
-            tracks={surpriseSuggestions}
-            isSpinning={isSurpriseSpinning}
-            onClick={playSurprise}
-          />
-          {topSuggestions.map((track) => (
-            <PickCard
-              key={track.id}
-              artworkUrl={track.artworkUrl}
-              title={track.title}
-              subtitle={track.artist}
-              onContextMenu={(event) => openTrackMenu(event, track)}
-              onSelect={() => playTrack(track, suggestions)}
-            />
-          ))}
-        </CylinderCarousel>
-      )}
+           * A real array, not a `<>Fragment</>` — `CylinderCarousel` walks its children with
+           * `Children.toArray`, which flattens an array but does not reach inside a Fragment.
+           * A Fragment here counted as a single slide holding all twelve cards, which block-
+           * flowed vertically inside that one slot instead of taking one slide each.
+           */
+          [
+            <DiceCard
+              key="dice"
+              tracks={surpriseSuggestions}
+              isSpinning={isSurpriseSpinning}
+              onClick={playSurprise}
+            />,
+            ...topSuggestions.map((track) => (
+              <PickCard
+                key={track.id}
+                artworkUrl={track.artworkUrl}
+                title={track.title}
+                subtitle={track.artist}
+                onContextMenu={(event) => openTrackMenu(event, track)}
+                onSelect={() => playTrack(track, suggestions)}
+              />
+            )),
+          ]
+        )}
+      </CylinderCarousel>
+      {isLoadingSuggestions && <span className="sr-only" role="status">Loading suggestions</span>}
 
     </section>
   );
@@ -314,11 +359,26 @@ export function HomePage({
         </section>
       )}
 
-      {showMadeForYou && !isLoadingSuggestions && madeForYouSection}
+      {showMadeForYou && madeForYouSection}
 
       {/* Directly under the carousel: the picks are what you came for, these are where you
           go when none of them appeal. */}
       <HomeDestinations {...destinations} />
+
+      {compactRecent.length === 0 && isWaitingForLibrary && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-lg font-semibold text-foreground">Recently played</h2>
+          <div
+            className="grid gap-1.5 [grid-template-columns:repeat(auto-fill,minmax(16rem,1fr))]"
+            role="status"
+            aria-label="Loading recently played"
+          >
+            {Array.from({ length: RECENT_COMPACT_COUNT }, (_, index) => (
+              <TrackRowSkeleton key={index} delayMs={index * 60} />
+            ))}
+          </div>
+        </section>
+      )}
 
       {compactRecent.length > 0 && (
         <section className="flex flex-col gap-3">
@@ -349,7 +409,12 @@ export function HomePage({
         </section>
       )}
 
-      {showMadeForYou && isLoadingSuggestions && madeForYouSection}
+      {moreSuggestions.length === 0 && isLoadingSuggestions && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-lg font-semibold text-foreground">More recommendations</h2>
+          <AlbumGridSkeleton count={MORE_SUGGESTIONS_COUNT} label="Loading more recommendations" />
+        </section>
+      )}
 
       {moreSuggestions.length > 0 && (
         <section className="flex flex-col gap-3">
@@ -366,6 +431,13 @@ export function HomePage({
               />
             ))}
           </div>
+        </section>
+      )}
+
+      {largeRecent.length === 0 && isWaitingForLibrary && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-lg font-semibold text-foreground">Listen again</h2>
+          <AlbumGridSkeleton count={RECENT_LARGE_COUNT} label="Loading listen again" />
         </section>
       )}
 
