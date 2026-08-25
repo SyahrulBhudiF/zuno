@@ -32,6 +32,28 @@ const BAND_Q: f32 = 1.414_213_6;
 /// Gains beyond this are not tone control any more, and the preamp cannot buy back the headroom.
 const MAX_GAIN_DB: f32 = 12.0;
 
+/**
+ * Below this magnitude a sample is closer to silence than to signal — and closer to a
+ * denormal than either.
+ *
+ * A recursive filter fed quiet audio rings its history down toward zero exponentially, which
+ * means it eventually crosses into subnormal range and can sit there for a long stretch of a
+ * fade-out or a quiet intro. x86 FPUs drop to a microcode path for subnormals that can cost an
+ * order of magnitude more than a normal float op — on the real-time mixing thread, ten bands
+ * deep, that is a stall a listener can hear as a stutter. Flushing below this floor costs
+ * nothing audible and keeps every filter on the fast path.
+ */
+const DENORMAL_FLOOR: f32 = 1e-15;
+
+#[inline]
+fn flush_denormal(value: f32) -> f32 {
+    if value.abs() < DENORMAL_FLOOR {
+        0.0
+    } else {
+        value
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct EqualizerValues {
     pub(crate) preamp_db: f32,
@@ -152,8 +174,11 @@ impl Biquad {
         self.x2 = self.x1;
         self.x1 = input;
         self.y2 = self.y1;
-        self.y1 = output;
-        output
+        // The returned value feeds the next band's `input` in the cascade — flushing only the
+        // stored state and handing back the raw one would carry the denormal straight into the
+        // next filter's arithmetic instead of stopping it here.
+        self.y1 = flush_denormal(output);
+        self.y1
     }
 
     /// Swaps in new coefficients without disturbing the sample history, so a slider moved during
@@ -288,7 +313,31 @@ impl<S: Source> Source for EqualizedSource<S> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Biquad, EqualizerValues, BAND_COUNT, BAND_HZ, MAX_GAIN_DB};
+    use super::{flush_denormal, Biquad, EqualizerValues, BAND_COUNT, BAND_HZ, MAX_GAIN_DB};
+
+    /// A value below the floor lands on exact zero; an audible one passes through untouched,
+    /// regardless of sign.
+    #[test]
+    fn denormals_are_flushed_to_exact_zero() {
+        assert_eq!(flush_denormal(1e-20), 0.0, "well below the floor must flush");
+        assert_eq!(flush_denormal(f32::MIN_POSITIVE / 2.0), 0.0, "an actual subnormal must flush");
+        assert_eq!(flush_denormal(-1e-20), 0.0, "flushing must not care about sign");
+        assert_eq!(flush_denormal(0.5), 0.5, "an audible value must pass through unchanged");
+        assert_eq!(flush_denormal(-0.5), -0.5);
+    }
+
+    /// A filter fed silence after a transient must ring its state down to exact zero rather
+    /// than lingering as a denormal — see `flush_denormal`.
+    #[test]
+    fn a_filter_settles_to_exact_zero_instead_of_ringing_forever() {
+        let mut filter = Biquad::peaking(1_000.0, 48_000.0, 12.0);
+        filter.process(1.0);
+        for _ in 0..10_000 {
+            filter.process(0.0);
+        }
+        assert_eq!(filter.y1, 0.0);
+        assert_eq!(filter.y2, 0.0);
+    }
 
     /// Runs a sine through a filter and returns its amplitude once the state has settled.
     fn response_at(mut filter: Biquad, frequency: f32, sample_rate: f32) -> f32 {

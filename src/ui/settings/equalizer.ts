@@ -1,8 +1,11 @@
 import { useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  hydrateLocalBooleanSetting,
   hydrateLocalJsonSetting,
+  readLocalBooleanSetting,
   readLocalJsonSetting,
+  writeLocalBooleanSetting,
   writeLocalJsonSetting,
 } from "../../internal/durableLocalSetting";
 import { logInternalWarn } from "../../internal/logging";
@@ -57,8 +60,35 @@ export const EQUALIZER_PRESETS: ReadonlyArray<{ name: string; settings: Equalize
   },
 ];
 
+/**
+ * Which preset, if any, matches the current curve exactly.
+ *
+ * Shared by the full settings page and the player-bar mini equaliser so "which chip is lit"
+ * cannot drift into two slightly different definitions of "matches."
+ */
+export function activeEqualizerPreset(
+  settings: EqualizerSettings,
+): (typeof EQUALIZER_PRESETS)[number] | undefined {
+  return EQUALIZER_PRESETS.find(
+    (preset) =>
+      preset.settings.preampDb === settings.preampDb
+      && preset.settings.bandsDb.every((gain, index) => gain === settings.bandsDb[index]),
+  );
+}
+
 const STORAGE_KEY = "equalizer-v1";
 const CHANGE_EVENT = "equalizer-change";
+
+/*
+ * On/off, kept separate from the curve itself.
+ *
+ * The curve is what the sliders shape; the switch is whether it is currently being listened to.
+ * Folding it into `EqualizerSettings` would mean flattening the bands to turn it off and
+ * remembering them somewhere to turn it back on — this way the sliders keep the user's shape the
+ * whole time, on or off, exactly like a hardware EQ's bypass switch.
+ */
+const ENABLED_STORAGE_KEY = "equalizer-enabled-v1";
+const ENABLED_CHANGE_EVENT = "equalizer-enabled-change";
 
 function isEqualizerSettings(value: unknown): value is EqualizerSettings {
   if (typeof value !== "object" || value === null) return false;
@@ -74,6 +104,7 @@ function isEqualizerSettings(value: unknown): value is EqualizerSettings {
  * handed to `useSyncExternalStore` has to be reference-stable or React re-renders forever.
  */
 let cached: EqualizerSettings | null = null;
+let enabledCached: boolean | null = null;
 
 function readSettings(): EqualizerSettings {
   if (cached === null) {
@@ -92,10 +123,29 @@ export function isEqualizerAvailable(): boolean {
   return usesRustAudioEngine();
 }
 
+/** The bypass switch — independent of the curve. See `ENABLED_STORAGE_KEY`. */
+export function isEqualizerEnabled(): boolean {
+  if (enabledCached === null) {
+    enabledCached = readLocalBooleanSetting(ENABLED_STORAGE_KEY, true);
+  }
+  return enabledCached;
+}
+
+export function setEqualizerEnabled(enabled: boolean): void {
+  enabledCached = enabled;
+  writeLocalBooleanSetting(ENABLED_STORAGE_KEY, enabled, ENABLED_CHANGE_EVENT);
+  // Re-push under the new switch state — flat if this just turned it off, the stored curve if
+  // it just turned back on.
+  push(readSettings());
+}
+
+/// Rust has no notion of "off": it only ever sees a curve, flat or not. The switch lives here,
+/// entirely on the frontend, by choosing what to push rather than sending the switch itself.
 function push(settings: EqualizerSettings): void {
+  const applied = isEqualizerEnabled() ? settings : EQUALIZER_FLAT;
   void invoke("native_audio_set_equalizer", {
-    preampDb: settings.preampDb,
-    bandsDb: settings.bandsDb,
+    preampDb: applied.preampDb,
+    bandsDb: applied.bandsDb,
   }).catch((error: unknown) => {
     logInternalWarn("Equalizer push failed", {
       error: error instanceof Error ? error.message : String(error),
@@ -133,15 +183,27 @@ function subscribe(callback: () => void) {
   };
 }
 
+function subscribeEnabled(callback: () => void) {
+  window.addEventListener(ENABLED_CHANGE_EVENT, callback);
+  window.addEventListener("storage", callback);
+  return () => {
+    window.removeEventListener(ENABLED_CHANGE_EVENT, callback);
+    window.removeEventListener("storage", callback);
+  };
+}
+
 if (typeof window !== "undefined") {
   window.addEventListener("storage", () => {
     cached = null;
+    enabledCached = null;
   });
 }
 
 export async function hydrateEqualizer(): Promise<void> {
   await hydrateLocalJsonSetting(STORAGE_KEY, isEqualizerSettings);
+  await hydrateLocalBooleanSetting(ENABLED_STORAGE_KEY, true, ENABLED_CHANGE_EVENT);
   cached = null;
+  enabledCached = null;
   /*
    * Rust starts flat every launch — the values are process state, not a file — so the stored
    * settings have to be pushed down or the equaliser silently does nothing until the user
@@ -153,4 +215,8 @@ export async function hydrateEqualizer(): Promise<void> {
 
 export function useEqualizer(): EqualizerSettings {
   return useSyncExternalStore(subscribe, readSettings, () => EQUALIZER_FLAT);
+}
+
+export function useEqualizerEnabled(): boolean {
+  return useSyncExternalStore(subscribeEnabled, isEqualizerEnabled, () => true);
 }
