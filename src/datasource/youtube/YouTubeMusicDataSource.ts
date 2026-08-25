@@ -1102,6 +1102,36 @@ export class YouTubeMusicDataSource extends DataSource {
     };
   }
 
+  /** Title+artist, normalized, so a song and its own music video land on the same key. */
+  private trackIdentityKey(item: MusicItem): string {
+    return `${this.normalizeSearchKey(this.getTitle(item) ?? "")}::${this.normalizeSearchKey(this.getArtistName(item))}`;
+  }
+
+  /**
+   * Every `item_type === "song" || item_type === "video"` site in this file routes through
+   * here instead of that check directly — see #107.
+   *
+   * YouTube frequently lists a track's official music video as a separate item under the exact
+   * same `item_type` bucket this app has always accepted without distinction. The video's audio
+   * is often a different recording — a live take, a remix, sometimes a genuinely different edit
+   * — so surfacing it in place of the song is a correctness bug, not a ranking preference: a
+   * "video" entry is dropped whenever a "song" entry for the same title+artist is present in
+   * the same list, and kept only when it is the sole representation of that track on offer.
+   */
+  private songOrVideoItems(items: readonly MusicItem[]): MusicItem[] {
+    const matches = items.filter(
+      (item) => item.item_type === "song" || item.item_type === "video",
+    );
+    const songKeys = new Set(
+      matches
+        .filter((item) => item.item_type === "song")
+        .map((item) => this.trackIdentityKey(item)),
+    );
+    return matches.filter(
+      (item) => item.item_type !== "video" || !songKeys.has(this.trackIdentityKey(item)),
+    );
+  }
+
   /**
    * Whether YouTube tagged this item explicit.
    *
@@ -1934,7 +1964,9 @@ export class YouTubeMusicDataSource extends DataSource {
     }
 
     const tracks = this.uniqueById(
-      items.map((item) => this.toTrack(item)).filter((item): item is Track => Boolean(item)),
+      this.songOrVideoItems(items)
+        .map((item) => this.toTrack(item))
+        .filter((item): item is Track => Boolean(item)),
     );
     logInternalInfo("YouTubeMusicDataSource.collectAllTracks complete", {
       pageCount,
@@ -1969,7 +2001,9 @@ export class YouTubeMusicDataSource extends DataSource {
     }
 
     const tracks = this.uniqueById(
-      items.map((item) => this.toAlbumTrack(item, album)).filter((item): item is Track => Boolean(item)),
+      this.songOrVideoItems(items)
+        .map((item) => this.toAlbumTrack(item, album))
+        .filter((item): item is Track => Boolean(item)),
     );
     logInternalInfo("YouTubeMusicDataSource.collectAllAlbumTracks complete", {
       albumId: album.id,
@@ -2018,7 +2052,9 @@ export class YouTubeMusicDataSource extends DataSource {
     }
 
     const tracks = this.uniqueById(
-      items.map((item) => this.toTrack(item)).filter((item): item is Track => Boolean(item)),
+      this.songOrVideoItems(items)
+        .map((item) => this.toTrack(item))
+        .filter((item): item is Track => Boolean(item)),
     );
     logInternalInfo("YouTubeMusicDataSource.collectPlaylistTracks complete", {
       playlistId,
@@ -3375,8 +3411,7 @@ export class YouTubeMusicDataSource extends DataSource {
   private async fetchAlbumTracksFresh(album: Album): Promise<Track[]> {
     const client = await this.getMusicClient();
     const albumPage = await client.music.getAlbum(album.id);
-    const initialItems = albumPage.contents
-      .filter((item) => item.item_type === "song" || item.item_type === "video") as unknown as MusicItem[];
+    const initialItems = this.songOrVideoItems(albumPage.contents as unknown as MusicItem[]);
     const continuedTracks = await this.collectAllAlbumTracks(client, albumPage.page, album);
     const tracks = this.uniqueById([
       ...initialItems
@@ -3702,8 +3737,7 @@ export class YouTubeMusicDataSource extends DataSource {
 
     if (popularSongs.length === 0) {
       popularSongs.push(
-        ...responseItems
-          .filter((item) => item.item_type === "song" || item.item_type === "video")
+        ...this.songOrVideoItems(responseItems)
           .map((item) => this.toTrack(item))
           .filter((item): item is Track => Boolean(item)),
       );
@@ -5060,8 +5094,7 @@ export class YouTubeMusicDataSource extends DataSource {
 
     const tracks = this.uniqueById([
       ...shelfTracks,
-      ...fallbackItems
-        .filter((item) => item.item_type === "song" || item.item_type === "video")
+      ...this.songOrVideoItems(fallbackItems)
         .map((item) => this.toTrack(item))
         .filter((item): item is Track => Boolean(item)),
     ]);
@@ -5822,10 +5855,9 @@ export class YouTubeMusicDataSource extends DataSource {
           artists: [],
           links: [],
         };
+        const preferredSongOrVideo = new Set(this.songOrVideoItems(loose));
         for (const item of loose) {
-          const track = item.item_type === "song" || item.item_type === "video"
-            ? this.toTrack(item)
-            : null;
+          const track = preferredSongOrVideo.has(item) ? this.toTrack(item) : null;
           if (track) {
             shelf.tracks.push(track);
             continue;
@@ -6326,8 +6358,7 @@ export class YouTubeMusicDataSource extends DataSource {
             .filter((item): item is Artist => Boolean(item)),
         ),
         tracks: this.uniqueById(
-          items
-            .filter((item) => item.item_type === "song" || item.item_type === "video")
+          this.songOrVideoItems(items)
             .map((item) => this.toTrack(item))
             .filter((item): item is Track => Boolean(item)),
         ),
