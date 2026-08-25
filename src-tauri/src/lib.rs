@@ -3267,6 +3267,22 @@ fn verify_audio_container(bytes: &[u8], mime_type: &str) -> Result<(), CommandEr
 }
 
 /**
+ * A short, log-safe look at bytes a decoder just rejected.
+ *
+ * `verify_audio_container` above only ever checks MP4 — a WebM/Opus response that is not
+ * actually WebM sails through it untouched and is only ever caught once symphonia's probe
+ * chokes on it, by which point the only trace left of *what* arrived is whatever this prints.
+ * Both hex and a lossy UTF-8 decode: binary garbage reads as hex, but a wrong response is often
+ * an HTML or JSON error page, which is unreadable as hex and exactly the case this exists for.
+ */
+fn bytes_preview(bytes: &[u8]) -> String {
+    let head = &bytes[..bytes.len().min(32)];
+    let hex: String = head.iter().map(|byte| format!("{byte:02x}")).collect();
+    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(120)]).replace('\n', " ");
+    format!("{} bytes, starts hex={hex} text={text:?}", bytes.len())
+}
+
+/**
  * Fills a published buffer with parallel range requests.
  *
  * Chunks land out of order, which is why the buffer tracks them by index and serves only its
@@ -3690,14 +3706,21 @@ async fn native_audio_load(
     let (decoded, decoded_duration) = match decoded {
         Ok(decoded) => decoded,
         Err(message) => {
+            // Read before `failed` is set — the preview is what actually arrived, and setting
+            // the flag first would not change these bytes, only make the intent read backwards.
+            let preview = buffer.as_ref().and_then(|buffer| {
+                let guard = buffer.lock().ok()?;
+                let available = guard.contiguous_len();
+                Some(bytes_preview(&guard.read(0, available.saturating_sub(1))))
+            });
             if let Some(buffer) = &buffer {
                 if let Ok(mut guard) = buffer.lock() {
                     guard.failed = true;
                 }
             }
             eprintln!(
-                "[internal][tauri][warn] native_audio_load decode failed track_id={} error={}",
-                track_id, message
+                "[internal][tauri][warn] native_audio_load decode failed track_id={} error={} preview=[{}]",
+                track_id, message, preview.as_deref().unwrap_or("no stream buffer"),
             );
             return Err(cache_error(message));
         }
@@ -4885,7 +4908,7 @@ mod tests {
         is_slow_persist_cookie, is_youtube_cookie_host, parse_cookie_header, sanitize_log_url,
         audio_chunk_size, playback_ranges, serialize_cookie_pairs, MediaBuffer, AUDIO_HEAD_CHUNK_BYTES, signed_content_length, store_media_item,
         MediaItem, AUDIO_MIN_CHUNK_BYTES, MEDIA_SERVER_MAX_ITEMS, OFFLINE_CHUNK_BYTES,
-        load_superseded, LOAD_GENERATION,
+        load_superseded, LOAD_GENERATION, bytes_preview,
     };
     use std::sync::atomic::Ordering;
     use super::audio::BufferReader;
@@ -5335,5 +5358,18 @@ mod tests {
             Some("notyoutube.com")
         ));
         assert!(!cookie_domain_matches("music.youtube.com", None));
+    }
+
+    /// A decode failure's log line has to be readable whichever way the response was wrong —
+    /// binary garbage as hex, an error page as text.
+    #[test]
+    fn bytes_preview_reads_both_binary_and_text_content() {
+        let matroska_start = bytes_preview(&[0x1A, 0x45, 0xDF, 0xA3, 0x00, 0x01]);
+        assert!(matroska_start.contains("hex=1a45dfa30001"));
+
+        let error_page = bytes_preview(b"{\"error\":\"forbidden\"}");
+        assert!(error_page.contains("text=\"{\\\"error\\\":\\\"forbidden\\\"}\""));
+
+        assert_eq!(bytes_preview(&[]), "0 bytes, starts hex= text=\"\"");
     }
 }
