@@ -2655,6 +2655,29 @@ const PLAYBACK_RANGE_ATTEMPTS: usize = 3;
 const PLAYBACK_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 
 /**
+ * One counter per native-audio load slot — foreground (`0`) and standby (`1`) — bumped every
+ * time a new load targets that slot.
+ *
+ * A fill still running under a stale generation has been superseded: nobody is waiting on it
+ * any more, so it abandons instead of running its retries and whole-file fallback to
+ * completion. Without this, a track that died left its fill orphaned but still holding
+ * `PLAYBACK_FILL_LOCK` — a single global permit — for as long as its own retries took to
+ * exhaust. That is exactly what the one reload `recoverFromPrematureEnd` sends right behind it
+ * needs to not queue up behind, and a starved retry there is what turned one stalled download
+ * into a skipped track.
+ */
+static LOAD_GENERATION: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+
+/// True once a fill's slot has moved on to a newer load. `None` opts out, for the media-server
+/// (`<audio>`) path, which has no load slots to be superseded in.
+fn load_superseded(slot: Option<(usize, u64)>) -> bool {
+    match slot {
+        Some((index, generation)) => LOAD_GENERATION[index].load(Ordering::SeqCst) != generation,
+        None => false,
+    }
+}
+
+/**
  * Smallest total worth splitting, and the floor on a range.
  *
  * Chunking a file below this buys nothing: the per-request overhead is a larger share than the
@@ -3216,6 +3239,7 @@ async fn fetch_audio_source(
         mime_type.clone(),
         buffer,
         ranges,
+        None,
     ));
 
     Ok(AudioSourcePayload {
@@ -3249,6 +3273,11 @@ fn verify_audio_container(bytes: &[u8], mime_type: &str) -> Result<(), CommandEr
  * contiguous prefix. A failure marks the buffer so waiting requests get a 503 instead of
  * sitting out the timeout — the media element then reports an error and playback fails loudly
  * rather than hanging.
+ *
+ * `slot` is the native-audio load slot this fill belongs to (see `LOAD_GENERATION`), `None` for
+ * the media-server path. Checked at every point that would otherwise spend time on a track
+ * nobody wants any more, so a superseded fill gives up `PLAYBACK_FILL_LOCK` promptly instead of
+ * running its retries and fallback to completion first.
  */
 async fn fill_media_buffer(
     url: String,
@@ -3257,6 +3286,7 @@ async fn fill_media_buffer(
     mime_type: String,
     buffer: Arc<Mutex<MediaBuffer>>,
     ranges: Vec<(usize, usize)>,
+    slot: Option<(usize, u64)>,
 ) {
     use futures_util::stream::StreamExt;
 
@@ -3282,6 +3312,16 @@ async fn fill_media_buffer(
      */
     let _fill_permit = PLAYBACK_FILL_LOCK.acquire().await;
 
+    // The wait for the permit above is where a superseded fill most likely spent its time —
+    // recheck now, before spending a request on a track that moved on while this was queued.
+    if load_superseded(slot) {
+        eprintln!(
+            "[internal][tauri][info] fill_media_buffer superseded before start track_id={}",
+            track_id
+        );
+        return;
+    }
+
     let Ok(request_url) = url::Url::parse(&url) else {
         fail(&buffer);
         return;
@@ -3305,9 +3345,13 @@ async fn fill_media_buffer(
                  * Checked here rather than between chunks because `buffered(1)` starts the next
                  * request as soon as it is polled — by the time the outer loop could look, the
                  * range is already in flight. `failed` is set by whoever gave up on the body:
-                 * the fill itself, or a decode that could not use it.
+                 * the fill itself, or a decode that could not use it. `load_superseded` catches
+                 * the third way a range stops mattering: a newer load took this slot, and this
+                 * one is still going only because nothing had told it to stop.
                  */
-                if abandoned.lock().map(|guard| guard.failed).unwrap_or(true) {
+                if abandoned.lock().map(|guard| guard.failed).unwrap_or(true)
+                    || load_superseded(slot)
+                {
                     return Err((index, cache_error("fill abandoned")));
                 }
                 /*
@@ -3321,6 +3365,11 @@ async fn fill_media_buffer(
                 let mut last: CommandError = cache_error("range never attempted");
 
                 for attempt in 0..PLAYBACK_RANGE_ATTEMPTS {
+                    // Re-checked every attempt: a supersede mid-backoff must not spend the next
+                    // request anyway, and this is what stops it doing that.
+                    if load_superseded(slot) {
+                        return Err((index, cache_error("fill abandoned")));
+                    }
                     if attempt > 0 {
                         tokio::time::sleep(backoff).await;
                         backoff *= 2;
@@ -3379,6 +3428,16 @@ async fn fill_media_buffer(
                 if buffer.lock().map(|guard| guard.failed).unwrap_or(true) {
                     eprintln!(
                         "[internal][tauri][info] fill_media_buffer abandoned track_id={}",
+                        track_id
+                    );
+                    return;
+                }
+                // Same reasoning, for the one case above cannot see: superseded rather than
+                // failed. The whole-file fallback below is the expensive part of this function —
+                // not worth starting for a track nobody is playing or preloading any more.
+                if load_superseded(slot) {
+                    eprintln!(
+                        "[internal][tauri][info] fill_media_buffer superseded, skipping fallback track_id={}",
                         track_id
                     );
                     return;
@@ -3459,11 +3518,17 @@ enum NativeAudioSource {
  * straight away. The decoder then reads the container header out of the head chunk while the
  * rest is still arriving — which is the whole difference from the `<audio>` path, where the
  * body had to be published before an element could be pointed at it.
+ *
+ * `standby` picks the load slot for `LOAD_GENERATION`: this load's fill becomes the one worth
+ * waiting for in its slot, and whatever fill was previously running there — a track that has
+ * since died, been skipped, or already played out — is now free to abandon instead of running
+ * its retries and fallback to completion.
  */
 fn open_native_audio_reader(
     app: &tauri::AppHandle,
     track_id: &str,
     source: NativeAudioSource,
+    standby: bool,
 ) -> Result<NativeAudioReader, CommandError> {
     match source {
         NativeAudioSource::Stream {
@@ -3480,6 +3545,8 @@ fn open_native_audio_reader(
 
             let ranges = playback_ranges(total);
             let buffer = Arc::new(Mutex::new(MediaBuffer::pending(total, ranges.len())));
+            let slot_index = standby as usize;
+            let generation = LOAD_GENERATION[slot_index].fetch_add(1, Ordering::SeqCst) + 1;
             tauri::async_runtime::spawn(fill_media_buffer(
                 url,
                 track_id.to_string(),
@@ -3487,6 +3554,7 @@ fn open_native_audio_reader(
                 mime_type.clone(),
                 Arc::clone(&buffer),
                 ranges,
+                Some((slot_index, generation)),
             ));
             Ok(NativeAudioReader {
                 reader: Box::new(audio::BufferReader::new(Arc::clone(&buffer))),
@@ -3591,7 +3659,7 @@ async fn native_audio_load(
     standby: Option<bool>,
 ) -> Result<f64, CommandError> {
     let NativeAudioReader { reader, mime_type, buffer } =
-        open_native_audio_reader(&app, &track_id, source)?;
+        open_native_audio_reader(&app, &track_id, source, standby.unwrap_or(false))?;
     let started_at = Instant::now();
 
     let decoded = tauri::async_runtime::spawn_blocking(move || {
@@ -4817,7 +4885,9 @@ mod tests {
         is_slow_persist_cookie, is_youtube_cookie_host, parse_cookie_header, sanitize_log_url,
         audio_chunk_size, playback_ranges, serialize_cookie_pairs, MediaBuffer, AUDIO_HEAD_CHUNK_BYTES, signed_content_length, store_media_item,
         MediaItem, AUDIO_MIN_CHUNK_BYTES, MEDIA_SERVER_MAX_ITEMS, OFFLINE_CHUNK_BYTES,
+        load_superseded, LOAD_GENERATION,
     };
+    use std::sync::atomic::Ordering;
     use super::audio::BufferReader;
     use super::NativeAudioSource;
     use std::collections::HashMap;
@@ -4987,6 +5057,36 @@ mod tests {
         // Smaller than one head is a single range, and nothing at all is no ranges.
         assert_eq!(playback_ranges(1000), vec![(0, 999)]);
         assert!(playback_ranges(0).is_empty());
+    }
+
+    /**
+     * A fill knows when a newer load has taken its slot.
+     *
+     * This is what lets an orphaned fill — one whose track died, was skipped, or already
+     * finished — give up `PLAYBACK_FILL_LOCK` instead of running its retries and whole-file
+     * fallback to completion first, which is what starved the one retry
+     * `recoverFromPrematureEnd` sends right behind it.
+     */
+    #[test]
+    fn a_fill_notices_its_slot_was_taken_by_a_newer_load() {
+        let slot_index = 1; // Standby — kept off slot 0 so a parallel test on the other slot can't race this one.
+        let first = LOAD_GENERATION[slot_index].fetch_add(1, Ordering::SeqCst) + 1;
+        assert!(
+            !load_superseded(Some((slot_index, first))),
+            "the load that just claimed the slot is not superseded by itself",
+        );
+
+        // A second load for the same slot — the track that died gets reloaded, or the queue
+        // just moved on — bumps past it.
+        let second = LOAD_GENERATION[slot_index].fetch_add(1, Ordering::SeqCst) + 1;
+        assert!(
+            load_superseded(Some((slot_index, first))),
+            "the first load must see itself superseded once a second one claims the slot",
+        );
+        assert!(!load_superseded(Some((slot_index, second))), "the newest load is never stale");
+
+        // No slot at all — the media-server path — is never superseded.
+        assert!(!load_superseded(None));
     }
 
     /// Ranges land out of order, so what can be served is the leading run of chunks — not the

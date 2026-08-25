@@ -224,6 +224,18 @@ impl OpusSource {
                     self.exhausted = true;
                     return false;
                 }
+                /*
+                 * A stalled fetch, not a finished track. `BufferReader` times out a read that
+                 * has waited too long for bytes that are still on their way — the fill behind it
+                 * only gives up for real by marking the buffer failed, and *that* is what turns
+                 * into the `UnexpectedEof` above. Latching `exhausted` on a bare timeout is what
+                 * let a slow range end a track that was still downloading fine.
+                 */
+                Err(SymphoniaError::IoError(error))
+                    if error.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    continue;
+                }
                 Err(error) => {
                     eprintln!("[internal][tauri][warn] opus demux ended: {error}");
                     self.exhausted = true;
