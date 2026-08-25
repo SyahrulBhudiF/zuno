@@ -67,7 +67,8 @@ const PICKS_STAGE_HEIGHT = PICKS_ITEM_SIZE + PICKS_ARC ;
 const RECENT_COMPACT_COUNT = 6;
 const RECENT_LARGE_COUNT = 18;
 const TOP_SUGGESTIONS_COUNT = 11;
-const MORE_SUGGESTIONS_COUNT = 12;
+/** Same size as "Listen again" — two rows of recommendations should read as two equal shelves. */
+const MORE_SUGGESTIONS_COUNT = RECENT_LARGE_COUNT;
 
 const suggestionCache = new Map<string, Track[]>();
 const suggestionLoads = new Map<string, Promise<Track[]>>();
