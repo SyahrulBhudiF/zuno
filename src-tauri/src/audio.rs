@@ -379,6 +379,14 @@ pub(crate) struct AudioOutputDevice {
  * has ever started.
  */
 pub(crate) fn list_output_devices() -> Result<Vec<AudioOutputDevice>, String> {
+    // When a sound server owns the hardware, its own sink list is the truth about what's
+    // actually plugged in (it already does jack-sensing); raw ALSA per-card enumeration below
+    // can't tell a live port from an empty one and duplicates what the server already presents.
+    #[cfg(target_os = "linux")]
+    if let Some(sinks) = pipewire_sinks() {
+        return Ok(sinks);
+    }
+
     use rodio::cpal::traits::HostTrait;
 
     let host = rodio::cpal::default_host();
@@ -452,6 +460,95 @@ mod alsa_device_filter_tests {
     }
 }
 
+/// Prefix marking an id as a PipeWire/PulseAudio sink name rather than a cpal `DeviceId` — the
+/// two live in different namespaces and `open_device_sink` needs to tell them apart.
+#[cfg(target_os = "linux")]
+const PIPEWIRE_SINK_ID_PREFIX: &str = "pipewire-sink:";
+
+/// Sink list from `pactl`, when a sound server is running. `None` means no server (or `pactl`
+/// missing) — falls back to raw ALSA enumeration.
+#[cfg(target_os = "linux")]
+fn pipewire_sinks() -> Option<Vec<AudioOutputDevice>> {
+    let output = std::process::Command::new("pactl")
+        .args(["-f", "json", "list", "sinks"])
+        .output()
+        .ok()?;
+    let sinks = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok()?;
+    let sinks = sinks.as_array().filter(|sinks| !sinks.is_empty())?;
+
+    let default_name = std::process::Command::new("pactl")
+        .arg("get-default-sink")
+        .output()
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string());
+
+    Some(
+        sinks
+            .iter()
+            .filter_map(|sink| {
+                let name = sink.get("name")?.as_str()?;
+                let description = sink.get("description").and_then(|d| d.as_str()).unwrap_or(name);
+                Some(AudioOutputDevice {
+                    id: format!("{PIPEWIRE_SINK_ID_PREFIX}{name}"),
+                    name: description.to_string(),
+                    is_default: default_name.as_deref() == Some(name),
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Steers our own stream to `sink_name` after it's already open on whatever the server picked.
+/// The ALSA "pulse"/"pipewire" virtual device cpal opens can't target a specific sink by name —
+/// that's a sound-server-level move, done here via `pactl` rather than at open time.
+///
+/// A failure here is never fatal: the stream keeps playing on the server's chosen sink, same as
+/// before the user picked a different one, which is a smaller surprise than losing audio.
+#[cfg(target_os = "linux")]
+fn move_our_stream_to_pipewire_sink(sink_name: &str) {
+    // ponytail: bounded retry rather than a proper "client registered" signal — PipeWire needs
+    // a moment after the stream opens before our sink-input shows up in its graph.
+    for attempt in 0..10 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let Some(sink_input_id) = our_sink_input_id() else { continue };
+        let moved = std::process::Command::new("pactl")
+            .args(["move-sink-input", &sink_input_id.to_string(), sink_name])
+            .status()
+            .is_ok_and(|status| status.success());
+        if moved {
+            return;
+        }
+    }
+    eprintln!(
+        "[internal][tauri][warn] failed to move audio stream to pipewire sink sink={sink_name}"
+    );
+}
+
+/// The freshest sink-input whose client name is ours — cpal opens a brand new PipeWire client
+/// on every device switch, so the highest index among ours is the one that was just opened.
+#[cfg(target_os = "linux")]
+fn our_sink_input_id() -> Option<u64> {
+    let output = std::process::Command::new("pactl")
+        .args(["-f", "json", "list", "sink-inputs"])
+        .output()
+        .ok()?;
+    let inputs = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok()?;
+    inputs
+        .as_array()?
+        .iter()
+        .filter(|input| {
+            input
+                .get("properties")
+                .and_then(|props| props.get("application.name"))
+                .and_then(|name| name.as_str())
+                .is_some_and(|name| name.contains(env!("CARGO_PKG_NAME")))
+        })
+        .filter_map(|input| input.get("index")?.as_u64())
+        .max()
+}
+
 /**
  * Opens the sink for `id`, or the OS default when `id` is `None`.
  *
@@ -461,6 +558,14 @@ mod alsa_device_filter_tests {
  * settings, which is a worse failure than picking a device for them.
  */
 fn open_device_sink(id: Option<&str>) -> Result<MixerDeviceSink, String> {
+    #[cfg(target_os = "linux")]
+    if let Some(sink_name) = id.and_then(|id| id.strip_prefix(PIPEWIRE_SINK_ID_PREFIX)) {
+        let stream = DeviceSinkBuilder::open_default_sink()
+            .map_err(|error| format!("no audio output device: {error}"))?;
+        move_our_stream_to_pipewire_sink(sink_name);
+        return Ok(stream);
+    }
+
     let device = id.and_then(|id| {
         let device = find_output_device(id);
         if device.is_none() {
