@@ -2,7 +2,7 @@ import type { DataSource, StreamData } from "../datasource/DataSource";
 import type { Lyrics, Track } from "../datasource/types";
 import { logInternalDebug, logInternalError, logInternalInfo, logInternalWarn } from "../internal/logging";
 import { isPrematureEnd } from "./prematureEnd";
-import { AudioEngine } from "./AudioEngine";
+import { AudioEngine, isEmbedRestrictedPlaybackError } from "./AudioEngine";
 import { Queue } from "./Queue";
 import { NavigationCoalescer } from "./navigationCoalescer";
 import { recordPlay } from "./playHistory";
@@ -1310,6 +1310,14 @@ export class PlayerController {
        * saved on purpose.
        */
       const canFallBackToIframe = this.audioEngine.usesRustAudio() && !isDownloaded;
+      /*
+       * The mirror case: the embed is refused not because Google won't resolve the track but
+       * because its owner disallows embedded playback at all (error 101/150) — a restriction
+       * on the embed, not on the video. A directly resolved stream is not an embed and
+       * sidesteps it, so a track that would otherwise be permanently unplayable on this engine
+       * gets one try at native audio before giving up.
+       */
+      const canFallBackToNative = !useNativeAudio && !isDownloaded;
 
       try {
         const audioData = useNativeAudio
@@ -1339,12 +1347,30 @@ export class PlayerController {
           );
         }
       } catch (error) {
-        if (!canFallBackToIframe) throw error;
-        logInternalWarn("PlayerController.ensureTrackLoaded falling back to the YouTube player", {
-          trackId: track.id,
-          error: getErrorMessage(error),
-        });
-        await this.audioEngine.loadIframeFallback(track.id);
+        if (canFallBackToIframe) {
+          logInternalWarn("PlayerController.ensureTrackLoaded falling back to the YouTube player", {
+            trackId: track.id,
+            error: getErrorMessage(error),
+          });
+          await this.audioEngine.loadIframeFallback(track.id);
+        } else if (canFallBackToNative && isEmbedRestrictedPlaybackError(error)) {
+          const nativeAudioData = await this.dataSource.getStreamData?.(track);
+          if (!nativeAudioData) throw error;
+          logInternalWarn("PlayerController.ensureTrackLoaded falling back to native audio", {
+            trackId: track.id,
+            error: getErrorMessage(error),
+          });
+          await this.audioEngine.loadNativeFallback(
+            track.id,
+            nativeAudioData.bytes,
+            nativeAudioData.mimeType,
+            nativeAudioData.sourceUrl,
+            nativeAudioData.rustSource,
+            track.durationSec,
+          );
+        } else {
+          throw error;
+        }
       }
 
       this.loadedTrackId = track.id;

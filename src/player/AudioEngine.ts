@@ -160,6 +160,17 @@ function isPlayerStateTimeout(error: unknown): boolean {
     && /^Timed out waiting for YouTube player state: /.test(error.message);
 }
 
+/**
+ * True for IFrame error 101/150 — YouTube's own "the owner of this video does not allow it to
+ * be played in embedded players" (150 is 101 in disguise, same restriction, same fix).
+ *
+ * A property of the *embed*, not of the video: a directly resolved stream URL is not an embed
+ * and is not subject to it, which is what makes falling back to one worth trying.
+ */
+export function isEmbedRestrictedPlaybackError(error: unknown): boolean {
+  return error instanceof Error && /^YouTube player error (101|150)$/.test(error.message);
+}
+
 function detectAudioMimeType(bytes: Uint8Array): string {
   if (
     bytes.length >= 4
