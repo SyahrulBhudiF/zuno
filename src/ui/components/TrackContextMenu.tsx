@@ -116,12 +116,18 @@ export function TrackContextMenuProvider({
    * Local playlists were missing entirely — they never appear in `library.playlists`, so the
    * picker only ever offered YouTube ones. They are only a valid target for a song that has a
    * file on disk, since a local playlist is a list of paths.
+   *
+   * `isEditable` is not filtered on here: it only tells us whether *we* created the playlist,
+   * not whether we're allowed to add to it — a playlist someone else shared as a collaborator
+   * fails that check too, and used to disappear from this list along with true read-only ones.
+   * The actual add call has no such gate; it just asks YouTube and surfaces a real error if the
+   * playlist turns out not to be writable, which is the only place that answer is authoritative.
    */
   const playlists = useMemo(() => {
     const seen = new Set<string>();
     const candidates: Playlist[] = [];
     for (const playlist of [...(libraryState.library?.playlists ?? []), ...localPlaylists]) {
-      if (playlist.isEditable === false || seen.has(playlist.id)) continue;
+      if (seen.has(playlist.id)) continue;
       if (isLocalPlaylist(playlist) && track?.source !== "local") continue;
       seen.add(playlist.id);
       candidates.push(playlist);
