@@ -8,7 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { AlbumIcon, CheckIcon, CloseIcon, CompassIcon, DownloadIcon, HeartActiveIcon, HeartIcon, LinkIcon, ListIcon, PencilIcon, PlaylistAddIcon, PlaylistIcon, SearchIcon, SkipNextIcon, TrashIcon } from "@/ui/icons";
+import { AlbumIcon, CheckIcon, CloseIcon, CompassIcon, DownloadIcon, HeartActiveIcon, HeartIcon, LinkIcon, ListIcon, PencilIcon, PlaylistAddIcon, PlaylistIcon, RadioIcon, SearchIcon, SkipNextIcon, TrashIcon } from "@/ui/icons";
 import type { Playlist, Track, TrackRating } from "../../datasource/types";
 import {
   TrackContextMenuContext,
@@ -303,6 +303,13 @@ export function TrackContextMenuProvider({
     showToast(`"${track.title}" will play next`);
   };
 
+  /** Plays the track solo and lets autoplay fill the rest, seeded from it — a YT Music mix. */
+  const startRadio = () => {
+    if (!track) return;
+    setMenuPosition(null);
+    void playerController.playTrackById(track.id, [track], true);
+  };
+
   const copyLink = async () => {
     if (!track) return;
     const selectedTrack = track;
@@ -556,6 +563,13 @@ export function TrackContextMenuProvider({
             <ListIcon size={18} aria-hidden="true" />
             <span className="flex-1">Add to queue</span>
           </button>
+          {/* Needs a YouTube video id to seed the mix — a local file has nothing to seed from. */}
+          {track.source !== "local" && (
+            <button type="button" role="menuitem" className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" onClick={startRadio}>
+              <RadioIcon size={18} aria-hidden="true" />
+              <span className="flex-1">Start radio</span>
+            </button>
+          )}
           <button type="button" role="menuitem" className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" onClick={openPicker}>
             <PlaylistAddIcon size={18} aria-hidden="true" />
             <span className="flex-1">Add to playlist</span>
