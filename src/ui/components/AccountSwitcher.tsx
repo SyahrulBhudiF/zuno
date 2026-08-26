@@ -6,6 +6,20 @@ import type { AccountOption, GoogleAccountOption } from "../../datasource/types"
 import type { LibraryController } from "../../player/LibraryController";
 import { logInternalWarn } from "../../internal/logging";
 
+/**
+ * Small uppercase header a switcher renders directly above its own rows — never on its own, so
+ * a section that has hidden itself (single option, `showSingle` off) can never leave an
+ * orphaned label with nothing underneath it. This is what tells "Account" and "Channel" apart
+ * in the title bar popover instead of both rendering as one undifferentiated list.
+ */
+function SectionLabel({ children }: { children: string }) {
+  return (
+    <span className="px-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+      {children}
+    </span>
+  );
+}
+
 /** Round profile image with a glyph fallback, shared by every account surface. */
 export function AccountAvatar({
   artworkUrl,
@@ -56,6 +70,7 @@ export function AccountSwitcher({
   libraryController,
   onSwitched,
   showSingle = false,
+  label,
   className,
 }: {
   libraryController: LibraryController;
@@ -67,6 +82,8 @@ export function AccountSwitcher({
    * picker with a single option is noise.
    */
   showSingle?: boolean;
+  /** Small header rendered directly above the rows — see `SectionLabel`. Omit for none. */
+  label?: string;
   className?: string;
 }) {
   const [accounts, setAccounts] = useState<AccountOption[] | null>(null);
@@ -123,30 +140,33 @@ export function AccountSwitcher({
   if (accounts.length === 1 && !showSingle) return null;
 
   return (
-    <div className={cn("flex flex-col gap-0.5", className)}>
-      {accounts.map((account) => (
-        <button
-          key={account.id}
-          type="button"
-          disabled={Boolean(switchingId)}
-          onClick={() => void handleSelect(account)}
-          aria-current={account.isActive ? "true" : undefined}
-          className={cn(
-            "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted/70",
-            " disabled:pointer-events-none disabled:opacity-60",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-            account.isActive && "bg-muted/40",
-          )}
-        >
-          <AccountAvatar artworkUrl={account.artworkUrl} className="size-8" iconSize={16} />
-          <span className="min-w-0 flex-1 truncate text-sm text-foreground">{account.name}</span>
-          {switchingId === account.id ? (
-            <Loader variant="spinner" size={15} />
-          ) : account.isActive ? (
-            <CheckActiveIcon size={16} className="shrink-0 text-primary" aria-hidden="true" />
-          ) : null}
-        </button>
-      ))}
+    <div className={cn("flex flex-col gap-1.5", className)}>
+      {label && <SectionLabel>{label}</SectionLabel>}
+      <div className="flex flex-col gap-0.5">
+        {accounts.map((account) => (
+          <button
+            key={account.id}
+            type="button"
+            disabled={Boolean(switchingId)}
+            onClick={() => void handleSelect(account)}
+            aria-current={account.isActive ? "true" : undefined}
+            className={cn(
+              "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted/70",
+              " disabled:pointer-events-none disabled:opacity-60",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+              account.isActive && "bg-muted/40",
+            )}
+          >
+            <AccountAvatar artworkUrl={account.artworkUrl} className="size-8" iconSize={16} />
+            <span className="min-w-0 flex-1 truncate text-sm text-foreground">{account.name}</span>
+            {switchingId === account.id ? (
+              <Loader variant="spinner" size={15} />
+            ) : account.isActive ? (
+              <CheckActiveIcon size={16} className="shrink-0 text-primary" aria-hidden="true" />
+            ) : null}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -164,6 +184,7 @@ export function GoogleAccountSwitcher({
   onSwitched,
   showSingle = false,
   allowRemove = false,
+  label,
   className,
 }: {
   libraryController: LibraryController;
@@ -176,6 +197,8 @@ export function GoogleAccountSwitcher({
   /** Whether each row gets a remove control. Off in the title-bar popover — that is a quick
    *  switcher, not where you manage the list — on in Settings. */
   allowRemove?: boolean;
+  /** Small header rendered directly above the rows — see `SectionLabel`. Omit for none. */
+  label?: string;
   className?: string;
 }) {
   const [accounts, setAccounts] = useState<GoogleAccountOption[] | null>(null);
@@ -253,50 +276,53 @@ export function GoogleAccountSwitcher({
   if (accounts.length === 1 && !showSingle) return null;
 
   return (
-    <div className={cn("flex flex-col gap-0.5", className)}>
-      {accounts.map((account) => (
-        <button
-          key={account.id}
-          type="button"
-          disabled={Boolean(busyId)}
-          onClick={() => void handleSelect(account)}
-          aria-current={account.isActive ? "true" : undefined}
-          className={cn(
-            "group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted/70",
-            "disabled:pointer-events-none disabled:opacity-60",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-            account.isActive && "bg-muted/40",
-          )}
-        >
-          <AccountAvatar artworkUrl={account.artworkUrl} className="size-8" iconSize={16} />
-          <span className="min-w-0 flex-1 truncate text-sm text-foreground">{account.name}</span>
-          {busyId === account.id ? (
-            <Loader variant="spinner" size={15} />
-          ) : (
-            <>
-              {account.isActive && (
-                <CheckActiveIcon size={16} className="shrink-0 text-primary" aria-hidden="true" />
-              )}
-              {allowRemove && (
-                <span
-                  role="button"
-                  tabIndex={0}
-                  onClick={(event) => void handleRemove(account, event)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" && event.key !== " ") return;
-                    event.preventDefault();
-                    void handleRemove(account, event as unknown as React.MouseEvent);
-                  }}
-                  aria-label={`Remove ${account.name}`}
-                  className="flex shrink-0 items-center justify-center rounded-md p-1 opacity-0 transition-opacity hover:bg-background hover:text-destructive group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <CloseIcon size={14} aria-hidden="true" />
-                </span>
-              )}
-            </>
-          )}
-        </button>
-      ))}
+    <div className={cn("flex flex-col gap-1.5", className)}>
+      {label && <SectionLabel>{label}</SectionLabel>}
+      <div className="flex flex-col gap-0.5">
+        {accounts.map((account) => (
+          <button
+            key={account.id}
+            type="button"
+            disabled={Boolean(busyId)}
+            onClick={() => void handleSelect(account)}
+            aria-current={account.isActive ? "true" : undefined}
+            className={cn(
+              "group flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted/70",
+              "disabled:pointer-events-none disabled:opacity-60",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+              account.isActive && "bg-muted/40",
+            )}
+          >
+            <AccountAvatar artworkUrl={account.artworkUrl} className="size-8" iconSize={16} />
+            <span className="min-w-0 flex-1 truncate text-sm text-foreground">{account.name}</span>
+            {busyId === account.id ? (
+              <Loader variant="spinner" size={15} />
+            ) : (
+              <>
+                {account.isActive && (
+                  <CheckActiveIcon size={16} className="shrink-0 text-primary" aria-hidden="true" />
+                )}
+                {allowRemove && (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(event) => void handleRemove(account, event)}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      void handleRemove(account, event as unknown as React.MouseEvent);
+                    }}
+                    aria-label={`Remove ${account.name}`}
+                    className="flex shrink-0 items-center justify-center rounded-md p-1 opacity-0 transition-opacity hover:bg-background hover:text-destructive group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <CloseIcon size={14} aria-hidden="true" />
+                  </span>
+                )}
+              </>
+            )}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

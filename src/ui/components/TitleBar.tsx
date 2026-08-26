@@ -417,17 +417,20 @@ export function TitleBar({
 
               <span className="my-0.5 h-px bg-border" aria-hidden="true" />
 
-              {/* Separate Google logins first, channels within the active one after — this is
-                  a quick switcher, not where accounts are added or removed, so neither section
-                  renders at all when there is only one option. */}
+              {/* Separate Google logins first, channels within the active one after — labeled
+                  so the two are never mistaken for one undifferentiated list. This is a quick
+                  switcher, not where accounts are added or removed, so a section (label
+                  included) renders nothing at all when there is only one option in it. */}
               <GoogleAccountSwitcher
                 libraryController={libraryController}
                 onSwitched={() => setIsAccountPanelOpen(false)}
+                label="Account"
               />
 
               <AccountSwitcher
                 libraryController={libraryController}
                 onSwitched={() => setIsAccountPanelOpen(false)}
+                label="Channel"
               />
 
               <button
