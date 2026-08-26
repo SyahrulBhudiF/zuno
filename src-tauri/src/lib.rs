@@ -244,6 +244,18 @@ fn apply_set_cookie(pairs: &mut Vec<(String, String)>, set_cookie: &str) -> bool
     }
 }
 
+/// Joins an error with its full `.source()` chain, so a wrapper like reqwest's "error sending
+/// request for url" comes with the DNS/TLS/connection failure underneath it instead of hiding it.
+fn error_cause_chain(error: &dyn std::error::Error) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(cause) = source {
+        parts.push(cause.to_string());
+        source = cause.source();
+    }
+    parts.join(" -> caused by: ")
+}
+
 fn is_youtube_cookie_host(url: &url::Url) -> bool {
     url.host_str()
         .is_some_and(|host| host == "youtube.com" || host.ends_with(".youtube.com"))
@@ -1707,12 +1719,27 @@ fn load_youtube_music_cookie_entries() -> Result<Option<String>, CommandError> {
     }
 }
 
+/*
+ * The Keychain entry backing `load_or_create_cookie_encryption_key` is scoped to this build's
+ * code signature. Zuno's macOS builds are ad-hoc signed (no paid Developer ID), so that
+ * signature — and with it, access to the old key — changes on every single update. Before this
+ * guarded against it, a stale key read as `NoEntry`, the loader minted a brand new random one,
+ * and it was handed straight to AES-GCM against ciphertext only the *old* key could ever open:
+ * decryption fails its tag check, load_youtube_music_cookie surfaces that as an Err, and
+ * restoreSession's catch quietly reports the user as logged out. The file never gets cleaned up,
+ * so every later launch repeats the exact same failure — indistinguishable, from a signed-in
+ * user's perspective, from having never logged in at all.
+ *
+ * Anything that goes wrong past "the file exists" is therefore treated as an orphaned session
+ * rather than a hard error: delete the undecryptable file and report no session, so the state is
+ * clean and the next login starts fresh instead of retrying against the same dead bytes forever.
+ */
 #[cfg(target_os = "macos")]
 fn load_encrypted_youtube_music_cookie(
     app: &tauri::AppHandle,
 ) -> Result<Option<String>, CommandError> {
     let path = youtube_cookie_encrypted_file(app)?;
-    let contents = match fs::read(path) {
+    let contents = match fs::read(&path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
@@ -1721,25 +1748,38 @@ fn load_encrypted_youtube_music_cookie(
             })
         }
     };
+
+    let discard_orphaned_session = |reason: String| -> Result<Option<String>, CommandError> {
+        eprintln!(
+            "[internal][tauri][warn] discarding unreadable YouTube Music session: {reason}"
+        );
+        let _ = fs::remove_file(&path);
+        Ok(None)
+    };
+
     if contents.len() <= 12 {
-        return Err(CommandError {
-            message: "encrypted session file is invalid.".to_string(),
-        });
+        return discard_orphaned_session("encrypted session file is invalid.".to_string());
     }
-    let key = load_or_create_cookie_encryption_key()?;
-    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| CommandError {
-        message: format!("session decryption setup failed: {error}"),
-    })?;
-    let decrypted = cipher
-        .decrypt(Nonce::from_slice(&contents[..12]), &contents[12..])
-        .map_err(|error| CommandError {
-            message: format!("session decryption failed: {error}"),
-        })?;
-    String::from_utf8(decrypted)
-        .map(Some)
-        .map_err(|error| CommandError {
-            message: format!("decrypted session is invalid: {error}"),
-        })
+    let key = match load_or_create_cookie_encryption_key() {
+        Ok(key) => key,
+        Err(error) => return discard_orphaned_session(error.message),
+    };
+    let cipher = match Aes256Gcm::new_from_slice(&key) {
+        Ok(cipher) => cipher,
+        Err(error) => {
+            return discard_orphaned_session(format!("session decryption setup failed: {error}"))
+        }
+    };
+    let decrypted = match cipher.decrypt(Nonce::from_slice(&contents[..12]), &contents[12..]) {
+        Ok(decrypted) => decrypted,
+        Err(error) => {
+            return discard_orphaned_session(format!("session decryption failed: {error}"))
+        }
+    };
+    match String::from_utf8(decrypted) {
+        Ok(cookie) => Ok(Some(cookie)),
+        Err(error) => discard_orphaned_session(format!("decrypted session is invalid: {error}")),
+    }
 }
 
 fn read_stored_youtube_music_cookie(app: &tauri::AppHandle) -> Result<Option<String>, CommandError> {
@@ -4539,12 +4579,17 @@ async fn proxy_http_request(
     }
 
     let response = request.send().await.map_err(|error| {
+        // reqwest's own Display is just the top-level "error sending request for url" wrapper —
+        // the actual cause (DNS failure, TLS handshake, connection refused/reset) lives in the
+        // source chain underneath it and was getting dropped, leaving every network failure
+        // indistinguishable in the log from every other one.
         eprintln!(
             "[internal][tauri][error] proxy_http_request request failed url={} error={}",
-            input.url, error
+            input.url,
+            error_cause_chain(&error)
         );
         CommandError {
-            message: format!("request failed: {error}"),
+            message: format!("request failed: {}", error_cause_chain(&error)),
         }
     })?;
 
@@ -4905,7 +4950,7 @@ pub fn run() {
 mod tests {
     use super::{
         apply_set_cookie, audio_url_with_range, cookie_account_identity, cookie_domain_matches,
-        is_slow_persist_cookie, is_youtube_cookie_host, parse_cookie_header, sanitize_log_url,
+        error_cause_chain, is_slow_persist_cookie, is_youtube_cookie_host, parse_cookie_header, sanitize_log_url,
         audio_chunk_size, playback_ranges, serialize_cookie_pairs, MediaBuffer, AUDIO_HEAD_CHUNK_BYTES, signed_content_length, store_media_item,
         MediaItem, AUDIO_MIN_CHUNK_BYTES, MEDIA_SERVER_MAX_ITEMS, OFFLINE_CHUNK_BYTES,
         load_superseded, LOAD_GENERATION, bytes_preview,
@@ -5329,6 +5374,37 @@ mod tests {
     #[test]
     fn sanitize_log_url_rejects_unparseable_input() {
         assert_eq!(sanitize_log_url("not a url"), "[redacted-url]");
+    }
+
+    #[test]
+    fn error_cause_chain_walks_the_full_source_chain() {
+        #[derive(Debug)]
+        struct Wrapped(&'static str, Option<Box<dyn std::error::Error>>);
+        impl std::fmt::Display for Wrapped {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for Wrapped {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                self.1.as_deref()
+            }
+        }
+
+        let dns_failure = Wrapped("dns error: no such host", None);
+        let send_failure = Wrapped(
+            "error sending request for url (https://www.youtube.com/iframe_api)",
+            Some(Box::new(dns_failure)),
+        );
+
+        assert_eq!(
+            error_cause_chain(&send_failure),
+            "error sending request for url (https://www.youtube.com/iframe_api) -> caused by: dns error: no such host",
+            "the underlying DNS/TLS/connection cause must survive, not just reqwest's wrapper text",
+        );
+
+        let bare = Wrapped("connection refused", None);
+        assert_eq!(error_cause_chain(&bare), "connection refused");
     }
 
     #[test]
