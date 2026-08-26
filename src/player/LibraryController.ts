@@ -1,6 +1,7 @@
 import { AuthExpiredError, type DataSource } from "../datasource/DataSource";
 import type {
   AccountOption,
+  GoogleAccountOption,
   Album,
   ArtistNotificationLevel,
   BrowsePage,
@@ -352,9 +353,19 @@ export class LibraryController {
     });
   }
 
+  /**
+   * Signs out of the active account. With more than one Google account stored, this falls back
+   * to another one automatically (the datasource reports whether it did) rather than dropping
+   * to fully signed out — the same fallback `removeGoogleAccount` uses for a specific account.
+   */
   async signOut(): Promise<void> {
     try {
-      await this.dataSource.signOut?.();
+      const fellBackToAnotherAccount = await this.dataSource.signOut?.() ?? false;
+      if (fellBackToAnotherAccount) {
+        this.setState({ status: "loading", library: null, authPrompt: null, error: null, sessionConfirmedAt: null });
+        await this.refresh();
+        return;
+      }
       this.setState({
         status: "signed-out",
         authPrompt: null,
@@ -400,6 +411,59 @@ export class LibraryController {
       this.setFailure("Unable to switch account.", error);
     } finally {
       this.setState({ authProgress: null });
+    }
+  }
+
+  /** Every Google account with a stored session, for the account switcher. */
+  listGoogleAccounts(): Promise<GoogleAccountOption[]> {
+    return this.dataSource.listGoogleAccounts?.() ?? Promise.resolve([]);
+  }
+
+  /**
+   * Switches to a stored Google account and reloads the library. Unlike `signIn`, never opens a
+   * browser window — that is the entire point of storing more than one account.
+   */
+  async switchGoogleAccount(id: string): Promise<void> {
+    if (!this.dataSource.switchGoogleAccount) return;
+    this.activeAuthFlow = "google-account-switch";
+    this.setAuthStage("session");
+    try {
+      await this.dataSource.switchGoogleAccount(id);
+      this.setState({ status: "loading", library: null, authPrompt: null, error: null, sessionConfirmedAt: null });
+      this.setAuthStage("library");
+      await this.refresh();
+    } catch (error) {
+      this.setFailure("Unable to switch account.", error);
+    } finally {
+      this.setState({ authProgress: null });
+    }
+  }
+
+  /**
+   * Forgets one stored Google account. Removing a non-active account changes nothing on screen;
+   * removing the active one behaves like `signOut` — falls back to another stored account when
+   * one remains, or leaves the app signed out when it was the last one.
+   */
+  async removeGoogleAccount(id: string): Promise<void> {
+    if (!this.dataSource.removeGoogleAccount) return;
+    try {
+      const outcome = await this.dataSource.removeGoogleAccount(id);
+      if (outcome === "unchanged") return;
+      if (outcome === "signed-out") {
+        this.setState({
+          status: "signed-out",
+          authPrompt: null,
+          library: null,
+          pendingLikeTrackIds: new Set(),
+          error: null,
+          sessionConfirmedAt: null,
+        });
+        return;
+      }
+      this.setState({ status: "loading", library: null, authPrompt: null, error: null, sessionConfirmedAt: null });
+      await this.refresh();
+    } catch (error) {
+      this.setFailure("Unable to remove that account.", error);
     }
   }
 

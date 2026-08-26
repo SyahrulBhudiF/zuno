@@ -56,6 +56,15 @@ const STAGES_BY_FLOW: Record<AuthFlow, ReadonlyArray<Stage>> = {
     },
     LIBRARY_STAGE,
   ],
+  "google-account-switch": [
+    {
+      id: "session",
+      title: "Switching account",
+      description: "Handing over to the other account and clearing the previous one's cache.",
+      Icon: UserIcon,
+    },
+    LIBRARY_STAGE,
+  ],
 };
 
 const HEADINGS: Record<AuthFlow, { title: string; waiting: string; working: string }> = {
@@ -67,6 +76,11 @@ const HEADINGS: Record<AuthFlow, { title: string; waiting: string; working: stri
   "account-switch": {
     title: "Switching channel",
     waiting: "Moving your library over to the new channel.",
+    working: "Nearly there. Keep this window open.",
+  },
+  "google-account-switch": {
+    title: "Switching account",
+    waiting: "Moving your library over to the other account.",
     working: "Nearly there. Keep this window open.",
   },
 };
