@@ -8,7 +8,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { AlbumIcon, CheckIcon, CloseIcon, CompassIcon, DownloadIcon, HeartActiveIcon, HeartIcon, LinkIcon, ListIcon, PencilIcon, PlaylistAddIcon, PlaylistIcon, SearchIcon, SkipNextIcon, TrashIcon } from "@/ui/icons";
+import { AlbumIcon, CheckIcon, CloseIcon, CompassIcon, DownloadIcon, HeartActiveIcon, HeartIcon, LinkIcon, ListIcon, PencilIcon, PlaylistAddIcon, PlaylistIcon, RadioIcon, SearchIcon, SkipNextIcon, TrashIcon } from "@/ui/icons";
 import type { Playlist, Track, TrackRating } from "../../datasource/types";
 import {
   TrackContextMenuContext,
@@ -116,12 +116,18 @@ export function TrackContextMenuProvider({
    * Local playlists were missing entirely — they never appear in `library.playlists`, so the
    * picker only ever offered YouTube ones. They are only a valid target for a song that has a
    * file on disk, since a local playlist is a list of paths.
+   *
+   * `isEditable` is not filtered on here: it only tells us whether *we* created the playlist,
+   * not whether we're allowed to add to it — a playlist someone else shared as a collaborator
+   * fails that check too, and used to disappear from this list along with true read-only ones.
+   * The actual add call has no such gate; it just asks YouTube and surfaces a real error if the
+   * playlist turns out not to be writable, which is the only place that answer is authoritative.
    */
   const playlists = useMemo(() => {
     const seen = new Set<string>();
     const candidates: Playlist[] = [];
     for (const playlist of [...(libraryState.library?.playlists ?? []), ...localPlaylists]) {
-      if (playlist.isEditable === false || seen.has(playlist.id)) continue;
+      if (seen.has(playlist.id)) continue;
       if (isLocalPlaylist(playlist) && track?.source !== "local") continue;
       seen.add(playlist.id);
       candidates.push(playlist);
@@ -301,6 +307,13 @@ export function TrackContextMenuProvider({
     playerController.playNext(track);
     setMenuPosition(null);
     showToast(`"${track.title}" will play next`);
+  };
+
+  /** Plays the track solo and lets autoplay fill the rest, seeded from it — a YT Music mix. */
+  const startRadio = () => {
+    if (!track) return;
+    setMenuPosition(null);
+    void playerController.playTrackById(track.id, [track], true);
   };
 
   const copyLink = async () => {
@@ -556,6 +569,13 @@ export function TrackContextMenuProvider({
             <ListIcon size={18} aria-hidden="true" />
             <span className="flex-1">Add to queue</span>
           </button>
+          {/* Needs a YouTube video id to seed the mix — a local file has nothing to seed from. */}
+          {track.source !== "local" && (
+            <button type="button" role="menuitem" className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" onClick={startRadio}>
+              <RadioIcon size={18} aria-hidden="true" />
+              <span className="flex-1">Start radio</span>
+            </button>
+          )}
           <button type="button" role="menuitem" className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-card disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" onClick={openPicker}>
             <PlaylistAddIcon size={18} aria-hidden="true" />
             <span className="flex-1">Add to playlist</span>

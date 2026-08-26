@@ -18,6 +18,7 @@ import { queueDownloads, useOfflineState } from "../../player/offlineStore";
 import { usePlaylistContextMenu } from "../components/PlaylistContextMenu";
 import { formatCollectionMeta, MediaHeader } from "../components/MediaHeader";
 import { isLikedSongsId, likedSongsCover } from "../likedSongsArtwork";
+import { TrackListSkeleton } from "../components/Skeleton";
 import { TrackRow } from "../components/TrackRow";
 import { useNowPlaying } from "../hooks/useNowPlaying";
 import { useKeyboardShortcuts } from "../settings/keyboardShortcuts";
@@ -794,7 +795,6 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
         />
         <PlaylistDescription playlist={playlist} libraryController={libraryController} />
       </div>
-      {isLoading && <PlaylistLoadingSpinner label="Loading songs" />}
       {error && <p className="px-2 py-10 text-center text-sm text-muted-foreground">{error}</p>}
       {!isLoading && !error && !hasMoreTracks && tracks.length === 0 && (
         <p className="px-2 py-10 text-center text-sm text-muted-foreground">
@@ -804,7 +804,12 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
             : "This playlist is empty."}
         </p>
       )}
-      {!isLoading && !error && (tracks.length > 0 || hasMoreTracks) && (
+      {/*
+       * Sort and search stand apart from the loading state below them: they don't depend on
+       * the tracks being in yet, and hiding them behind the skeleton would make every playlist
+       * flash them in only once songs had already arrived.
+       */}
+      {!error && (isLoading || tracks.length > 0 || hasMoreTracks) && (
         <>
           <div
             className="flex flex-wrap items-center gap-1.5 self-start [&>button]:flex [&>button]:min-h-8 [&>button]:min-w-0 [&>button]:items-center [&>button]:justify-center [&>button]:gap-1.5 [&>button]:rounded-full [&>button]:bg-white/[0.04] [&>button]:px-3 [&>button]:text-sm [&>button]:font-medium [&>button]:text-muted-foreground [&>button]:transition-colors hover:[&>button]:bg-white/[0.08] hover:[&>button]:text-foreground focus-visible:[&>button]:outline-none focus-visible:[&>button]:ring-2 focus-visible:[&>button]:ring-ring"
@@ -871,7 +876,9 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
               )}
             </div>
           </div>
-          {visibleTracks.length === 0 && playlistSearchQuery.trim() ? (
+          {isLoading ? (
+            <TrackListSkeleton label="Loading songs" />
+          ) : visibleTracks.length === 0 && playlistSearchQuery.trim() ? (
             <p className="px-2 py-10 text-center text-sm text-muted-foreground">No songs match this search.</p>
           ) : (
           <div className="flex flex-col gap-0.5">
@@ -936,17 +943,19 @@ export function PlaylistView({ playlist, playerController, libraryController }: 
             })}
           </div>
           )}
-          <div ref={loadMoreRef} className="px-2 py-4 text-center text-sm text-muted-foreground" aria-live="polite">
-            {isLoadingMore ? (
-              <PlaylistLoadingSpinner label="Loading more songs" />
-            ) : loadMoreError ? (
-              loadMoreError
-            ) : hasMoreTracks ? (
-              ""
-            ) : (
-              ""
-            )}
-          </div>
+          {!isLoading && (
+            <div ref={loadMoreRef} className="px-2 py-4 text-center text-sm text-muted-foreground" aria-live="polite">
+              {isLoadingMore ? (
+                <PlaylistLoadingSpinner label="Loading more songs" />
+              ) : loadMoreError ? (
+                loadMoreError
+              ) : hasMoreTracks ? (
+                ""
+              ) : (
+                ""
+              )}
+            </div>
+          )}
         </>
       )}
       <SelectionBar
