@@ -77,6 +77,7 @@ export { Home2Icon as HomeActiveIcon } from "@solar-icons/react/bold/home-2";
 export { SidebarMinimalisticIcon as QueuePanelIcon } from "@solar-icons/react/linear/sidebar-minimalistic";
 export { MagnifierIcon as SearchIcon } from "@solar-icons/react/linear/magnifier";
 export { CompassIcon } from "@solar-icons/react/linear/compass";
+export { RadioIcon } from "@solar-icons/react/linear/radio";
 export { PaletteIcon } from "@solar-icons/react/linear/palette";
 export { PaletteIcon as PaletteActiveIcon } from "@solar-icons/react/bold/palette";
 export { SettingsIcon } from "@solar-icons/react/linear/settings";

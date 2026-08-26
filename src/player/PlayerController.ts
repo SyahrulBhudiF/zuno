@@ -1116,6 +1116,7 @@ export class PlayerController {
     }
 
     this.queue.replaceAutomaticUpcoming(recommendations);
+    this.emit();
   }
 
   private async refreshRestoredTrackMetadata(track: Track, restoreRequestId: number): Promise<void> {
