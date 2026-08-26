@@ -405,8 +405,14 @@ pub(crate) fn list_output_devices() -> Result<Vec<AudioOutputDevice>, String> {
 /// ALSA registers dozens of generic "type" PCMs — rate converters, plugin wrappers, and
 /// per-card surround/iec958 variants most cards don't actually support — globally in
 /// alsa.conf regardless of what hardware is plugged in, and cpal's hint enumeration surfaces
-/// every one of them. This keeps only the handful that are genuinely selectable outputs
-/// (default, pulse/pipewire, and each card's sysdefault:/hw:/plughw:/hdmi:) and drops the rest.
+/// every one of them. On top of that, cpal's physical-device probe re-adds every card as raw
+/// `hw:`/`plughw:` entries, duplicating the friendly `sysdefault:`/`hdmi:` hints for the same
+/// hardware. This keeps only the handful of genuinely distinct, selectable outputs (default,
+/// pulse/pipewire, and each card's sysdefault:/typed hint) and drops the rest.
+///
+/// ponytail: excluding `hw`/`plughw` outright assumes every card also gets a friendly hint
+/// (true for the stock alsa.conf `sysdefault` auto-config). A card with no such hint would
+/// become unselectable — if that surfaces, add it back only when its CARD= has no other entry.
 #[cfg(target_os = "linux")]
 fn is_alsa_plugin_noise(id: &str) -> bool {
     const NOISY_TYPES: &[&str] = &[
@@ -414,7 +420,7 @@ fn is_alsa_plugin_noise(id: &str) -> bool {
         "surround21", "surround40", "surround41", "surround50", "surround51", "surround71",
         "iec958", "spdif", "usbstream", "dmix", "dsnoop", "front", "rear", "center_lfe", "side",
         "modem", "phoneline", "shm", "tee", "file", "empty", "rate", "route", "mulaw", "alaw",
-        "adpcm", "plug", "multi", "ladspa", "asym",
+        "adpcm", "plug", "multi", "ladspa", "asym", "hw", "plughw",
     ];
     let type_name = id.split(':').next().unwrap_or(id);
     NOISY_TYPES.contains(&type_name)
@@ -431,6 +437,9 @@ mod alsa_device_filter_tests {
         assert!(is_alsa_plugin_noise("iec958:CARD=PCH,DEV=0"));
         assert!(is_alsa_plugin_noise("usbstream:CARD=Device"));
         assert!(is_alsa_plugin_noise("front:CARD=PCH,DEV=0"));
+        // Raw hw:/plughw: duplicate the friendly sysdefault:/hdmi: hints for the same card.
+        assert!(is_alsa_plugin_noise("hw:CARD=PCH,DEV=0"));
+        assert!(is_alsa_plugin_noise("plughw:CARD=PCH,DEV=0"));
     }
 
     #[test]
@@ -439,8 +448,6 @@ mod alsa_device_filter_tests {
         assert!(!is_alsa_plugin_noise("pulse"));
         assert!(!is_alsa_plugin_noise("pipewire"));
         assert!(!is_alsa_plugin_noise("sysdefault:CARD=PCH"));
-        assert!(!is_alsa_plugin_noise("hw:CARD=PCH,DEV=0"));
-        assert!(!is_alsa_plugin_noise("plughw:CARD=PCH,DEV=0"));
         assert!(!is_alsa_plugin_noise("hdmi:CARD=HDMI,DEV=0"));
     }
 }
