@@ -204,7 +204,7 @@ import {
 } from "../settings/lastfm";
 import { isLinux, isTilingWindowManager, subscribeTilingWindowManager } from "../platform";
 import { GITHUB_NEW_ISSUE_URL, GITHUB_REPOSITORY_URL } from "../links";
-import { AccountAvatar, AccountSwitcher } from "../components/AccountSwitcher";
+import { AccountAvatar, AccountSwitcher, AddGoogleAccountButton, GoogleAccountSwitcher } from "../components/AccountSwitcher";
 import {
   AUDIO_QUALITY_LABELS,
   setDownloadQuality,
@@ -1251,6 +1251,18 @@ export function SettingsPage({
                 />
               )}
             </div>
+
+            {/* Separate Google logins, not channels — always shown once signed in, since this
+                is where a second account gets added, not just switched to. */}
+            {isSignedIn && (
+              <div className="flex flex-col gap-1.5 border-t border-border pt-4">
+                <span className="px-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Accounts
+                </span>
+                <GoogleAccountSwitcher libraryController={libraryController} showSingle allowRemove />
+                <AddGoogleAccountButton disabled={authBusy} onClick={() => void onSignIn()} />
+              </div>
+            )}
 
             {/* Renders nothing unless the account actually has more than one channel. */}
             {isSignedIn && (

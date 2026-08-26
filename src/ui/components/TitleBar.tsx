@@ -25,7 +25,7 @@ import {
 } from "../settings/windowControls";
 import { Button } from "@/components/motion/button";
 import { libraryController, useLibraryState } from "../../player/playerStore";
-import { AccountAvatar, AccountSwitcher } from "./AccountSwitcher";
+import { AccountAvatar, AccountSwitcher, GoogleAccountSwitcher } from "./AccountSwitcher";
 import { GoogleSignInButton } from "./GoogleSignInButton";
 import { DownloadsPanel } from "./DownloadsPanel";
 import { FloatingPanel } from "./FloatingPanel";
@@ -416,6 +416,14 @@ export function TitleBar({
               </div>
 
               <span className="my-0.5 h-px bg-border" aria-hidden="true" />
+
+              {/* Separate Google logins first, channels within the active one after — this is
+                  a quick switcher, not where accounts are added or removed, so neither section
+                  renders at all when there is only one option. */}
+              <GoogleAccountSwitcher
+                libraryController={libraryController}
+                onSwitched={() => setIsAccountPanelOpen(false)}
+              />
 
               <AccountSwitcher
                 libraryController={libraryController}

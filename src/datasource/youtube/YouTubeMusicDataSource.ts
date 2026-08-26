@@ -18,6 +18,7 @@ import { mintPoToken, warmPoToken } from "./poToken";
 import { AuthExpiredError, DataSource, type StreamData } from "../DataSource";
 import type {
   AccountOption,
+  GoogleAccountOption,
   ArtistNotificationLevel,
   BrowseLink,
   BrowsePage,
@@ -314,6 +315,34 @@ interface SignInResult {
   cookie: string;
   /** False when this is the same Google account recovering a lapsed session. */
   accountChanged: boolean;
+  /** Opaque handle for switchGoogleAccount / removeGoogleAccount / the profile-capture call. */
+  slotId: string;
+}
+
+/** Mirrors `YoutubeAccountSummary` in src-tauri/src/lib.rs. */
+interface StoredGoogleAccount {
+  slotId: string;
+  name: string | null;
+  avatarUrl: string | null;
+  isActive: boolean;
+}
+
+/**
+ * What removing a stored Google account should do to the current session, given the cookie that
+ * was active beforehand and whatever the backend reports is active afterward.
+ *
+ * Exported (rather than kept private to `removeGoogleAccount`) purely so
+ * `YouTubeMusicDataSource.check.ts` can exercise this branch directly — this is the one piece of
+ * logic in the multi-account flow the TypeScript side owns rather than delegating to Rust's
+ * `YoutubeAccountStore`, and it decides whether the UI silently does nothing, refreshes for a
+ * fallback account, or shows signed-out.
+ */
+export function removeAccountOutcome(
+  previousCookie: string | null,
+  newActiveCookie: string | null,
+): "unchanged" | "switched" | "signed-out" {
+  if (newActiveCookie === previousCookie) return "unchanged";
+  return newActiveCookie ? "switched" : "signed-out";
 }
 
 const BROWSE_ITEM_TYPES = new Set(["song", "video", "album", "playlist", "artist"]);
@@ -2990,7 +3019,7 @@ export class YouTubeMusicDataSource extends DataSource {
     });
     // Unbounded: this resolves when the person finishes signing in, not on a timer.
     onStage?.("browser");
-    const { cookie, accountChanged } = await invoke<SignInResult>("sign_in_youtube_music");
+    const { cookie, accountChanged, slotId } = await invoke<SignInResult>("sign_in_youtube_music");
     this.musicCookie = cookie;
     onStage?.("session");
     logInternalInfo("YouTubeMusicDataSource.signIn command completed", {
@@ -3003,10 +3032,16 @@ export class YouTubeMusicDataSource extends DataSource {
      * one: the cached library stays, the chosen channel stays, and only the clients holding the
      * old cookie are rebuilt. Clearing regardless is what turned every lapsed session into a
      * full resync behind the sign-in overlay — for an account whose cache was still correct.
+     *
+     * This is also "add another Google account" — the Rust side stores whatever account this
+     * turns out to be as an *additional* slot rather than replacing one, so from here on out the
+     * only difference between a first sign-in, a lapsed-session renewal, and adding a second
+     * account is this one flag.
      */
     if (!accountChanged) {
       this.resetMusicClients();
       await this.getMusicClient();
+      void this.captureAccountProfile(slotId);
       logInternalInfo("YouTubeMusicDataSource.signIn success (session renewed)");
       return;
     }
@@ -3020,7 +3055,39 @@ export class YouTubeMusicDataSource extends DataSource {
     }
     this.resetMusicSessionSelection();
     await this.getMusicClient();
+    void this.captureAccountProfile(slotId);
     logInternalInfo("YouTubeMusicDataSource.signIn success");
+  }
+
+  /**
+   * Labels a stored account with its own display name/avatar, for the account switcher.
+   *
+   * Best-effort and fire-and-forget from every call site: this is cosmetic (a missing label
+   * falls back to "YouTube Music" — see `listGoogleAccounts`), never worth failing or delaying
+   * a sign-in over. Rust has no way to ask YouTube for this itself, so it is captured here,
+   * right after whichever call just proved this client is authenticated as that account.
+   */
+  private async captureAccountProfile(slotId: string): Promise<void> {
+    try {
+      const client = await this.getWebClient();
+      const accountItems = await client.account.getInfo(true) as Array<{
+        account_name?: { toString(): string };
+        account_photo?: unknown;
+      }>;
+      // accounts_list puts the signed-in person's own channel first — see getAccountCandidates,
+      // which relies on the same ordering.
+      const owner = accountItems[0];
+      if (!owner) return;
+      await invoke("update_youtube_music_account_profile", {
+        slotId,
+        name: owner.account_name?.toString() ?? null,
+        avatarUrl: selectArtworkUrl(collectArtworkCandidates(owner.account_photo)) ?? null,
+      });
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.captureAccountProfile failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -3041,9 +3108,18 @@ export class YouTubeMusicDataSource extends DataSource {
     }
   }
 
-  async signOut(): Promise<void> {
+  /**
+   * Signs out of whichever Google account is currently active.
+   *
+   * Returns whether another stored account took over — with more than one signed in, removing
+   * the active one falls back to another rather than dropping to fully signed out, the same way
+   * removing your active account from a browser falls back to another one still signed in there.
+   * `LibraryController` uses this to decide whether to show signed-out or refresh the library
+   * for whoever is now active.
+   */
+  async signOut(): Promise<boolean> {
     logInternalInfo("YouTubeMusicDataSource.signOut start");
-    await invoke("delete_youtube_music_cookie");
+    const fallbackCookie = await invoke<string | null>("delete_youtube_music_cookie");
     try {
       await clearCache();
     } catch (error) {
@@ -3051,9 +3127,81 @@ export class YouTubeMusicDataSource extends DataSource {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    this.musicCookie = null;
+    this.musicCookie = fallbackCookie;
     this.resetMusicSessionSelection();
+    this.resetMusicClients();
+    if (fallbackCookie) {
+      await this.getMusicClient();
+      logInternalInfo("YouTubeMusicDataSource.signOut success (fell back to another stored account)");
+      return true;
+    }
     logInternalInfo("YouTubeMusicDataSource.signOut success");
+    return false;
+  }
+
+  async listGoogleAccounts(): Promise<GoogleAccountOption[]> {
+    const accounts = await invoke<StoredGoogleAccount[]>("list_youtube_music_accounts");
+    return accounts.map((account) => ({
+      id: account.slotId,
+      name: account.name || "YouTube Music",
+      artworkUrl: account.avatarUrl ?? undefined,
+      isActive: account.isActive,
+    }));
+  }
+
+  /** Makes a stored Google account active. Unlike signIn, never opens a browser window. */
+  async switchGoogleAccount(id: string): Promise<void> {
+    logInternalInfo("YouTubeMusicDataSource.switchGoogleAccount start");
+    const cookie = await invoke<string | null>("switch_youtube_music_account", { slotId: id });
+    this.musicCookie = cookie;
+    this.resetMusicSessionSelection();
+    this.resetMusicClients();
+    try {
+      await clearCache();
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.switchGoogleAccount cache clear failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    await this.getMusicClient();
+    logInternalInfo("YouTubeMusicDataSource.switchGoogleAccount success");
+  }
+
+  /**
+   * Forgets one stored Google account.
+   *
+   * The three outcomes are what `LibraryController` needs to know to update the UI correctly:
+   * removing an account that was not active changes nothing about the current session at all,
+   * removing the active one either falls back to another stored account or, if that was the
+   * last one, leaves nothing signed in.
+   */
+  async removeGoogleAccount(id: string): Promise<"unchanged" | "switched" | "signed-out"> {
+    logInternalInfo("YouTubeMusicDataSource.removeGoogleAccount start");
+    const previousCookie = this.musicCookie;
+    const newActiveCookie = await invoke<string | null>("remove_youtube_music_account", { slotId: id });
+    const outcome = removeAccountOutcome(previousCookie, newActiveCookie);
+    if (outcome === "unchanged") {
+      logInternalInfo("YouTubeMusicDataSource.removeGoogleAccount unchanged");
+      return outcome;
+    }
+
+    this.musicCookie = newActiveCookie;
+    this.resetMusicSessionSelection();
+    this.resetMusicClients();
+    try {
+      await clearCache();
+    } catch (error) {
+      logInternalWarn("YouTubeMusicDataSource.removeGoogleAccount cache clear failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (outcome === "signed-out") {
+      logInternalInfo("YouTubeMusicDataSource.removeGoogleAccount success (signed out)");
+      return outcome;
+    }
+    await this.getMusicClient();
+    logInternalInfo("YouTubeMusicDataSource.removeGoogleAccount success (switched)");
+    return "switched";
   }
 
   getCachedLibrary(): Promise<LibrarySnapshot | null> {

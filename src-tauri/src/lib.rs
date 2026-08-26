@@ -34,7 +34,8 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-#[cfg(target_os = "macos")]
+// Unconditional: OsRng also backs generate_slot_id, used on every platform for account slot
+// ids, not just the macOS-only encryption key it originally served.
 use rand::{rngs::OsRng, RngCore};
 
 #[cfg(target_os = "macos")]
@@ -118,6 +119,15 @@ fn copy_dir_contents(from: &std::path::Path, to: &std::path::Path) -> std::io::R
 const LEGACY_BUNDLE_IDENTIFIER: &str = "com.justanothermusicclient.desktop";
 const KEYRING_USER: &str = "youtube-oauth";
 const YOUTUBE_COOKIE_KEYRING_USER: &str = "youtube-music-cookie";
+/// Slot id for the one account that existed before multi-account support.
+///
+/// Pinned rather than randomly generated so migrating an existing install keeps using the
+/// *exact* original shared webview partition (`YOUTUBE_LOGIN_DATA_DIR` /
+/// `YOUTUBE_LOGIN_DATA_STORE_ID`, unsuffixed) instead of a fresh, empty one — see
+/// `login_partition_directory_name`. A fresh partition has no warm Google browser session in
+/// it, which would have made silent refresh less reliable for every existing user on the very
+/// next launch after this shipped.
+const LEGACY_ACCOUNT_SLOT_ID: &str = "legacy-primary-account";
 #[cfg(target_os = "macos")]
 const YOUTUBE_COOKIE_ENCRYPTION_KEY_USER: &str = "youtube-music-cookie-encryption-key-v1";
 #[cfg(target_os = "macos")]
@@ -143,7 +153,13 @@ const YOUTUBE_MUSIC_PLAYER_API_URL: &str = "https://music.youtube.com/youtubei/v
 #[cfg(target_os = "macos")]
 const MACOS_LOGIN_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15";
 const YOUTUBE_COOKIE_CHUNK_SIZE: usize = 900;
-const YOUTUBE_COOKIE_MAX_CHUNKS: usize = 16;
+/// Bytes: `YOUTUBE_COOKIE_CHUNK_SIZE * YOUTUBE_COOKIE_MAX_CHUNKS` ~= 57.6 KB.
+///
+/// One account's cookie header used to be the whole stored blob; it is now one entry in a JSON
+/// array of them, so the ceiling went up from a single session (~14.4 KB of headroom) to
+/// comfortably cover several. Nobody is juggling dozens of Google accounts in a desktop music
+/// app — this is generous, not unlimited.
+const YOUTUBE_COOKIE_MAX_CHUNKS: usize = 64;
 /// How often a rotation of `YOUTUBE_SLOW_PERSIST_COOKIES` is written back to secure storage.
 ///
 /// Not on every response: Google rotates SIDCC on almost all of them, and the Windows
@@ -169,6 +185,13 @@ static APP_LOG_FILE: OnceLock<Mutex<Option<File>>> = OnceLock::new();
 
 struct CacheLock(Mutex<()>);
 struct AppSettingsLock(Mutex<()>);
+/// Serializes every read-modify-write of the YouTube account store — sign-in, silent refresh,
+/// switch, remove, and the ambient cookie-rotation persist inside `proxy_http_request` all go
+/// through it. Without this, two of those racing (e.g. a rotation persisting at the same moment
+/// a different window removes an account) could interleave: both read the same base, and
+/// whichever writes last silently undoes the other's change — an account switch reverting, or a
+/// removed account coming back.
+struct AccountStoreLock(Mutex<()>);
 
 /// The live YouTube cookie, kept current from every response that rotates it.
 ///
@@ -285,10 +308,156 @@ fn cookie_account_identity(cookie: &str) -> Option<String> {
         })
 }
 
+fn generate_slot_id() -> String {
+    let mut bytes = [0_u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// One signed-in Google account's durable session.
+///
+/// `identity` is the same fingerprint `cookie_account_identity` documents: never serialized to
+/// the frontend (see the `YoutubeAccountSummary` DTO, which omits it entirely), kept only so a
+/// re-authentication of an already-stored account can be recognized as a refresh rather than a
+/// new slot.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+struct StoredYoutubeAccount {
+    slot_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    identity: Option<String>,
+    cookie: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar_url: Option<String>,
+    added_at_ms: u64,
+}
+
+/// Every Google account with a stored session, and which one is active.
+///
+/// This is the one blob persisted through the existing `save_youtube_music_cookie` /
+/// `read_stored_youtube_music_cookie` transport — macOS's AES-GCM-encrypted file (orphan
+/// recovery included) or the chunked OS-keyring entries elsewhere — unchanged underneath. Only
+/// what gets encrypted changed, from a bare cookie header to this struct's JSON.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+struct YoutubeAccountStore {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_slot_id: Option<String>,
+    accounts: Vec<StoredYoutubeAccount>,
+}
+
+impl YoutubeAccountStore {
+    /// A bare cookie header from before multi-account support, as the one stored account.
+    fn from_legacy_cookie(cookie: &str, slot_id: String) -> Self {
+        YoutubeAccountStore {
+            active_slot_id: Some(slot_id.clone()),
+            accounts: vec![StoredYoutubeAccount {
+                slot_id,
+                identity: cookie_account_identity(cookie),
+                cookie: cookie.to_string(),
+                display_name: None,
+                avatar_url: None,
+                added_at_ms: unix_millis(),
+            }],
+        }
+    }
+
+    /// The active account, self-healing to the first stored one if the recorded active slot id
+    /// does not (or no longer) match anything — corrupt state should degrade to "signed in as
+    /// *someone*" rather than "signed out" when there is clearly at least one stored session.
+    fn active(&self) -> Option<&StoredYoutubeAccount> {
+        self.active_slot_id
+            .as_deref()
+            .and_then(|id| self.find(id))
+            .or_else(|| self.accounts.first())
+    }
+
+    fn find(&self, slot_id: &str) -> Option<&StoredYoutubeAccount> {
+        self.accounts.iter().find(|account| account.slot_id == slot_id)
+    }
+
+    fn find_by_identity(&self, identity: &str) -> Option<&StoredYoutubeAccount> {
+        self.accounts.iter().find(|account| account.identity.as_deref() == Some(identity))
+    }
+
+    /// Interactive sign-in landed on `cookie`. Refreshes the matching stored account in place
+    /// when this identity is already known — so re-authenticating an account you already have
+    /// never creates a duplicate slot — otherwise stores it fresh under `candidate_slot_id`.
+    /// Either way the result is active afterward.
+    ///
+    /// Returns the slot id that ended up holding this cookie (the caller's candidate, or the
+    /// existing one it matched) and whether that differs from whatever was active before —
+    /// the signal for whether this is a new account instead of a lapsed-session renewal.
+    fn upsert_signed_in_account(&mut self, cookie: &str, candidate_slot_id: String) -> (String, bool) {
+        let previously_active = self.active_slot_id.clone();
+        let identity = cookie_account_identity(cookie);
+        let matched_slot_id = identity
+            .as_deref()
+            .and_then(|identity| self.find_by_identity(identity))
+            .map(|account| account.slot_id.clone());
+
+        let slot_id = match matched_slot_id {
+            Some(existing_slot_id) => {
+                if let Some(account) =
+                    self.accounts.iter_mut().find(|account| account.slot_id == existing_slot_id)
+                {
+                    account.cookie = cookie.to_string();
+                }
+                existing_slot_id
+            }
+            None => {
+                self.accounts.push(StoredYoutubeAccount {
+                    slot_id: candidate_slot_id.clone(),
+                    identity,
+                    cookie: cookie.to_string(),
+                    display_name: None,
+                    avatar_url: None,
+                    added_at_ms: unix_millis(),
+                });
+                candidate_slot_id
+            }
+        };
+        self.active_slot_id = Some(slot_id.clone());
+        let account_changed = previously_active.as_deref() != Some(slot_id.as_str());
+        (slot_id, account_changed)
+    }
+
+    /// Removes one stored account. When it was the active one, another stored account (if any)
+    /// becomes active in its place — the whole point being that losing one account should not
+    /// force the others out too. Returns the newly active cookie, if any, and whether a slot
+    /// actually existed to remove.
+    fn remove(&mut self, slot_id: &str) -> (Option<String>, bool) {
+        let existed = self.accounts.iter().any(|account| account.slot_id == slot_id);
+        self.accounts.retain(|account| account.slot_id != slot_id);
+        if self.active_slot_id.as_deref() == Some(slot_id) {
+            self.active_slot_id = self.accounts.first().map(|account| account.slot_id.clone());
+        }
+        (self.active().map(|account| account.cookie.clone()), existed)
+    }
+
+    /// Makes a stored account active, e.g. for a switch that does not need the browser at all.
+    /// `None` means it is not (or no longer) stored — removed from another window, perhaps.
+    fn switch_active(&mut self, slot_id: &str) -> Option<String> {
+        let cookie = self.find(slot_id)?.cookie.clone();
+        self.active_slot_id = Some(slot_id.to_string());
+        Some(cookie)
+    }
+}
+
 /// Merges rotated cookies into the jar, returning the new header when it changed.
 fn refresh_youtube_cookie_jar(
     app: &tauri::AppHandle,
     jar: &YoutubeCookieJar,
+    account_lock: &AccountStoreLock,
     set_cookies: &[String],
 ) -> Option<String> {
     let (merged, should_persist) = {
@@ -321,17 +490,34 @@ fn refresh_youtube_cookie_jar(
         (merged, should_persist)
     };
 
-    // Outside the guard: the keyring write is slow and every other request wants the jar.
+    // Outside the guard: the keyring write is slow and every other request wants the jar. The
+    // jar itself is already updated above; this only needs to reach the durable store, so it
+    // goes through the plain (non-jar-touching) persist rather than `persist_active_account_cookie`.
     if should_persist {
-        match save_youtube_music_cookie(app, &merged) {
-            Ok(()) => eprintln!(
-                "[internal][tauri][info] youtube cookie rotated and persisted bytes={}",
-                merged.len()
-            ),
-            Err(error) => eprintln!(
-                "[internal][tauri][warn] youtube cookie persist failed: {}",
-                error.message
-            ),
+        let active_slot_id = match load_account_store(app) {
+            Ok(store) => store.active_slot_id,
+            Err(error) => {
+                eprintln!(
+                    "[internal][tauri][warn] youtube cookie persist skipped, account store unreadable: {}",
+                    error.message
+                );
+                None
+            }
+        };
+        match active_slot_id {
+            Some(slot_id) => match persist_account_cookie(app, account_lock, &slot_id, &merged) {
+                Ok(()) => eprintln!(
+                    "[internal][tauri][info] youtube cookie rotated and persisted bytes={}",
+                    merged.len()
+                ),
+                Err(error) => eprintln!(
+                    "[internal][tauri][warn] youtube cookie persist failed: {}",
+                    error.message
+                ),
+            },
+            // No active slot to persist against (e.g. mid-removal on another window); the live
+            // jar above still serves the rest of this session correctly.
+            None => {}
         }
     }
     Some(merged)
@@ -1803,17 +1989,226 @@ fn read_stored_youtube_music_cookie(app: &tauri::AppHandle) -> Result<Option<Str
     }
 }
 
+/// Loads the account store, transparently migrating a pre-multi-account install's bare cookie
+/// header into it the first time it is read.
+///
+/// The migration is persisted immediately (pinned to `LEGACY_ACCOUNT_SLOT_ID`, not a random id)
+/// so it happens once, not on every call — and so every other command sees an ordinary
+/// multi-account store from then on, never the legacy shape.
+fn load_account_store(app: &tauri::AppHandle) -> Result<YoutubeAccountStore, CommandError> {
+    let Some(blob) = read_stored_youtube_music_cookie(app)? else {
+        return Ok(YoutubeAccountStore::default());
+    };
+    match serde_json::from_str::<YoutubeAccountStore>(&blob) {
+        Ok(store) => Ok(store),
+        Err(_) => {
+            let migrated = YoutubeAccountStore::from_legacy_cookie(&blob, LEGACY_ACCOUNT_SLOT_ID.to_string());
+            match save_account_store(app, &migrated) {
+                Ok(()) => eprintln!(
+                    "[internal][tauri][info] migrated legacy single-account session to the multi-account store"
+                ),
+                Err(error) => eprintln!(
+                    "[internal][tauri][warn] could not persist migrated account store: {}",
+                    error.message
+                ),
+            }
+            Ok(migrated)
+        }
+    }
+}
+
+fn save_account_store(app: &tauri::AppHandle, store: &YoutubeAccountStore) -> Result<(), CommandError> {
+    let json = serde_json::to_string(store).map_err(|error| CommandError {
+        message: format!("account store encode failed: {error}"),
+    })?;
+    save_youtube_music_cookie(app, &json)
+}
+
+/// Writes one slot's cookie into the durable store only — the live in-memory jar is untouched.
+/// Used by the cookie-rotation path in `refresh_youtube_cookie_jar`, which has already updated
+/// the jar itself and would otherwise redo that work.
+fn persist_account_cookie(
+    app: &tauri::AppHandle,
+    account_lock: &AccountStoreLock,
+    slot_id: &str,
+    cookie: &str,
+) -> Result<(), CommandError> {
+    let _guard = account_lock.0.lock().map_err(|_| CommandError {
+        message: "account store lock unavailable".to_string(),
+    })?;
+    let mut store = load_account_store(app)?;
+    let Some(account) = store.accounts.iter_mut().find(|account| account.slot_id == slot_id) else {
+        // Removed mid-flight (e.g. from another window) — nothing durable left to update.
+        return Ok(());
+    };
+    account.cookie = cookie.to_string();
+    if account.identity.is_none() {
+        account.identity = cookie_account_identity(cookie);
+    }
+    save_account_store(app, &store)
+}
+
+/// `persist_account_cookie`, plus updating the live jar — for callers (silent renewal) that
+/// have not already updated it themselves.
+fn persist_active_account_cookie(
+    app: &tauri::AppHandle,
+    account_lock: &AccountStoreLock,
+    jar: &YoutubeCookieJar,
+    slot_id: &str,
+    cookie: &str,
+) -> Result<(), CommandError> {
+    persist_account_cookie(app, account_lock, slot_id, cookie)?;
+    if let Ok(mut state) = jar.0.lock() {
+        state.cookie = Some(cookie.to_string());
+        state.persisted_at = Some(Instant::now());
+    }
+    Ok(())
+}
+
+/// Removes one stored account and, when it was active, falls the active slot back to another
+/// stored account if any remain. Shared by `delete_youtube_music_cookie` (removes whichever is
+/// active — today's "sign out") and `remove_youtube_music_account` (removes a specific one).
+fn remove_account_slot(
+    app: &tauri::AppHandle,
+    account_lock: &AccountStoreLock,
+    jar: &YoutubeCookieJar,
+    slot_id: &str,
+) -> Result<Option<String>, CommandError> {
+    let (new_active_cookie, existed) = {
+        let _guard = account_lock.0.lock().map_err(|_| CommandError {
+            message: "account store lock unavailable".to_string(),
+        })?;
+        let mut store = load_account_store(app)?;
+        let result = store.remove(slot_id);
+        save_account_store(app, &store)?;
+        result
+    };
+    if existed {
+        // Idempotent and cheap; sign-out has always swept this pre-cookie-auth leftover too.
+        delete_legacy_youtube_credentials();
+        remove_login_partition(app, slot_id);
+    }
+    if let Ok(mut state) = jar.0.lock() {
+        state.cookie = new_active_cookie.clone();
+        state.persisted_at = new_active_cookie.as_ref().map(|_| Instant::now());
+    }
+    Ok(new_active_cookie)
+}
+
 #[tauri::command]
 fn load_youtube_music_cookie(
     app: tauri::AppHandle,
     jar: tauri::State<'_, YoutubeCookieJar>,
+    account_lock: tauri::State<'_, AccountStoreLock>,
 ) -> Result<Option<String>, CommandError> {
-    let cookie = read_stored_youtube_music_cookie(&app)?;
+    let _guard = account_lock.0.lock().map_err(|_| CommandError {
+        message: "account store lock unavailable".to_string(),
+    })?;
+    let cookie = load_account_store(&app)?.active().map(|account| account.cookie.clone());
     if let Ok(mut state) = jar.0.lock() {
         state.cookie = cookie.clone();
         state.persisted_at = None;
     }
     Ok(cookie)
+}
+
+/// Every stored Google account, for the account switcher. Never includes the identity
+/// fingerprint — only `slot_id`, an opaque random id with no information content, crosses into
+/// the frontend.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct YoutubeAccountSummary {
+    slot_id: String,
+    name: Option<String>,
+    avatar_url: Option<String>,
+    is_active: bool,
+}
+
+#[tauri::command]
+fn list_youtube_music_accounts(
+    app: tauri::AppHandle,
+    account_lock: tauri::State<'_, AccountStoreLock>,
+) -> Result<Vec<YoutubeAccountSummary>, CommandError> {
+    let _guard = account_lock.0.lock().map_err(|_| CommandError {
+        message: "account store lock unavailable".to_string(),
+    })?;
+    let store = load_account_store(&app)?;
+    Ok(store
+        .accounts
+        .iter()
+        .map(|account| YoutubeAccountSummary {
+            slot_id: account.slot_id.clone(),
+            name: account.display_name.clone(),
+            avatar_url: account.avatar_url.clone(),
+            is_active: store.active_slot_id.as_deref() == Some(account.slot_id.as_str()),
+        })
+        .collect())
+}
+
+/// Makes a stored account active without touching the browser at all — the whole point being
+/// that this is instant, unlike sign-in.
+#[tauri::command]
+async fn switch_youtube_music_account(
+    app: tauri::AppHandle,
+    jar: tauri::State<'_, YoutubeCookieJar>,
+    account_lock: tauri::State<'_, AccountStoreLock>,
+    slot_id: String,
+) -> Result<Option<String>, CommandError> {
+    eprintln!("[internal][tauri][info] switch_youtube_music_account slot={slot_id}");
+    let cookie = {
+        let _guard = account_lock.0.lock().map_err(|_| CommandError {
+            message: "account store lock unavailable".to_string(),
+        })?;
+        let mut store = load_account_store(&app)?;
+        let Some(cookie) = store.switch_active(&slot_id) else {
+            return Err(CommandError {
+                message: "That account is no longer signed in on this device.".to_string(),
+            });
+        };
+        save_account_store(&app, &store)?;
+        cookie
+    };
+    if let Ok(mut state) = jar.0.lock() {
+        state.cookie = Some(cookie.clone());
+        state.persisted_at = Some(Instant::now());
+    }
+    Ok(Some(cookie))
+}
+
+/// Forgets one stored account. Removing the active one falls back to another stored account
+/// automatically, the same as `delete_youtube_music_cookie` — see `remove_account_slot`.
+#[tauri::command]
+async fn remove_youtube_music_account(
+    app: tauri::AppHandle,
+    jar: tauri::State<'_, YoutubeCookieJar>,
+    account_lock: tauri::State<'_, AccountStoreLock>,
+    slot_id: String,
+) -> Result<Option<String>, CommandError> {
+    eprintln!("[internal][tauri][info] remove_youtube_music_account slot={slot_id}");
+    remove_account_slot(&app, &account_lock, &jar, &slot_id)
+}
+
+/// Labels a stored account for the switcher UI. Best-effort from the caller's point of view —
+/// Rust has no notion of "display name", it only stores whatever the frontend already fetched
+/// from YouTube for that account.
+#[tauri::command]
+fn update_youtube_music_account_profile(
+    app: tauri::AppHandle,
+    account_lock: tauri::State<'_, AccountStoreLock>,
+    slot_id: String,
+    name: Option<String>,
+    avatar_url: Option<String>,
+) -> Result<(), CommandError> {
+    let _guard = account_lock.0.lock().map_err(|_| CommandError {
+        message: "account store lock unavailable".to_string(),
+    })?;
+    let mut store = load_account_store(&app)?;
+    let Some(account) = store.accounts.iter_mut().find(|account| account.slot_id == slot_id) else {
+        return Ok(()); // Removed already; nothing left to label.
+    };
+    account.display_name = name;
+    account.avatar_url = avatar_url;
+    save_account_store(&app, &store)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -1829,7 +2224,64 @@ fn cookie_domain_matches(host: &str, cookie_domain: Option<&str>) -> bool {
             .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
-/// Builds the sign-in webview on its own storage partition.
+/// The webview data directory name for one account slot's own login partition.
+///
+/// The legacy slot keeps the exact original, unsuffixed name — see `LEGACY_ACCOUNT_SLOT_ID`.
+/// Every other slot gets a directory nothing else uses, so two stored accounts can never share
+/// (and therefore never cross-contaminate) a browser cookie jar.
+fn login_partition_directory_name(slot_id: &str) -> String {
+    if slot_id == LEGACY_ACCOUNT_SLOT_ID {
+        YOUTUBE_LOGIN_DATA_DIR.to_string()
+    } else {
+        format!("{YOUTUBE_LOGIN_DATA_DIR}-{slot_id}")
+    }
+}
+
+/// The macOS `WKWebsiteDataStore` identifier for one account slot's own login partition.
+///
+/// Decodes the slot id's own bytes back out rather than hashing the string: slot ids are
+/// generated as 32 hex characters over exactly 16 random bytes (`generate_slot_id`), so this is
+/// a plain, lossless encoding round-trip — stable forever. Hashing with something like
+/// `DefaultHasher` would not be: its output is only guaranteed stable within one build, and this
+/// id has to keep pointing at the same data store across every future release.
+#[cfg(target_os = "macos")]
+fn login_partition_store_id(slot_id: &str) -> [u8; 16] {
+    if slot_id == LEGACY_ACCOUNT_SLOT_ID {
+        return YOUTUBE_LOGIN_DATA_STORE_ID;
+    }
+    decode_slot_id_bytes(slot_id)
+}
+
+/// Decodes a slot id's own hex characters back into the 16 raw bytes `generate_slot_id` drew
+/// from `OsRng` — a lossless, stable-forever encoding round-trip, not a hash. Any byte pair that
+/// somehow is not valid hex (should not happen for an id this code generated itself) decodes to
+/// 0 rather than panicking, so a garbled id degrades to a well-defined value instead of crashing
+/// whatever asked for it.
+///
+/// Its one real caller, `login_partition_store_id`, is macOS-only, which makes this dead code by
+/// the compiler's count on every other platform — split out anyway so the tests that exercise it
+/// everywhere aren't gated to macOS along with it.
+#[allow(dead_code)]
+fn decode_slot_id_bytes(slot_id: &str) -> [u8; 16] {
+    let mut bytes = [0_u8; 16];
+    for (index, chunk) in slot_id.as_bytes().chunks(2).take(16).enumerate() {
+        if let Ok(text) = std::str::from_utf8(chunk) {
+            if let Ok(byte) = u8::from_str_radix(text, 16) {
+                bytes[index] = byte;
+            }
+        }
+    }
+    bytes
+}
+
+/// Builds the sign-in webview on one account slot's own storage partition.
+///
+/// Every slot — including a brand new candidate one about to attempt an interactive sign-in —
+/// gets its own partition, never shared with any other slot. That is what makes "add another
+/// account" foolproof without having to reverse-engineer Google's own multi-login cookie
+/// behavior inside a WebView2/WKWebView profile: a fresh, empty partition can only ever show a
+/// clean login/account-chooser screen, and a silent refresh against a specific slot's partition
+/// can only ever renew *that* account's session, never a different stored one.
 ///
 /// `loaded` is raised once a navigation finishes, which the silent refresh needs: cookies read
 /// before the page has actually loaded are the same stale ones we already hold.
@@ -1837,6 +2289,7 @@ fn build_login_window(
     app: &tauri::AppHandle,
     visible: bool,
     loaded: Arc<AtomicBool>,
+    slot_id: &str,
 ) -> Result<tauri::WebviewWindow, CommandError> {
     if let Some(existing) = app.get_webview_window(YOUTUBE_LOGIN_WINDOW) {
         let _ = existing.close();
@@ -1868,17 +2321,40 @@ fn build_login_window(
             .map_err(|error| CommandError {
                 message: format!("sign-in data directory unavailable: {error}"),
             })?
-            .join(YOUTUBE_LOGIN_DATA_DIR),
+            .join(login_partition_directory_name(slot_id)),
     );
     #[cfg(target_os = "macos")]
     let window_builder = window_builder
         .user_agent(MACOS_LOGIN_USER_AGENT)
         // macOS 14+ only; older versions fall back to the shared store, as they did before.
-        .data_store_identifier(YOUTUBE_LOGIN_DATA_STORE_ID);
+        .data_store_identifier(login_partition_store_id(slot_id));
 
     window_builder.build().map_err(|error| CommandError {
         message: format!("unable to open YouTube Music sign-in: {error}"),
     })
+}
+
+/// Clears a stored account's own webview partition, e.g. when it is removed or when an
+/// interactive sign-in's throwaway candidate partition went unused (it matched an
+/// already-stored identity instead of becoming a new slot).
+///
+/// Goes through the webview's own `clear_all_browsing_data`, the same safe mechanism sign-out
+/// has always used, rather than deleting files out from under a browser engine that might still
+/// hold them open. The legacy partition is never touched here — it is shared with whichever
+/// slot came from a pre-multi-account install, and clearing it out from under a *different*
+/// stored account would be exactly the cross-contamination this design exists to prevent.
+fn remove_login_partition(app: &tauri::AppHandle, slot_id: &str) {
+    if slot_id == LEGACY_ACCOUNT_SLOT_ID {
+        return;
+    }
+    let Ok(window) = build_login_window(app, false, Arc::new(AtomicBool::new(false)), slot_id) else {
+        return;
+    };
+    let _ = window.clear_all_browsing_data();
+    // The clear is asynchronous underneath and reports through a handler nobody waits on;
+    // closing the webview out from under it can leave the partition half-cleared.
+    thread::sleep(Duration::from_millis(750));
+    let _ = window.close();
 }
 
 /// The session cookie as the login webview currently holds it, if it holds one at all.
@@ -1932,53 +2408,41 @@ fn harvest_session_cookie(
     ))
 }
 
-fn store_session_cookie(
-    app: &tauri::AppHandle,
-    jar: &YoutubeCookieJar,
-    cookie: &str,
-) -> Result<(), CommandError> {
-    save_youtube_music_cookie(app, cookie)?;
-    if let Ok(mut state) = jar.0.lock() {
-        state.cookie = Some(cookie.to_string());
-        state.persisted_at = Some(Instant::now());
-    }
-    Ok(())
-}
-
 /// The outcome of an interactive sign-in.
 ///
 /// `account_changed` is what stops a renewal from costing the user their library. Signing in
 /// again is usually not a new account at all — it is the same person recovering a session that
 /// lapsed, and wiping the cache and the chosen channel for that is a resync nobody asked for.
+/// `slot_id` is the account's opaque handle for `switch_youtube_music_account` /
+/// `remove_youtube_music_account` / `update_youtube_music_account_profile`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SignInResult {
     cookie: String,
     account_changed: bool,
+    slot_id: String,
 }
 
 #[tauri::command]
 async fn sign_in_youtube_music(
     app: tauri::AppHandle,
     jar: tauri::State<'_, YoutubeCookieJar>,
+    account_lock: tauri::State<'_, AccountStoreLock>,
 ) -> Result<SignInResult, CommandError> {
     eprintln!("[internal][tauri][info] sign_in_youtube_music start");
-    // Captured before the window opens: the jar still holds whoever was signed in, even if the
-    // session behind it has lapsed, which is exactly the value the new one is compared against.
-    let previous_identity = jar
-        .0
-        .lock()
-        .ok()
-        .and_then(|state| state.cookie.as_deref().and_then(cookie_account_identity));
     /*
-     * Deliberately *not* cleared here any more.
+     * A brand new candidate slot, up front — every interactive sign-in gets its own empty
+     * webview partition (see `build_login_window`), so Google always shows a clean login or
+     * account-chooser screen instead of silently continuing whatever identity a *shared*
+     * partition last held. That ambiguity is exactly how adding a second account could
+     * otherwise clobber the first one's session.
      *
-     * The partition is now the app's durable record of who is signed in — the thing
-     * refresh_youtube_music_cookie renews the session from without troubling the user. Wiping
-     * it on every sign-in threw that away and made a full interactive login the only way back.
-     * Sign-out still clears it, which is where "forget me" belongs.
+     * If this sign-in turns out to re-authenticate an account already stored,
+     * `upsert_signed_in_account` below finds it by identity and this candidate partition goes
+     * unused — cleaned up rather than left as an orphaned directory.
      */
-    let window = build_login_window(&app, true, Arc::new(AtomicBool::new(false)))?;
+    let candidate_slot_id = generate_slot_id();
+    let window = build_login_window(&app, true, Arc::new(AtomicBool::new(false)), &candidate_slot_id)?;
     eprintln!("[internal][tauri][info] sign_in_youtube_music login window created");
 
     let login_url = YOUTUBE_LOGIN_URL.parse().map_err(|error| CommandError {
@@ -1991,19 +2455,36 @@ async fn sign_in_youtube_music(
 
     for poll in 1..=300 {
         if let Some(cookie_header) = harvest_session_cookie(&window)? {
-            let account_changed = previous_identity.is_none()
-                || previous_identity != cookie_account_identity(&cookie_header);
+            let (slot_id, account_changed, reused_existing_slot) = {
+                let _guard = account_lock.0.lock().map_err(|_| CommandError {
+                    message: "account store lock unavailable".to_string(),
+                })?;
+                let mut store = load_account_store(&app)?;
+                let (slot_id, account_changed) =
+                    store.upsert_signed_in_account(&cookie_header, candidate_slot_id.clone());
+                save_account_store(&app, &store)?;
+                (slot_id.clone(), account_changed, slot_id != candidate_slot_id)
+            };
+            if reused_existing_slot {
+                remove_login_partition(&app, &candidate_slot_id);
+            }
+            if let Ok(mut state) = jar.0.lock() {
+                state.cookie = Some(cookie_header.clone());
+                state.persisted_at = Some(Instant::now());
+            }
+
             eprintln!(
-                "[internal][tauri][info] sign_in_youtube_music detected session poll={} credential_bytes={} account_changed={}",
+                "[internal][tauri][info] sign_in_youtube_music detected session poll={} credential_bytes={} account_changed={} slot={}",
                 poll,
                 cookie_header.len(),
-                account_changed
+                account_changed,
+                slot_id,
             );
-            store_session_cookie(&app, &jar, &cookie_header)?;
             let _ = window.close();
             return Ok(SignInResult {
                 cookie: cookie_header,
                 account_changed,
+                slot_id,
             });
         }
 
@@ -2012,6 +2493,7 @@ async fn sign_in_youtube_music(
                 "[internal][tauri][warn] sign_in_youtube_music cancelled poll={}",
                 poll
             );
+            remove_login_partition(&app, &candidate_slot_id);
             return Err(CommandError {
                 message: "YouTube Music sign-in was cancelled.".to_string(),
             });
@@ -2020,6 +2502,7 @@ async fn sign_in_youtube_music(
     }
 
     let _ = window.close();
+    remove_login_partition(&app, &candidate_slot_id);
     eprintln!("[internal][tauri][warn] sign_in_youtube_music timed out");
     Err(CommandError {
         message: "YouTube Music sign-in timed out.".to_string(),
@@ -2045,10 +2528,22 @@ async fn sign_in_youtube_music(
 async fn refresh_youtube_music_cookie(
     app: tauri::AppHandle,
     jar: tauri::State<'_, YoutubeCookieJar>,
+    account_lock: tauri::State<'_, AccountStoreLock>,
 ) -> Result<Option<String>, CommandError> {
     eprintln!("[internal][tauri][info] refresh_youtube_music_cookie start");
+    let active_slot_id = {
+        let _guard = account_lock.0.lock().map_err(|_| CommandError {
+            message: "account store lock unavailable".to_string(),
+        })?;
+        load_account_store(&app)?.active_slot_id
+    };
+    let Some(active_slot_id) = active_slot_id else {
+        eprintln!("[internal][tauri][info] refresh_youtube_music_cookie no active account to renew");
+        return Ok(None);
+    };
+
     let loaded = Arc::new(AtomicBool::new(false));
-    let window = build_login_window(&app, false, loaded.clone())?;
+    let window = build_login_window(&app, false, loaded.clone(), &active_slot_id)?;
 
     let login_url = YOUTUBE_LOGIN_URL.parse().map_err(|error| CommandError {
         message: format!("invalid YouTube Music sign-in URL: {error}"),
@@ -2067,7 +2562,7 @@ async fn refresh_youtube_music_cookie(
                     poll,
                     cookie_header.len()
                 );
-                store_session_cookie(&app, &jar, &cookie_header)?;
+                persist_active_account_cookie(&app, &account_lock, &jar, &active_slot_id, &cookie_header)?;
                 let _ = window.close();
                 return Ok(Some(cookie_header));
             }
@@ -2080,49 +2575,40 @@ async fn refresh_youtube_music_cookie(
     Ok(None)
 }
 
+/// Signs out of whichever account is currently active — today's one-account "sign out".
+///
+/// With more than one account stored, another one automatically becomes active in its place
+/// (the returned cookie is Some) rather than dropping to fully signed out, the same way removing
+/// your active Google account from a browser falls back to another one still signed in there.
+/// Signing out of the *last* account behaves exactly as it always has: fully signed out.
 #[tauri::command]
 async fn delete_youtube_music_cookie(
     app: tauri::AppHandle,
     jar: tauri::State<'_, YoutubeCookieJar>,
-) -> Result<(), CommandError> {
+    account_lock: tauri::State<'_, AccountStoreLock>,
+) -> Result<Option<String>, CommandError> {
     eprintln!("[internal][tauri][info] delete_youtube_music_cookie start");
-    if let Ok(mut state) = jar.0.lock() {
-        state.cookie = None;
-        state.persisted_at = None;
-    }
-    delete_legacy_youtube_credentials();
-    /*
-     * Sign-out is the one place the sign-in partition is wiped, because it is the only place
-     * the user has said "forget me". The window is built purely to reach the profile behind
-     * it — clearing it is what makes the next sign-in offer a fresh account chooser instead of
-     * silently resuming the account that just left.
-     */
-    if let Ok(window) = build_login_window(&app, false, Arc::new(AtomicBool::new(false))) {
-        let _ = window.clear_all_browsing_data();
-        // The clear is asynchronous underneath and reports through a handler nobody waits on;
-        // closing the webview out from under it can leave the profile half-cleared.
-        thread::sleep(Duration::from_millis(750));
-        let _ = window.close();
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let path = youtube_cookie_encrypted_file(&app)?;
-        match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(CommandError {
-                    message: format!("encrypted session delete failed: {error}"),
-                })
-            }
+    let active_slot_id = {
+        let _guard = account_lock.0.lock().map_err(|_| CommandError {
+            message: "account store lock unavailable".to_string(),
+        })?;
+        load_account_store(&app)?.active_slot_id
+    };
+    let Some(active_slot_id) = active_slot_id else {
+        // Nothing was signed in at all; still clear the live jar for good measure.
+        if let Ok(mut state) = jar.0.lock() {
+            state.cookie = None;
+            state.persisted_at = None;
         }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    delete_youtube_music_cookie_entries()?;
-    eprintln!("[internal][tauri][info] delete_youtube_music_cookie complete");
-    Ok(())
+        eprintln!("[internal][tauri][info] delete_youtube_music_cookie nothing signed in");
+        return Ok(None);
+    };
+    let new_active_cookie = remove_account_slot(&app, &account_lock, &jar, &active_slot_id)?;
+    eprintln!(
+        "[internal][tauri][info] delete_youtube_music_cookie complete fell_back={}",
+        new_active_cookie.is_some()
+    );
+    Ok(new_active_cookie)
 }
 
 #[derive(Serialize)]
@@ -4455,6 +4941,7 @@ async fn try_youtube_api(
 async fn proxy_http_request(
     app: tauri::AppHandle,
     jar: tauri::State<'_, YoutubeCookieJar>,
+    account_lock: tauri::State<'_, AccountStoreLock>,
     mut input: ProxyHttpRequestInput,
 ) -> Result<ProxyHttpResponse, CommandError> {
     let started_at = Instant::now();
@@ -4611,7 +5098,7 @@ async fn proxy_http_request(
             .filter_map(|value| value.to_str().ok().map(str::to_string))
             .collect::<Vec<_>>();
         (!set_cookies.is_empty())
-            .then(|| refresh_youtube_cookie_jar(&app, &jar, &set_cookies))
+            .then(|| refresh_youtube_cookie_jar(&app, &jar, &account_lock, &set_cookies))
             .flatten()
     } else {
         None
@@ -4769,6 +5256,7 @@ pub fn run() {
         }))
         .manage(CacheLock(Mutex::new(())))
         .manage(AppSettingsLock(Mutex::new(())))
+        .manage(AccountStoreLock(Mutex::new(())))
         .manage(YoutubeCookieJar(Mutex::new(CookieJarState::default())))
         .manage(discord_manager)
         .plugin(tauri_plugin_autostart::Builder::new().build())
@@ -4911,6 +5399,10 @@ pub fn run() {
             sign_in_youtube_music,
             refresh_youtube_music_cookie,
             delete_youtube_music_cookie,
+            list_youtube_music_accounts,
+            switch_youtube_music_account,
+            remove_youtube_music_account,
+            update_youtube_music_account_profile,
             cache_get,
             cache_set,
             cache_stats,
@@ -4954,6 +5446,8 @@ mod tests {
         audio_chunk_size, playback_ranges, serialize_cookie_pairs, MediaBuffer, AUDIO_HEAD_CHUNK_BYTES, signed_content_length, store_media_item,
         MediaItem, AUDIO_MIN_CHUNK_BYTES, MEDIA_SERVER_MAX_ITEMS, OFFLINE_CHUNK_BYTES,
         load_superseded, LOAD_GENERATION, bytes_preview,
+        YoutubeAccountStore, generate_slot_id, login_partition_directory_name,
+        decode_slot_id_bytes, LEGACY_ACCOUNT_SLOT_ID,
     };
     use std::sync::atomic::Ordering;
     use super::audio::BufferReader;
@@ -5405,6 +5899,189 @@ mod tests {
 
         let bare = Wrapped("connection refused", None);
         assert_eq!(error_cause_chain(&bare), "connection refused");
+    }
+
+    /// A cookie header carrying just enough for `cookie_account_identity` to fingerprint it.
+    fn fake_account_cookie(sapisid: &str) -> String {
+        format!("SAPISID={sapisid}; HSID=unrelated")
+    }
+
+    #[test]
+    fn generate_slot_id_is_32_lowercase_hex_chars_and_not_a_repeat() {
+        let a = generate_slot_id();
+        let b = generate_slot_id();
+        assert_eq!(a.len(), 32, "16 bytes, hex-encoded: {a}");
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "{a}");
+        assert_ne!(a, b, "two draws from OsRng landing on the same 128 bits would mean it is broken");
+    }
+
+    #[test]
+    fn decode_slot_id_bytes_round_trips_what_generate_slot_id_produces() {
+        let slot_id = generate_slot_id();
+        let decoded = decode_slot_id_bytes(&slot_id);
+        let reencoded: String = decoded.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(reencoded, slot_id, "the macOS data-store id must be a lossless view of the slot id");
+    }
+
+    #[test]
+    fn login_partition_directory_name_keeps_the_legacy_slot_unsuffixed_and_others_distinct() {
+        assert_eq!(login_partition_directory_name(LEGACY_ACCOUNT_SLOT_ID), "youtube-login-webview");
+        let a = generate_slot_id();
+        let b = generate_slot_id();
+        assert_eq!(login_partition_directory_name(&a), format!("youtube-login-webview-{a}"));
+        assert_ne!(
+            login_partition_directory_name(&a),
+            login_partition_directory_name(&b),
+            "two stored accounts must never resolve to the same webview partition",
+        );
+    }
+
+    #[test]
+    fn from_legacy_cookie_becomes_one_active_account_pinned_to_the_legacy_slot() {
+        let store = YoutubeAccountStore::from_legacy_cookie(
+            &fake_account_cookie("alice"),
+            LEGACY_ACCOUNT_SLOT_ID.to_string(),
+        );
+        assert_eq!(store.accounts.len(), 1);
+        assert_eq!(store.active_slot_id.as_deref(), Some(LEGACY_ACCOUNT_SLOT_ID));
+        assert_eq!(store.active().unwrap().slot_id, LEGACY_ACCOUNT_SLOT_ID);
+    }
+
+    #[test]
+    fn upsert_new_identity_creates_a_slot_and_reports_the_account_as_changed() {
+        let mut store = YoutubeAccountStore::default();
+        let (slot_id, changed) =
+            store.upsert_signed_in_account(&fake_account_cookie("alice"), "candidate-1".to_string());
+        assert_eq!(slot_id, "candidate-1");
+        assert!(changed, "the very first sign-in is always a change from signed-out");
+        assert_eq!(store.accounts.len(), 1);
+        assert_eq!(store.active_slot_id.as_deref(), Some("candidate-1"));
+    }
+
+    #[test]
+    fn upsert_same_identity_while_already_active_refreshes_in_place_without_a_duplicate() {
+        let mut store = YoutubeAccountStore::default();
+        store.upsert_signed_in_account(&fake_account_cookie("alice"), "candidate-1".to_string());
+
+        // Re-authenticating the same Google account through a brand new candidate partition
+        // (a lapsed-session renewal) must find the existing slot, not create a second one.
+        let (slot_id, changed) = store.upsert_signed_in_account(
+            &fake_account_cookie("alice"),
+            "candidate-2-unused".to_string(),
+        );
+        assert_eq!(slot_id, "candidate-1", "must land back on the original slot, not the throwaway candidate");
+        assert!(!changed, "same account, still active: not a change the caller should resync for");
+        assert_eq!(store.accounts.len(), 1, "must not create a duplicate slot for the same identity");
+    }
+
+    #[test]
+    fn upsert_a_second_known_identity_switches_and_reports_changed() {
+        let mut store = YoutubeAccountStore::default();
+        let (alice_slot, _) =
+            store.upsert_signed_in_account(&fake_account_cookie("alice"), "candidate-1".to_string());
+        store.upsert_signed_in_account(&fake_account_cookie("bob"), "candidate-2".to_string());
+
+        // Signing back in as alice (already stored, but not currently active) must switch to
+        // her slot and report a change, even though her identity was already known.
+        let (slot_id, changed) =
+            store.upsert_signed_in_account(&fake_account_cookie("alice"), "candidate-3-unused".to_string());
+        assert_eq!(slot_id, alice_slot);
+        assert!(changed, "switching back to a different stored account is a change");
+        assert_eq!(store.accounts.len(), 2, "still exactly the two real accounts, no throwaway slots kept");
+    }
+
+    #[test]
+    fn remove_falls_back_to_another_stored_account_when_the_active_one_is_removed() {
+        let mut store = YoutubeAccountStore::default();
+        let (alice_slot, _) =
+            store.upsert_signed_in_account(&fake_account_cookie("alice"), "candidate-1".to_string());
+        let (bob_slot, _) =
+            store.upsert_signed_in_account(&fake_account_cookie("bob"), "candidate-2".to_string());
+        assert_eq!(store.active_slot_id.as_deref(), Some(bob_slot.as_str()));
+
+        let (new_active_cookie, existed) = store.remove(&bob_slot);
+        assert!(existed);
+        assert_eq!(store.accounts.len(), 1);
+        assert_eq!(store.active_slot_id.as_deref(), Some(alice_slot.as_str()), "falls back to whoever is left");
+        assert_eq!(new_active_cookie.as_deref(), Some(fake_account_cookie("alice").as_str()));
+    }
+
+    #[test]
+    fn remove_the_last_account_leaves_the_store_cleanly_empty() {
+        let mut store = YoutubeAccountStore::default();
+        let (slot_id, _) =
+            store.upsert_signed_in_account(&fake_account_cookie("alice"), "candidate-1".to_string());
+        let (new_active_cookie, existed) = store.remove(&slot_id);
+        assert!(existed);
+        assert!(new_active_cookie.is_none());
+        assert!(store.active_slot_id.is_none());
+        assert!(store.accounts.is_empty());
+        assert!(store.active().is_none());
+    }
+
+    #[test]
+    fn remove_an_unknown_slot_is_a_harmless_no_op() {
+        let mut store = YoutubeAccountStore::default();
+        store.upsert_signed_in_account(&fake_account_cookie("alice"), "candidate-1".to_string());
+        let before = store.accounts.len();
+        let (new_active_cookie, existed) = store.remove("never-stored");
+        assert!(!existed);
+        assert_eq!(store.accounts.len(), before, "removing a slot that was never there must not disturb the rest");
+        assert!(new_active_cookie.is_some(), "the real account is still active throughout");
+    }
+
+    #[test]
+    fn switch_active_moves_to_a_stored_slot_and_rejects_an_unknown_one_without_side_effects() {
+        let mut store = YoutubeAccountStore::default();
+        let (alice_slot, _) =
+            store.upsert_signed_in_account(&fake_account_cookie("alice"), "candidate-1".to_string());
+        store.upsert_signed_in_account(&fake_account_cookie("bob"), "candidate-2".to_string());
+
+        let cookie = store.switch_active(&alice_slot);
+        assert_eq!(cookie.as_deref(), Some(fake_account_cookie("alice").as_str()));
+        assert_eq!(store.active_slot_id.as_deref(), Some(alice_slot.as_str()));
+
+        let previously_active = store.active_slot_id.clone();
+        assert!(
+            store.switch_active("never-stored").is_none(),
+            "switching to an account removed elsewhere in the meantime must fail cleanly",
+        );
+        assert_eq!(store.active_slot_id, previously_active, "a failed switch must not change who is active");
+    }
+
+    #[test]
+    fn active_self_heals_when_the_recorded_active_slot_no_longer_exists() {
+        let mut store = YoutubeAccountStore::default();
+        store.upsert_signed_in_account(&fake_account_cookie("alice"), "candidate-1".to_string());
+        // Simulates corrupt/stale state rather than reachable through the public methods.
+        store.active_slot_id = Some("does-not-exist".to_string());
+        assert!(
+            store.active().is_some(),
+            "at least one account is stored, so this should read as signed in as *someone*, not signed out",
+        );
+    }
+
+    #[test]
+    fn account_store_round_trips_through_json() {
+        let mut store = YoutubeAccountStore::default();
+        store.upsert_signed_in_account(&fake_account_cookie("alice"), "candidate-1".to_string());
+        let json = serde_json::to_string(&store).unwrap();
+        let restored: YoutubeAccountStore = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.active_slot_id, store.active_slot_id);
+        assert_eq!(restored.accounts.len(), store.accounts.len());
+        assert_eq!(restored.accounts[0].cookie, store.accounts[0].cookie);
+    }
+
+    #[test]
+    fn a_bare_legacy_cookie_header_is_not_mistaken_for_json_and_vice_versa() {
+        // This is the exact discriminator `load_account_store` relies on to tell a pre-existing
+        // install's bare cookie header apart from the new JSON shape.
+        let legacy_blob = fake_account_cookie("alice");
+        assert!(serde_json::from_str::<YoutubeAccountStore>(&legacy_blob).is_err());
+
+        let store = YoutubeAccountStore::from_legacy_cookie(&legacy_blob, LEGACY_ACCOUNT_SLOT_ID.to_string());
+        let json_blob = serde_json::to_string(&store).unwrap();
+        assert!(serde_json::from_str::<YoutubeAccountStore>(&json_blob).is_ok());
     }
 
     #[test]

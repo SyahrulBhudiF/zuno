@@ -217,7 +217,7 @@ export type AuthStage = "browser" | "session" | "library";
  * share a progress shape and are told apart by `kind` — which decides both the wording and
  * whether backing out is possible.
  */
-export type AuthFlow = "sign-in" | "account-switch";
+export type AuthFlow = "sign-in" | "account-switch" | "google-account-switch";
 
 export interface AuthProgress {
   flow: AuthFlow;
@@ -235,6 +235,21 @@ export interface AccountProfile {
 /** One channel on the signed-in account, as offered by the account switcher. */
 export interface AccountOption {
   /** Opaque and stable across reloads; pass back to selectAccount. */
+  id: string;
+  name: string;
+  artworkUrl?: string;
+  isActive: boolean;
+}
+
+/**
+ * One stored Google login, as offered by the Google account switcher.
+ *
+ * Distinct from `AccountOption`: that is a channel/brand account *within* one Google login,
+ * this is a separate login (a different person, or the same person's other email) — switching
+ * between these is what issue-tracker requests for "multiple accounts" mean.
+ */
+export interface GoogleAccountOption {
+  /** Opaque and stable across reloads; pass back to switchGoogleAccount/removeGoogleAccount. */
   id: string;
   name: string;
   artworkUrl?: string;

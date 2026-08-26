@@ -1,5 +1,6 @@
 import type {
   AccountOption,
+  GoogleAccountOption,
   ArtistNotificationLevel,
   BrowsePage,
   BrowseShelf,
@@ -91,10 +92,30 @@ export abstract class DataSource {
   ): Promise<void>;
   /** Abandons a sign-in still waiting on the user. No-op once it has moved past that. */
   cancelSignIn?(): Promise<void>;
-  signOut?(): Promise<void>;
+  /**
+   * Signs out of the active account. Returns whether another stored account (see
+   * `listGoogleAccounts`) took over automatically — false means fully signed out.
+   */
+  signOut?(): Promise<boolean>;
   /** Channels available on the signed-in account. Absent when the source has no such notion. */
   listAccounts?(): Promise<AccountOption[]>;
   selectAccount?(id: string): Promise<void>;
+  /**
+   * Every Google account with a stored session on this device — distinct from `listAccounts`,
+   * which lists channels/brand accounts *within* one login. `signIn` both signs in for the
+   * first time and adds an additional account: re-authenticating an account already stored
+   * refreshes it in place instead of duplicating it. Absent when the source has no notion of
+   * more than one stored login at a time.
+   */
+  listGoogleAccounts?(): Promise<GoogleAccountOption[]>;
+  /** Makes a stored Google account active without signing in again. */
+  switchGoogleAccount?(id: string): Promise<void>;
+  /**
+   * Forgets one stored Google account. "unchanged" means a non-active account was removed and
+   * nothing about the current session changed; "switched" means the active one was removed and
+   * another stored account took over; "signed-out" means it was the last one.
+   */
+  removeGoogleAccount?(id: string): Promise<"unchanged" | "switched" | "signed-out">;
   getCachedLibrary?(): Promise<LibrarySnapshot | null>;
   /**
    * `onError` reports a *background* refresh failure — the one case the return value cannot
